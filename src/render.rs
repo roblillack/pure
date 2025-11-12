@@ -164,7 +164,7 @@ impl<'a> Renderer<'a> {
         }
         for (idx, child) in paragraph.children.iter().enumerate() {
             if idx > 0 || !paragraph.content.is_empty() {
-                self.push_blank_line();
+                self.push_plain_line(&quote_prefix);
             }
             self.render_paragraph(child, &quote_prefix);
         }
@@ -172,21 +172,18 @@ impl<'a> Renderer<'a> {
 
     fn render_unordered_list(&mut self, paragraph: &Paragraph, prefix: &str) {
         for (idx, entry) in paragraph.entries.iter().enumerate() {
-            if idx > 0 {
-                self.push_blank_line();
-            }
             let marker = "• ";
             let first_prefix = format!("{}{}", prefix, marker);
             let continuation_prefix = format!("{}{}", prefix, " ".repeat(marker.chars().count()));
+            if idx > 0 {
+                self.push_plain_line(&continuation_prefix);
+            }
             self.render_list_entry(entry, &first_prefix, &continuation_prefix);
         }
     }
 
     fn render_ordered_list(&mut self, paragraph: &Paragraph, prefix: &str) {
         for (idx, entry) in paragraph.entries.iter().enumerate() {
-            if idx > 0 {
-                self.push_blank_line();
-            }
             let number_label = format!("{}. ", idx + 1);
             let first_prefix = format!("{}{}", prefix, number_label);
             let continuation_spaces = " ".repeat(
@@ -196,6 +193,9 @@ impl<'a> Renderer<'a> {
                     .saturating_sub(prefix.chars().count()),
             );
             let continuation_prefix = format!("{}{}", prefix, continuation_spaces);
+            if idx > 0 {
+                self.push_plain_line(&continuation_prefix);
+            }
             self.render_list_entry(entry, &first_prefix, &continuation_prefix);
         }
     }
@@ -203,7 +203,7 @@ impl<'a> Renderer<'a> {
     fn render_checklist(&mut self, paragraph: &Paragraph, prefix: &str) {
         for (idx, entry) in paragraph.entries.iter().enumerate() {
             if idx > 0 {
-                self.push_blank_line();
+                self.push_plain_line(prefix);
             }
             if let Some(item) = entry
                 .iter()
@@ -266,11 +266,6 @@ impl<'a> Renderer<'a> {
         for rest in iter {
             self.render_paragraph(rest, continuation_prefix);
         }
-    }
-
-    fn push_blank_line(&mut self) {
-        self.lines.push(Line::from(""));
-        self.current_line_index += 1;
     }
 
     fn push_plain_line(&mut self, content: &str) {
