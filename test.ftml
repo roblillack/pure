@@ -1,0 +1,247 @@
+<h1>This is an example FTML document</h1>
+
+<p>The purpose of this document is to demonstrate the following use-cases:</p>
+
+<ul>
+  <li>
+    <p>Describe the features supported by FTML.</p>
+  </li>
+
+  <li>
+    <p>
+      Showcase the FTML standard formatting enforced by <code>fmtftml</code>.
+    </p>
+  </li>
+</ul>
+
+<h2>Supported features</h2>
+
+<h3>Inline styles</h3>
+
+<p>The following inline styles are supported in FTML:</p>
+
+<ul>
+  <li>
+    <p><b>Bold</b> text.</p>
+  </li>
+
+  <li>
+    <p><i>Italic</i> text.</p>
+  </li>
+
+  <li>
+    <p><mark>Highlighted</mark> text.</p>
+  </li>
+
+  <li>
+    <p><u>Underlined</u> text.</p>
+  </li>
+
+  <li>
+    <p><s>Striked</s> text.</p>
+  </li>
+
+  <li>
+    <p>Text formatted as <code>code</code>.</p>
+  </li>
+</ul>
+
+<h3>Text paragraphs</h3>
+
+<p>
+  This is a rather long paragraph to show the text-wrapping supported by the
+  ASCII and Markdown exporters. Applications integrating FTML support should “do
+  the right thing” regarding breaking lines in paragraphs. This could mean that
+  the full available width of the window or screen is used, or that the lines
+  are broken to limit the number of characters per line to a specific number.
+  FTML itself <i>does not</i> encorce any specific rules here, the included
+  Markdown exporter does wrap at 80 characters, though.
+</p>
+
+<h3>Quoted paragraphs</h3>
+
+<blockquote>
+  <p>
+    Like any other blocks, quotes may contain any of the different paragraph
+    types as children. First, let's look into wrapping of quotes, though. As you
+    can see, this is a very long line again.
+  </p>
+
+  <p>
+    This is the second paragraph of the very same quote. This paragraph, too,
+    will be broken into multiple lines, if necessary.
+  </p>
+
+  <h3>Quoted Headers</h3>
+
+  <p>
+    As expected, you'll be able to quote <i>all</i> kinds of
+    paragraphs—including section headers.
+  </p>
+
+  <blockquote>
+    <p>
+      Now, finally, let's look at a second level quote. Like expected, this
+      paragraph will also wrap at the same width, even if if it indented further
+      then the paragraphs above.
+    </p>
+  </blockquote>
+</blockquote>
+
+<h3>Bullet points</h3>
+
+<p>TBD</p>
+
+<p><b>Example:</b></p>
+
+<ul>
+  <li>
+    <p>This is a bullet point.</p>
+  </li>
+
+  <li>
+    <p>This is another bullet point.</p>
+    <p>
+      Contrasting to the first bullet point, this one contains multiple
+      paragraps, with this one being the second one.
+    </p>
+  </li>
+
+  <li>
+    <p>This is a bullet point with a bunch of hard line breaks.</p>
+  </li>
+
+  <li>
+    <blockquote>
+      <p>This bulletpoint contains a quote.</p>
+    </blockquote>
+  </li>
+</ul>
+
+<h3>Paragraph nesting</h3>
+
+<p>FTML supports nesting of paragraphs, so this is entirely possible:</p>
+
+<blockquote>
+  <p>
+    Please see, how the following list is part of a quote and contains nested
+    paragraphs.
+  </p>
+
+  <ul>
+    <li>
+      <p>This is a paragraph inside of a quoted paragraph</p>
+    </li>
+
+    <li>
+      <p>This bullet points contains another quote:</p>
+      <blockquote>
+        <p>
+          You can never have enough nesting of paragraphs.<br />
+          &emsp14;&emsp14;&emsp14;—Robert Lillack
+        </p>
+      </blockquote>
+    </li>
+
+    <li>
+      <ol>
+        <li>
+          <p>One</p>
+        </li>
+
+        <li>
+          <p>…</p>
+        </li>
+
+        <li>
+          <p>…</p>
+        </li>
+
+        <li>
+          <p>…</p>
+        </li>
+
+        <li>
+          <p>…</p>
+        </li>
+
+        <li>
+          <p>…</p>
+        </li>
+
+        <li>
+          <p>…</p>
+        </li>
+
+        <li>
+          <p>…</p>
+        </li>
+
+        <li>
+          <p>…</p>
+        </li>
+
+        <li>
+          <p>aaaaand</p>
+          <p>Ten!</p>
+        </li>
+      </ol>
+    </li>
+  </ul>
+</blockquote>
+
+<h2>Whitespace and line-break handling</h2>
+
+<p>
+  This is a line with a hard line-break:<br />
+  First line<br />
+  Second line.
+</p>
+
+<p>
+  This is a line with multiple line-breaks:<br />
+  First line<br />
+  <br />
+  Second line.
+</p>
+
+<p>
+  This is a line with multiple spaces:<br />
+  A&emsp14;&emsp14;&emsp14;B
+</p>
+
+<blockquote>
+  <p>
+    This is a paragraph that contains a very long line of <mark>highlighted text
+    to force the formatter to break<br />
+    the<br />
+    line<br />
+    in the middle.</mark> But afterwards, of course, things should continue
+    normally.
+  </p>
+</blockquote>
+
+<h2>Unicode support</h2>
+
+<p>
+  The following three tests check for the word wrapping to break at the right
+  spot.
+</p>
+
+<p>72 ASCII characters:</p>
+
+<p>######## ######## ######## ######## ######## ######## ######## ########.</p>
+
+<p>=======================================================================^</p>
+
+<p>8 Unicode multi-byte characters, 64 ASCII chars:</p>
+
+<p>cafébabe cafébabe cafébabe cafébabe cafébabe cafébabe cafébabe cafébabe.</p>
+
+<p>=======================================================================^</p>
+
+<p>32 double-with emoji, 7 spaces, 1 dot:</p>
+
+<p>😎😎😎😎 😎😎😎😎 😎😎😎😎 😎😎😎😎 😎😎😎😎 😎😎😎😎 😎😎😎😎 😎😎😎😎.</p>
+
+<p>=======================================================================^</p>
