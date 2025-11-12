@@ -54,13 +54,11 @@
   “do the right thing” regarding breaking lines in paragraphs. This could mean
   that the full available width of the window or screen is used, or that the
   lines are broken to limit the number of characters per line to a specific
-  number. FTML itself <i>does not</i> encorce any specific rules here, the included Markdown exporter does wrap at
+  number. FTML itself <i>does not</i> enforce any specific rules here, the included Markdown exporter does wrap at
   80 characters, though.
 </p>
 
-<p>d;sfk</p>
-
-<h3>Quoted paragraphs</h3>
+<h3>Quoted paragraph</h3>
 
 <blockquote>
   <p>
@@ -139,7 +137,7 @@
       <blockquote>
         <p>
           You can never have enough nesting of paragraphs.<br />
-          &emsp14;&emsp14;&emsp14;—Robert Lillack
+        &emsp14;&emsp14;&emsp14;—<a href="https://roblillack.net">Robert Lillack</a>
         </p>
       </blockquote>
     </li>

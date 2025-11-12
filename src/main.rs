@@ -306,6 +306,84 @@ impl App {
         }
     }
 
+    fn move_to_visual_line_start(&mut self) {
+        self.preferred_column = None;
+
+        if self.visual_positions.is_empty() {
+            self.editor.move_to_segment_start();
+            return;
+        }
+
+        let pointer = self.editor.cursor_pointer();
+        let current = self
+            .visual_positions
+            .iter()
+            .find(|entry| entry.pointer == pointer)
+            .map(|entry| entry.position)
+            .or(self.last_cursor_visual);
+
+        let Some(current_position) = current else {
+            self.editor.move_to_segment_start();
+            return;
+        };
+
+        let destination = self
+            .visual_positions
+            .iter()
+            .filter(|entry| entry.position.line == current_position.line)
+            .cloned()
+            .min_by_key(|entry| (entry.position.column as usize, entry.pointer.offset));
+
+        if let Some(target) = destination {
+            if self.editor.move_to_pointer(&target.pointer) {
+                self.last_cursor_visual = Some(target.position);
+            } else {
+                self.last_cursor_visual = Some(target.position);
+            }
+        } else {
+            self.editor.move_to_segment_start();
+        }
+    }
+
+    fn move_to_visual_line_end(&mut self) {
+        self.preferred_column = None;
+
+        if self.visual_positions.is_empty() {
+            self.editor.move_to_segment_end();
+            return;
+        }
+
+        let pointer = self.editor.cursor_pointer();
+        let current = self
+            .visual_positions
+            .iter()
+            .find(|entry| entry.pointer == pointer)
+            .map(|entry| entry.position)
+            .or(self.last_cursor_visual);
+
+        let Some(current_position) = current else {
+            self.editor.move_to_segment_end();
+            return;
+        };
+
+        let destination = self
+            .visual_positions
+            .iter()
+            .filter(|entry| entry.position.line == current_position.line)
+            .cloned()
+            .max_by_key(|entry| (entry.position.column as usize, entry.pointer.offset));
+
+        if let Some(target) = destination {
+            if self.editor.move_to_pointer(&target.pointer) {
+                self.last_cursor_visual = Some(target.position);
+            } else {
+                self.last_cursor_visual = Some(target.position);
+            }
+        } else {
+            self.editor.move_to_segment_end();
+        }
+    }
+
     fn closest_pointer_on_line(&self, line: usize, column: u16) -> Option<CursorDisplay> {
         self.visual_positions
             .iter()
@@ -397,12 +475,16 @@ impl App {
                     }
                 }
                 (KeyCode::Home, _) => {
-                    self.editor.move_to_segment_start();
-                    self.preferred_column = None;
+                    self.move_to_visual_line_start();
                 }
                 (KeyCode::End, _) => {
-                    self.editor.move_to_segment_end();
-                    self.preferred_column = None;
+                    self.move_to_visual_line_end();
+                }
+                (KeyCode::Char('a'), m) if m.contains(KeyModifiers::CONTROL) => {
+                    self.move_to_visual_line_start();
+                }
+                (KeyCode::Char('e'), m) if m.contains(KeyModifiers::CONTROL) => {
+                    self.move_to_visual_line_end();
                 }
                 (KeyCode::Backspace, _) => {
                     if self.editor.backspace() {

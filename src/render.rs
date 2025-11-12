@@ -463,9 +463,11 @@ fn trim_layout_fragments(fragments: Vec<FragmentItem>) -> Vec<FragmentItem> {
 fn is_layout_fragment(item: &FragmentItem) -> bool {
     match item {
         FragmentItem::LineBreak => true,
-        FragmentItem::Token(fragment) => fragment.kind == FragmentKind::Whitespace
-            && fragment.events.is_empty()
-            && fragment.text.chars().all(|ch| ch.is_whitespace()),
+        FragmentItem::Token(fragment) => {
+            fragment.kind == FragmentKind::Whitespace
+                && fragment.events.is_empty()
+                && fragment.text.chars().all(|ch| ch.is_whitespace())
+        }
     }
 }
 
@@ -892,7 +894,10 @@ mod tests {
         let cursor = rendered.cursor.expect("cursor position missing");
 
         assert_eq!(cursor.line, 2, "visual line should match second list item");
-        assert_eq!(cursor.column, 2, "visual column should include bullet prefix");
+        assert_eq!(
+            cursor.column, 2,
+            "visual column should include bullet prefix"
+        );
         assert_eq!(
             cursor.content_line, 1,
             "content line should align with the second logical item"
