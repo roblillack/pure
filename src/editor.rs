@@ -1,5 +1,5 @@
 const MARKER_PREFIX: &str = "1337;M";
-use tdoc::{Document, Paragraph, ParagraphType, Span};
+use tdoc::{Document, InlineStyle, Paragraph, ParagraphType, Span};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ParagraphPath {
@@ -195,6 +195,10 @@ impl DocumentEditor {
 
     pub fn cursor_pointer(&self) -> CursorPointer {
         self.cursor.clone()
+    }
+
+    pub fn cursor_breadcrumbs(&self) -> Option<Vec<String>> {
+        breadcrumbs_for_pointer(&self.document, &self.cursor)
     }
 
     pub fn move_to_pointer(&mut self, pointer: &CursorPointer) -> bool {
@@ -585,6 +589,74 @@ fn collect_segments(document: &Document) -> Vec<SegmentRef> {
         collect_paragraph_segments(paragraph, &mut path, &mut result);
     }
     result
+}
+
+fn breadcrumbs_for_pointer(document: &Document, pointer: &CursorPointer) -> Option<Vec<String>> {
+    if pointer.paragraph_path.is_empty() {
+        return None;
+    }
+    let (mut labels, paragraph) = collect_paragraph_labels(document, &pointer.paragraph_path)?;
+    let inline_labels = collect_inline_labels(paragraph, &pointer.span_path)?;
+    labels.extend(inline_labels);
+    Some(labels)
+}
+
+fn collect_paragraph_labels<'a>(
+    document: &'a Document,
+    path: &ParagraphPath,
+) -> Option<(Vec<String>, &'a Paragraph)> {
+    let mut labels = Vec::new();
+    let mut current: Option<&'a Paragraph> = None;
+
+    for step in path.steps() {
+        let paragraph = match *step {
+            PathStep::Root(idx) => document.paragraphs.get(idx)?,
+            PathStep::Child(idx) => current?.children.get(idx)?,
+            PathStep::Entry {
+                entry_index,
+                paragraph_index,
+            } => {
+                let entry = current?.entries.get(entry_index)?;
+                entry.get(paragraph_index)?
+            }
+        };
+        labels.push(paragraph.paragraph_type.to_string());
+        current = Some(paragraph);
+    }
+
+    let paragraph = current?;
+    Some((labels, paragraph))
+}
+
+fn collect_inline_labels(paragraph: &Paragraph, span_path: &SpanPath) -> Option<Vec<String>> {
+    let mut labels = Vec::new();
+    if span_path.is_empty() {
+        return Some(labels);
+    }
+
+    let mut spans = &paragraph.content;
+    for &idx in span_path.indices() {
+        let span = spans.get(idx)?;
+        if let Some(label) = inline_style_label(span.style) {
+            labels.push(label.to_string());
+        }
+        spans = &span.children;
+    }
+
+    Some(labels)
+}
+
+fn inline_style_label(style: InlineStyle) -> Option<&'static str> {
+    match style {
+        InlineStyle::None => None,
+        InlineStyle::Bold => Some("Bold"),
+        InlineStyle::Italic => Some("Italic"),
+        InlineStyle::Highlight => Some("Highlight"),
+        InlineStyle::Underline => Some("Underline"),
+        InlineStyle::Strike => Some("Strikethrough"),
+        InlineStyle::Link => Some("Link"),
+        InlineStyle::Code => Some("Code"),
+    }
 }
 
 fn collect_paragraph_segments(

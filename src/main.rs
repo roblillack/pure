@@ -149,9 +149,10 @@ impl App {
             return;
         }
 
+        let status_height = if area.height > 1 { 2 } else { 1 };
         let vertical = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([Constraint::Min(1), Constraint::Length(1)])
+            .constraints([Constraint::Min(1), Constraint::Length(status_height)])
             .split(area);
 
         let editor_area = vertical[0];
@@ -211,13 +212,15 @@ impl App {
 
     fn status_line(&mut self, total_lines: usize) -> String {
         self.prune_status_message();
+        let cursor_details = self.cursor_status_text();
         if let Some((message, _)) = &self.status_message {
-            return message.clone();
+            return format!("{cursor_details} | {message}");
         }
 
         let marker = if self.dirty { "*" } else { "" };
         format!(
-            "{}{} | Lines: {} | Ctrl-S save | Ctrl-Q quit",
+            "{} | {}{} | Lines: {} | Ctrl-S save | Ctrl-Q quit",
+            cursor_details,
             self.file_path.display(),
             marker,
             total_lines
@@ -489,6 +492,23 @@ impl App {
 
     fn mark_dirty(&mut self) {
         self.dirty = true;
+    }
+
+    fn cursor_status_text(&self) -> String {
+        let position_text = if let Some(position) = self.last_cursor_visual {
+            let line = position.content_line + 1;
+            let column = usize::from(position.content_column) + 1;
+            format!("[{},{}]", line, column)
+        } else {
+            "[?,?]".to_string()
+        };
+        let mut parts = vec![position_text];
+        if let Some(labels) = self.editor.cursor_breadcrumbs() {
+            if !labels.is_empty() {
+                parts.push(labels.join(" > "));
+            }
+        }
+        parts.join(" ")
     }
 }
 

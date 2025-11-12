@@ -14,6 +14,8 @@ use crate::editor::{CursorPointer, MarkerRef};
 pub struct CursorVisualPosition {
     pub line: usize,
     pub column: u16,
+    pub content_line: usize,
+    pub content_column: u16,
 }
 
 #[derive(Debug)]
@@ -38,8 +40,9 @@ pub fn render_document(
 struct Renderer<'a> {
     wrap_width: usize,
     sentinel: char,
-    marker_positions: HashMap<usize, CursorVisualPosition>,
-    cursor: Option<CursorVisualPosition>,
+    line_metrics: Vec<LineMetric>,
+    marker_pending: HashMap<usize, PendingPosition>,
+    cursor_pending: Option<PendingPosition>,
     lines: Vec<Line<'static>>,
     current_line_index: usize,
     markers: &'a [MarkerRef],
@@ -50,8 +53,9 @@ impl<'a> Renderer<'a> {
         Self {
             wrap_width,
             sentinel,
-            marker_positions: HashMap::new(),
-            cursor: None,
+            line_metrics: Vec::new(),
+            marker_pending: HashMap::new(),
+            cursor_pending: None,
             lines: Vec::new(),
             current_line_index: 0,
             markers,
@@ -61,8 +65,7 @@ impl<'a> Renderer<'a> {
     fn render_document(&mut self, document: &Document) {
         for (idx, paragraph) in document.paragraphs.iter().enumerate() {
             if idx > 0 {
-                self.lines.push(Line::from(""));
-                self.current_line_index += 1;
+                self.push_plain_line("", false);
             }
             self.render_paragraph(paragraph, "");
         }
@@ -136,16 +139,13 @@ impl<'a> Renderer<'a> {
                 HeaderLevel::One => '=',
             };
             let underline = underline_string(width, underline_char);
-            let span = Span::raw(underline).to_owned();
-            let line = Line::from(vec![span]);
-            self.lines.push(line);
-            self.current_line_index += 1;
+            self.push_plain_line(&underline, false);
         }
     }
 
     fn render_code_block(&mut self, paragraph: &Paragraph, prefix: &str) {
         let fence = self.code_block_fence(prefix);
-        self.push_plain_line(&fence);
+        self.push_plain_line(&fence, false);
 
         let mut fragments = Vec::new();
         for span in &paragraph.content {
@@ -154,7 +154,7 @@ impl<'a> Renderer<'a> {
         let lines = wrap_fragments(&fragments, prefix, prefix, usize::MAX / 4);
         self.consume_lines(lines);
 
-        self.push_plain_line(&fence);
+        self.push_plain_line(&fence, false);
     }
 
     fn render_quote(&mut self, paragraph: &Paragraph, prefix: &str) {
@@ -164,7 +164,7 @@ impl<'a> Renderer<'a> {
         }
         for (idx, child) in paragraph.children.iter().enumerate() {
             if idx > 0 || !paragraph.content.is_empty() {
-                self.push_plain_line(&quote_prefix);
+                self.push_plain_line(&quote_prefix, false);
             }
             self.render_paragraph(child, &quote_prefix);
         }
@@ -176,7 +176,7 @@ impl<'a> Renderer<'a> {
             let first_prefix = format!("{}{}", prefix, marker);
             let continuation_prefix = format!("{}{}", prefix, " ".repeat(marker.chars().count()));
             if idx > 0 {
-                self.push_plain_line(&continuation_prefix);
+                self.push_plain_line(&continuation_prefix, false);
             }
             self.render_list_entry(entry, &first_prefix, &continuation_prefix);
         }
@@ -194,7 +194,7 @@ impl<'a> Renderer<'a> {
             );
             let continuation_prefix = format!("{}{}", prefix, continuation_spaces);
             if idx > 0 {
-                self.push_plain_line(&continuation_prefix);
+                self.push_plain_line(&continuation_prefix, false);
             }
             self.render_list_entry(entry, &first_prefix, &continuation_prefix);
         }
@@ -203,7 +203,7 @@ impl<'a> Renderer<'a> {
     fn render_checklist(&mut self, paragraph: &Paragraph, prefix: &str) {
         for (idx, entry) in paragraph.entries.iter().enumerate() {
             if idx > 0 {
-                self.push_plain_line(prefix);
+                self.push_plain_line(prefix, false);
             }
             if let Some(item) = entry
                 .iter()
@@ -243,7 +243,7 @@ impl<'a> Renderer<'a> {
         continuation_prefix: &str,
     ) {
         if entry.is_empty() {
-            self.push_plain_line(first_prefix);
+            self.push_plain_line(first_prefix, false);
             return;
         }
 
@@ -257,7 +257,7 @@ impl<'a> Renderer<'a> {
                     self.render_checklist_item(first, first_prefix);
                 }
                 _ => {
-                    self.push_plain_line(first_prefix);
+                    self.push_plain_line(first_prefix, false);
                     self.render_paragraph(first, continuation_prefix);
                 }
             }
@@ -268,10 +268,11 @@ impl<'a> Renderer<'a> {
         }
     }
 
-    fn push_plain_line(&mut self, content: &str) {
+    fn push_plain_line(&mut self, content: &str, counts_as_content: bool) {
         let span = Span::raw(content.to_string()).to_owned();
         let line = Line::from(vec![span]);
         self.lines.push(line);
+        self.line_metrics.push(LineMetric { counts_as_content });
         self.current_line_index += 1;
     }
 
@@ -289,17 +290,21 @@ impl<'a> Renderer<'a> {
                 spans.push(Span::styled(segment.text.clone(), segment.style).to_owned());
             }
             let line = Line::from(spans);
+            self.line_metrics.push(LineMetric {
+                counts_as_content: output.has_word,
+            });
             for event in output.events {
-                let position = CursorVisualPosition {
+                let pending = PendingPosition {
                     line: self.current_line_index,
                     column: event.column,
+                    content_column: event.content_column,
                 };
                 match event.kind {
                     TextEventKind::Cursor => {
-                        self.cursor = Some(position);
+                        self.cursor_pending = Some(pending);
                     }
                     TextEventKind::Marker(id) => {
-                        self.marker_positions.insert(id, position);
+                        self.marker_pending.insert(id, pending);
                     }
                 }
             }
@@ -310,20 +315,52 @@ impl<'a> Renderer<'a> {
 
     fn finish(mut self) -> RenderResult {
         if self.lines.is_empty() {
-            self.lines.push(Line::from(""));
+            self.push_plain_line("", false);
         }
         let total_lines = self.lines.len();
 
+        let mut content_line_numbers = Vec::with_capacity(self.line_metrics.len());
+        let mut current_content = 0usize;
+        for metric in &self.line_metrics {
+            if metric.counts_as_content {
+                current_content += 1;
+            }
+            content_line_numbers.push(current_content);
+        }
+
+        let cursor = self
+            .cursor_pending
+            .take()
+            .map(|pending| CursorVisualPosition {
+                line: pending.line,
+                column: pending.column,
+                content_line: content_line_numbers
+                    .get(pending.line)
+                    .copied()
+                    .unwrap_or(pending.line),
+                content_column: pending.content_column,
+            });
+
         let mut cursor_map = Vec::new();
         for marker in self.markers {
-            if let Some(position) = self.marker_positions.get(&marker.id) {
-                cursor_map.push((marker.pointer.clone(), *position));
+            if let Some(pending) = self.marker_pending.remove(&marker.id) {
+                let content_line = content_line_numbers
+                    .get(pending.line)
+                    .copied()
+                    .unwrap_or(pending.line);
+                let position = CursorVisualPosition {
+                    line: pending.line,
+                    column: pending.column,
+                    content_line,
+                    content_column: pending.content_column,
+                };
+                cursor_map.push((marker.pointer.clone(), position));
             }
         }
 
         RenderResult {
             lines: self.lines,
-            cursor: self.cursor,
+            cursor,
             total_lines,
             cursor_map,
         }
@@ -347,11 +384,13 @@ struct LineSegment {
 struct LineOutput {
     spans: Vec<LineSegment>,
     events: Vec<LocatedEvent>,
+    has_word: bool,
 }
 
 #[derive(Clone, Copy)]
 struct LocatedEvent {
     column: u16,
+    content_column: u16,
     kind: TextEventKind,
 }
 
@@ -364,7 +403,7 @@ struct Fragment {
     events: Vec<TextEvent>,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum FragmentKind {
     Word,
     Whitespace,
@@ -647,6 +686,7 @@ struct LineBuilder {
     events: Vec<LocatedEvent>,
     width: usize,
     prefix_width: usize,
+    has_word: bool,
 }
 
 impl LineBuilder {
@@ -669,6 +709,7 @@ impl LineBuilder {
             events: Vec::new(),
             width: prefix_width,
             prefix_width,
+            has_word: false,
         }
     }
 
@@ -688,6 +729,9 @@ impl LineBuilder {
     }
 
     fn append_token(&mut self, fragment: Fragment) {
+        if fragment.kind == FragmentKind::Word && fragment.width > 0 {
+            self.has_word = true;
+        }
         if !fragment.text.is_empty() {
             self.segments.push(LineSegment {
                 text: fragment.text.clone(),
@@ -698,8 +742,13 @@ impl LineBuilder {
 
         for event in fragment.events {
             let column = self.width.saturating_sub(fragment.width) + event.offset;
+            let display_column = column.min(u16::MAX as usize) as u16;
+            let content_column = column
+                .saturating_sub(self.prefix_width)
+                .min(u16::MAX as usize) as u16;
             self.events.push(LocatedEvent {
-                column: column as u16,
+                column: display_column,
+                content_column,
                 kind: event.kind,
             });
         }
@@ -716,6 +765,7 @@ impl LineBuilder {
         LineOutput {
             spans: self.segments,
             events: self.events,
+            has_word: self.has_word,
         }
     }
 }
@@ -735,4 +785,15 @@ fn line_width(line: &Line<'_>) -> usize {
 
 fn underline_string(width: usize, ch: char) -> String {
     std::iter::repeat(ch).take(width.max(1)).collect()
+}
+
+#[derive(Clone, Copy)]
+struct PendingPosition {
+    line: usize,
+    column: u16,
+    content_column: u16,
+}
+
+struct LineMetric {
+    counts_as_content: bool,
 }
