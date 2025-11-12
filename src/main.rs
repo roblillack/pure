@@ -1,8 +1,5 @@
 use std::{
-    collections::HashMap,
-    env,
-    fs,
-    io::{self, Write},
+    env, fs, io,
     path::PathBuf,
     time::{Duration, Instant},
 };
@@ -11,28 +8,23 @@ use anyhow::{Context, Result};
 use crossterm::{
     event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
     execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 use ratatui::{
+    Frame, Terminal,
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout, Position},
     style::Style,
     text::{Line, Span, Text},
     widgets::{Block, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap},
-    Frame, Terminal,
 };
-use tdoc::{
-    formatter::{Formatter, FormattingStyle},
-    parse,
-    writer::Writer,
-    Document,
-};
+use tdoc::{Document, parse, writer::Writer};
 
-mod ansi;
 mod editor;
+mod render;
 
-use ansi::{parse_ansi, CursorVisualPosition, ParseResult};
 use editor::{CursorPointer, DocumentEditor};
+use render::{CursorVisualPosition, RenderResult, render_document};
 
 const SENTINEL: char = '\u{F8FF}';
 const STATUS_TIMEOUT: Duration = Duration::from_secs(4);
@@ -42,11 +34,7 @@ fn main() -> Result<()> {
 }
 
 fn column_distance(a: u16, b: u16) -> u16 {
-    if a >= b {
-        a - b
-    } else {
-        b - a
-    }
+    if a >= b { a - b } else { b - a }
 }
 
 fn run() -> Result<()> {
@@ -92,10 +80,7 @@ fn load_document(path: &PathBuf) -> Result<(Document, Option<String>)> {
     }
 }
 
-fn run_app<B: ratatui::backend::Backend>(
-    terminal: &mut Terminal<B>,
-    app: &mut App,
-) -> Result<()> {
+fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> {
     let tick_rate = Duration::from_millis(250);
     let mut last_tick = Instant::now();
 
@@ -181,7 +166,12 @@ impl App {
 
         let render = self.render_document(text_area.width.max(1) as usize);
 
-        self.visual_positions = render.cursor_map.clone();
+        self.visual_positions = render
+            .cursor_map
+            .iter()
+            .cloned()
+            .map(|(pointer, position)| CursorDisplay { pointer, position })
+            .collect();
         let cursor_visual = render.cursor;
         self.last_cursor_visual = cursor_visual;
         if self.preferred_column.is_none() {
@@ -198,8 +188,7 @@ impl App {
             .scroll((self.scroll_top as u16, 0));
         frame.render_widget(paragraph, text_area);
 
-        let mut scrollbar_state =
-            ScrollbarState::new(render.total_lines).position(self.scroll_top);
+        let mut scrollbar_state = ScrollbarState::new(render.total_lines).position(self.scroll_top);
         let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight);
         frame.render_stateful_widget(scrollbar, scrollbar_area, &mut scrollbar_state);
 
@@ -215,10 +204,8 @@ impl App {
         }
 
         let status_text = self.status_line(render.total_lines);
-        let status_widget =
-            Paragraph::new(Line::from(Span::styled(status_text, Style::default()))).block(
-                Block::default().borders(Borders::TOP),
-            );
+        let status_widget = Paragraph::new(Line::from(Span::styled(status_text, Style::default())))
+            .block(Block::default().borders(Borders::TOP));
         frame.render_widget(status_widget, status_area);
     }
 
@@ -284,9 +271,7 @@ impl App {
             return;
         };
 
-        let desired_column = self
-            .preferred_column
-            .unwrap_or(current.column);
+        let desired_column = self.preferred_column.unwrap_or(current.column);
 
         let max_line = self
             .visual_positions
@@ -318,11 +303,7 @@ impl App {
         }
     }
 
-    fn closest_pointer_on_line(
-        &self,
-        line: usize,
-        column: u16,
-    ) -> Option<CursorDisplay> {
+    fn closest_pointer_on_line(&self, line: usize, column: u16) -> Option<CursorDisplay> {
         self.visual_positions
             .iter()
             .filter(|entry| entry.position.line == line)
@@ -380,53 +361,8 @@ impl App {
     }
 
     fn render_document(&self, width: usize) -> RenderResult {
-        let (clone, markers, inserted_cursor) = self.editor.clone_with_markers(SENTINEL);
-        let mut buffer = Vec::new();
-        {
-            let writer = VecWriter {
-                buffer: &mut buffer,
-            };
-            let mut formatter = Formatter::new(writer, {
-                let mut style = FormattingStyle::ansi();
-                style.wrap_width = width.max(1);
-                style
-            });
-            if formatter.write_document(&clone).is_err() {
-                return RenderResult::empty();
-            }
-        }
-
-        let ansi_output = match String::from_utf8(buffer) {
-            Ok(text) => text,
-            Err(_) => return RenderResult::empty(),
-        };
-
-        let ParseResult {
-            lines,
-            cursor,
-            total_lines,
-            markers: display_markers,
-        } = parse_ansi(&ansi_output, SENTINEL);
-
-        let mut marker_positions: HashMap<usize, CursorVisualPosition> = display_markers
-            .into_iter()
-            .collect();
-
-        let mut cursor_map = Vec::new();
-        for marker in markers {
-            if let Some(position) = marker_positions.remove(&marker.id) {
-                cursor_map.push(CursorDisplay {
-                    pointer: marker.pointer,
-                    position,
-                });
-            }
-        }
-
-        if inserted_cursor && cursor.is_none() {
-            RenderResult::from_parts(lines, None, total_lines, cursor_map)
-        } else {
-            RenderResult::from_parts(lines, cursor, total_lines, cursor_map)
-        }
+        let (clone, markers, _) = self.editor.clone_with_markers(SENTINEL);
+        render_document(&clone, width, &markers, SENTINEL)
     }
 
     fn handle_event(&mut self, event: Event) -> Result<()> {
@@ -523,9 +459,7 @@ impl App {
                     self.move_cursor_vertical(1);
                 }
                 (KeyCode::PageUp, _) => {
-                    self.scroll_top = self
-                        .scroll_top
-                        .saturating_sub(self.last_view_height.max(1));
+                    self.scroll_top = self.scroll_top.saturating_sub(self.last_view_height.max(1));
                 }
                 (KeyCode::PageDown, _) => {
                     self.scroll_top += self.last_view_height.max(1);
@@ -558,61 +492,8 @@ impl App {
     }
 }
 
-struct VecWriter<'a> {
-    buffer: &'a mut Vec<u8>,
-}
-
-impl<'a> Write for VecWriter<'a> {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        self.buffer.extend_from_slice(buf);
-        Ok(buf.len())
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
-    }
-}
-
 #[derive(Clone)]
 struct CursorDisplay {
     pointer: CursorPointer,
     position: CursorVisualPosition,
-}
-
-struct RenderResult {
-    lines: Vec<Line<'static>>,
-    cursor: Option<CursorVisualPosition>,
-    total_lines: usize,
-    cursor_map: Vec<CursorDisplay>,
-}
-
-impl RenderResult {
-    fn empty() -> Self {
-        Self {
-            lines: vec![Line::from("")],
-            cursor: None,
-            total_lines: 1,
-            cursor_map: Vec::new(),
-        }
-    }
-
-    fn from_parts(
-        lines: Vec<Line<'static>>,
-        cursor: Option<CursorVisualPosition>,
-        total_lines: usize,
-        cursor_map: Vec<CursorDisplay>,
-    ) -> Self {
-        let total = total_lines.max(1);
-        let lines = if lines.is_empty() {
-            vec![Line::from("")]
-        } else {
-            lines
-        };
-        Self {
-            lines,
-            cursor,
-            total_lines: total,
-            cursor_map,
-        }
-    }
 }

@@ -50,21 +50,23 @@
 
 <p>
   This is a rather long paragraph to show the text-wrapping supported by the
-  ASCII and Markdown exporters. Applications integrating FTML support should “do
-  the right thing” regarding breaking lines in paragraphs. This could mean that
-  the full available width of the window or screen is used, or that the lines
-  are broken to limit the number of characters per line to a specific number.
-  FTML itself <i>does not</i> encorce any specific rules here, the included
-  Markdown exporter does wrap at 80 characters, though.
+  ASCII and Markdown exporters. Applications integrating FTML support should
+  “do the right thing” regarding breaking lines in paragraphs. This could mean
+  that the full available width of the window or screen is used, or that the
+  lines are broken to limit the number of characters per line to a specific
+  number. FTML itself <i>does not</i> encorce any specific rules here, the included Markdown exporter does wrap at
+  80 characters, though.
 </p>
+
+<p>d;sfk</p>
 
 <h3>Quoted paragraphs</h3>
 
 <blockquote>
   <p>
     Like any other blocks, quotes may contain any of the different paragraph
-    types as children. First, let's look into wrapping of quotes, though. As you
-    can see, this is a very long line again.
+    types as children. First, let's look into wrapping of quotes, though. As
+    you can see, this is a very long line again.
   </p>
 
   <p>
@@ -75,15 +77,14 @@
   <h3>Quoted Headers</h3>
 
   <p>
-    As expected, you'll be able to quote <i>all</i> kinds of
-    paragraphs—including section headers.
+    As expected, you'll be able to quote <i>all</i> kinds of paragraphs—including section headers.
   </p>
 
   <blockquote>
     <p>
       Now, finally, let's look at a second level quote. Like expected, this
-      paragraph will also wrap at the same width, even if if it indented further
-      then the paragraphs above.
+      paragraph will also wrap at the same width, even if if it indented
+      further then the paragraphs above.
     </p>
   </blockquote>
 </blockquote>
@@ -207,17 +208,15 @@
 
 <p>
   This is a line with multiple spaces:<br />
-  A&emsp14;&emsp14;&emsp14;B
+  &emsp14;&emsp14;A&emsp14;&emsp14;&emsp14;&emsp14;B
 </p>
 
 <blockquote>
   <p>
-    This is a paragraph that contains a very long line of <mark>highlighted text
-    to force the formatter to break<br />
+    This is a paragraph that contains a very long line of <mark>highlighted text to force the formatter to break<br />
     the<br />
     line<br />
-    in the middle.</mark> But afterwards, of course, things should continue
-    normally.
+    in the middle.</mark> But afterwards, of course, things should continue normally.
   </p>
 </blockquote>
 

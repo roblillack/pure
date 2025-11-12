@@ -1,4 +1,4 @@
-use crate::ansi::MARKER_PREFIX;
+const MARKER_PREFIX: &str = "1337;M";
 use tdoc::{Document, Paragraph, ParagraphType, Span};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -10,7 +10,10 @@ pub struct ParagraphPath {
 enum PathStep {
     Root(usize),
     Child(usize),
-    Entry { entry_index: usize, paragraph_index: usize },
+    Entry {
+        entry_index: usize,
+        paragraph_index: usize,
+    },
 }
 
 impl ParagraphPath {
@@ -29,8 +32,10 @@ impl ParagraphPath {
     }
 
     fn push_entry(&mut self, entry_index: usize, paragraph_index: usize) {
-        self.steps
-            .push(PathStep::Entry { entry_index, paragraph_index });
+        self.steps.push(PathStep::Entry {
+            entry_index,
+            paragraph_index,
+        });
     }
 
     fn pop(&mut self) {
@@ -83,7 +88,9 @@ impl SpanPath {
 
 impl Default for SpanPath {
     fn default() -> Self {
-        Self { indices: Vec::new() }
+        Self {
+            indices: Vec::new(),
+        }
     }
 }
 
@@ -118,7 +125,7 @@ impl Default for CursorPointer {
 #[derive(Clone, Debug)]
 pub struct SegmentRef {
     pub paragraph_path: ParagraphPath,
-   pub span_path: SpanPath,
+    pub span_path: SpanPath,
     pub len: usize,
 }
 
@@ -600,7 +607,11 @@ fn collect_paragraph_segments(
     }
 }
 
-fn collect_span_segments(paragraph: &Paragraph, path: &ParagraphPath, segments: &mut Vec<SegmentRef>) {
+fn collect_span_segments(
+    paragraph: &Paragraph,
+    path: &ParagraphPath,
+    segments: &mut Vec<SegmentRef>,
+) {
     for (index, span) in paragraph.content.iter().enumerate() {
         let mut span_path = SpanPath::new(vec![index]);
         collect_span_rec(span, path, &mut span_path, segments);
@@ -635,7 +646,10 @@ fn collect_span_rec(
     }
 }
 
-fn split_paragraph_break(document: &mut Document, pointer: &CursorPointer) -> Option<CursorPointer> {
+fn split_paragraph_break(
+    document: &mut Document,
+    pointer: &CursorPointer,
+) -> Option<CursorPointer> {
     let steps_vec: Vec<PathStep> = pointer.paragraph_path.steps().to_vec();
     let (last_step, prefix) = steps_vec.split_last()?;
 
@@ -905,7 +919,12 @@ fn span_mut<'a>(paragraph: &'a mut Paragraph, path: &SpanPath) -> Option<&'a mut
     Some(span)
 }
 
-fn insert_char_at(document: &mut Document, pointer: &CursorPointer, offset: usize, ch: char) -> bool {
+fn insert_char_at(
+    document: &mut Document,
+    pointer: &CursorPointer,
+    offset: usize,
+    ch: char,
+) -> bool {
     let Some(paragraph) = paragraph_mut(document, &pointer.paragraph_path) else {
         return false;
     };
