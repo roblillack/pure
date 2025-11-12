@@ -96,6 +96,7 @@ impl<'a> Renderer<'a> {
         for span in &paragraph.content {
             collect_fragments(span, Style::default(), self.sentinel, &mut fragments);
         }
+        let fragments = trim_layout_fragments(fragments);
         let lines = wrap_fragments(
             &fragments,
             first_prefix,
@@ -110,6 +111,7 @@ impl<'a> Renderer<'a> {
         for span in &paragraph.content {
             collect_fragments(span, Style::default(), self.sentinel, &mut fragments);
         }
+        let fragments = trim_layout_fragments(fragments);
         let mut lines = wrap_fragments(&fragments, prefix, prefix, self.wrap_width);
 
         match level {
@@ -172,18 +174,21 @@ impl<'a> Renderer<'a> {
 
     fn render_unordered_list(&mut self, paragraph: &Paragraph, prefix: &str) {
         for (idx, entry) in paragraph.entries.iter().enumerate() {
+            if idx > 0 {
+                self.push_plain_line("", false);
+            }
             let marker = "• ";
             let first_prefix = format!("{}{}", prefix, marker);
             let continuation_prefix = format!("{}{}", prefix, " ".repeat(marker.chars().count()));
-            if idx > 0 {
-                self.push_plain_line(&continuation_prefix, false);
-            }
             self.render_list_entry(entry, &first_prefix, &continuation_prefix);
         }
     }
 
     fn render_ordered_list(&mut self, paragraph: &Paragraph, prefix: &str) {
         for (idx, entry) in paragraph.entries.iter().enumerate() {
+            if idx > 0 {
+                self.push_plain_line("", false);
+            }
             let number_label = format!("{}. ", idx + 1);
             let first_prefix = format!("{}{}", prefix, number_label);
             let continuation_spaces = " ".repeat(
@@ -193,9 +198,6 @@ impl<'a> Renderer<'a> {
                     .saturating_sub(prefix.chars().count()),
             );
             let continuation_prefix = format!("{}{}", prefix, continuation_spaces);
-            if idx > 0 {
-                self.push_plain_line(&continuation_prefix, false);
-            }
             self.render_list_entry(entry, &first_prefix, &continuation_prefix);
         }
     }
@@ -203,7 +205,7 @@ impl<'a> Renderer<'a> {
     fn render_checklist(&mut self, paragraph: &Paragraph, prefix: &str) {
         for (idx, entry) in paragraph.entries.iter().enumerate() {
             if idx > 0 {
-                self.push_plain_line(prefix, false);
+                self.push_plain_line("", false);
             }
             if let Some(item) = entry
                 .iter()
@@ -322,10 +324,10 @@ impl<'a> Renderer<'a> {
         let mut content_line_numbers = Vec::with_capacity(self.line_metrics.len());
         let mut current_content = 0usize;
         for metric in &self.line_metrics {
+            content_line_numbers.push(current_content);
             if metric.counts_as_content {
                 current_content += 1;
             }
-            content_line_numbers.push(current_content);
         }
 
         let cursor = self
@@ -439,6 +441,31 @@ fn collect_fragments(
     }
     for child in &span.children {
         collect_fragments(child, style, sentinel, fragments);
+    }
+}
+
+fn trim_layout_fragments(fragments: Vec<FragmentItem>) -> Vec<FragmentItem> {
+    let start = fragments
+        .iter()
+        .position(|item| !is_layout_fragment(item))
+        .unwrap_or(fragments.len());
+    if start == fragments.len() {
+        return Vec::new();
+    }
+    let end = fragments
+        .iter()
+        .rposition(|item| !is_layout_fragment(item))
+        .map(|idx| idx + 1)
+        .unwrap_or(start);
+    fragments[start..end].to_vec()
+}
+
+fn is_layout_fragment(item: &FragmentItem) -> bool {
+    match item {
+        FragmentItem::LineBreak => true,
+        FragmentItem::Token(fragment) => fragment.kind == FragmentKind::Whitespace
+            && fragment.events.is_empty()
+            && fragment.text.chars().all(|ch| ch.is_whitespace()),
     }
 }
 
@@ -796,4 +823,95 @@ struct PendingPosition {
 
 struct LineMetric {
     counts_as_content: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Cursor;
+    use tdoc::parse;
+
+    const SENTINEL: char = '\u{F8FF}';
+
+    fn render_input(input: &str) -> RenderResult {
+        let document = parse(Cursor::new(input)).expect("failed to parse document");
+        render_document(&document, 120, &[], SENTINEL)
+    }
+
+    fn lines_to_strings(lines: &[Line<'_>]) -> Vec<String> {
+        lines
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn unordered_list_items_render_on_single_lines() {
+        let input = r#"
+<ul>
+  <li>
+    <p>Describe the features supported by FTML.</p>
+  </li>
+  <li>
+    <p>Showcase the FTML standard formatting enforced by fmtftml.</p>
+  </li>
+</ul>
+"#;
+        let rendered = render_input(input);
+        let lines = lines_to_strings(&rendered.lines);
+        assert_eq!(
+            lines,
+            vec![
+                "• Describe the features supported by FTML.",
+                "",
+                "• Showcase the FTML standard formatting enforced by fmtftml."
+            ]
+        );
+    }
+
+    #[test]
+    fn cursor_metrics_ignore_layout_indentation() {
+        let input = format!(
+            r#"
+<ul>
+  <li>
+    <p>Describe the features supported by FTML.</p>
+  </li>
+  <li>
+    <p>{SENTINEL}Showcase the FTML standard formatting enforced by fmtftml.</p>
+  </li>
+</ul>
+"#
+        );
+        let rendered = render_input(&input);
+        let cursor = rendered.cursor.expect("cursor position missing");
+
+        assert_eq!(cursor.line, 2, "visual line should match second list item");
+        assert_eq!(cursor.column, 2, "visual column should include bullet prefix");
+        assert_eq!(
+            cursor.content_line, 1,
+            "content line should align with the second logical item"
+        );
+        assert_eq!(
+            cursor.content_column, 0,
+            "content column should ignore list item prefix spacing"
+        );
+    }
+
+    #[test]
+    fn cursor_metrics_start_from_origin() {
+        let input = format!(r#"<p>{SENTINEL}Hello</p>"#);
+        let rendered = render_input(&input);
+        let cursor = rendered.cursor.expect("cursor position missing");
+
+        assert_eq!(cursor.line, 0);
+        assert_eq!(cursor.column, 0);
+        assert_eq!(cursor.content_line, 0);
+        assert_eq!(cursor.content_column, 0);
+    }
 }
