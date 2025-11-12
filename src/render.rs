@@ -550,8 +550,7 @@ fn tokenize_text(text: &str, style: Style, sentinel: char, fragments: &mut Vec<F
                         current.push_char(*actual);
                     }
                 } else {
-                    if let Some(mut existing) = builder.take() {
-                        existing.add_events(&mut pending_events);
+                    if let Some(existing) = builder.take() {
                         fragments.push(FragmentItem::Token(existing.finish()));
                     }
                     let mut new_builder = TokenBuilder::new(style, is_whitespace);
@@ -830,6 +829,7 @@ struct LineMetric {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::editor::DocumentEditor;
     use std::io::Cursor;
     use tdoc::parse;
 
@@ -918,5 +918,36 @@ mod tests {
         assert_eq!(cursor.column, 0);
         assert_eq!(cursor.content_line, 0);
         assert_eq!(cursor.content_column, 0);
+    }
+
+    #[test]
+    fn wrapped_line_start_column() {
+        let input = "<p>abcdefghij klmnopqrstuv</p>";
+        let document = parse(Cursor::new(input)).expect("failed to parse document");
+        let mut editor = DocumentEditor::new(document);
+        editor.ensure_cursor_selectable();
+        let (doc_with_markers, markers, _) = editor.clone_with_markers(SENTINEL);
+        let rendered = render_document(&doc_with_markers, 12, &markers, SENTINEL);
+
+        let mut columns_per_line: Vec<Vec<(u16, u16)>> = Vec::new();
+        for (_, position) in rendered.cursor_map {
+            let line = position.line;
+            if columns_per_line.len() <= line {
+                columns_per_line.resize(line + 1, Vec::new());
+            }
+            columns_per_line[line].push((position.content_column, position.column));
+        }
+        for columns in &mut columns_per_line {
+            columns.sort();
+            columns.dedup();
+        }
+
+        assert!(
+            columns_per_line
+                .into_iter()
+                .skip(1)
+                .any(|columns| columns.first() == Some(&(0, 0))),
+            "expected at least one wrapped line with column 0 start"
+        );
     }
 }

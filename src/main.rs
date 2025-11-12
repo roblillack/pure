@@ -332,7 +332,13 @@ impl App {
             .iter()
             .filter(|entry| entry.position.line == current_position.line)
             .cloned()
-            .min_by_key(|entry| (entry.position.column as usize, entry.pointer.offset));
+            .min_by_key(|entry| {
+                (
+                    entry.position.content_column as usize,
+                    entry.position.column as usize,
+                    entry.pointer.offset,
+                )
+            });
 
         if let Some(target) = destination {
             if self.editor.move_to_pointer(&target.pointer) {
@@ -371,7 +377,13 @@ impl App {
             .iter()
             .filter(|entry| entry.position.line == current_position.line)
             .cloned()
-            .max_by_key(|entry| (entry.position.column as usize, entry.pointer.offset));
+            .max_by_key(|entry| {
+                (
+                    entry.position.content_column as usize,
+                    entry.position.column as usize,
+                    entry.pointer.offset,
+                )
+            });
 
         if let Some(target) = destination {
             if self.editor.move_to_pointer(&target.pointer) {
