@@ -194,6 +194,30 @@ impl DocumentEditor {
         &self.document
     }
 
+    pub fn current_checklist_item_state(&self) -> Option<bool> {
+        let paragraph = paragraph_ref(&self.document, &self.cursor.paragraph_path)?;
+        if paragraph.paragraph_type == ParagraphType::ChecklistItem {
+            Some(paragraph.checklist_item_checked.unwrap_or(false))
+        } else {
+            None
+        }
+    }
+
+    pub fn set_current_checklist_item_checked(&mut self, checked: bool) -> bool {
+        let Some(paragraph) = paragraph_mut(&mut self.document, &self.cursor.paragraph_path) else {
+            return false;
+        };
+        if paragraph.paragraph_type != ParagraphType::ChecklistItem {
+            return false;
+        }
+        let previous = paragraph.checklist_item_checked;
+        paragraph.checklist_item_checked = Some(checked);
+        match previous {
+            Some(value) => value != checked,
+            None => true,
+        }
+    }
+
     pub fn cursor_pointer(&self) -> CursorPointer {
         self.cursor.clone()
     }
@@ -1984,6 +2008,24 @@ mod tests {
         assert_eq!(checklist.paragraph_type, ParagraphType::Checklist);
         assert_eq!(checklist.entries.len(), 1);
         assert_eq!(checklist.entries[0][0].content[0].text, "Second");
+    }
+
+    #[test]
+    fn checklist_item_state_updates_through_editor() {
+        let item = Paragraph::new_checklist_item(false).with_content(vec![Span::new_text("Task")]);
+        let checklist = Paragraph::new_checklist().with_entries(vec![vec![item]]);
+        let document = Document::new().with_paragraphs(vec![checklist]);
+
+        let mut editor = DocumentEditor::new(document);
+        let pointer = pointer_to_entry_span(0, 0, 0);
+        assert!(editor.move_to_pointer(&pointer));
+        assert_eq!(editor.current_checklist_item_state(), Some(false));
+
+        assert!(editor.set_current_checklist_item_checked(true));
+        assert_eq!(editor.current_checklist_item_state(), Some(true));
+
+        assert!(!editor.set_current_checklist_item_checked(true));
+        assert_eq!(editor.current_checklist_item_state(), Some(true));
     }
 
     #[test]

@@ -113,6 +113,7 @@ fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut A
 #[derive(Clone, Copy)]
 enum MenuAction {
     SetParagraphType(ParagraphType),
+    SetChecklistItemChecked(bool),
 }
 
 #[derive(Clone, Copy)]
@@ -158,7 +159,7 @@ struct MenuItem {
 }
 
 impl MenuItem {
-    const fn enabled_with_shortcut(
+    fn enabled_with_shortcut(
         label: &'static str,
         action: MenuAction,
         shortcut: MenuShortcut,
@@ -170,7 +171,15 @@ impl MenuItem {
         }
     }
 
-    const fn disabled_with_shortcut(label: &'static str, shortcut: MenuShortcut) -> Self {
+    fn enabled(label: &'static str, action: MenuAction) -> Self {
+        Self {
+            label,
+            action: Some(action),
+            shortcut: None,
+        }
+    }
+
+    fn disabled_with_shortcut(label: &'static str, shortcut: MenuShortcut) -> Self {
         Self {
             label,
             action: None,
@@ -195,8 +204,7 @@ struct ContextMenuState {
 }
 
 impl ContextMenuState {
-    fn new() -> Self {
-        let entries = build_context_menu_entries();
+    fn new(entries: Vec<MenuEntry>) -> Self {
         let selected_index = entries
             .iter()
             .enumerate()
@@ -264,7 +272,27 @@ impl ContextMenuState {
     }
 }
 
-fn build_context_menu_entries() -> Vec<MenuEntry> {
+fn build_context_menu_entries(checklist_state: Option<bool>) -> Vec<MenuEntry> {
+    let mut entries = Vec::new();
+
+    if let Some(is_checked) = checklist_state {
+        let label = if is_checked {
+            "Uncheck Item"
+        } else {
+            "Check Item"
+        };
+        entries.push(MenuEntry::Item(MenuItem::enabled(
+            label,
+            MenuAction::SetChecklistItemChecked(!is_checked),
+        )));
+        entries.push(MenuEntry::Separator);
+    }
+
+    entries.extend(default_context_menu_entries());
+    entries
+}
+
+fn default_context_menu_entries() -> Vec<MenuEntry> {
     vec![
         MenuEntry::Section("Paragraph type"),
         MenuEntry::Item(MenuItem::enabled_with_shortcut(
@@ -609,7 +637,8 @@ impl App {
     }
 
     fn open_context_menu(&mut self) {
-        self.context_menu = Some(ContextMenuState::new());
+        let entries = build_context_menu_entries(self.editor.current_checklist_item_state());
+        self.context_menu = Some(ContextMenuState::new(entries));
     }
 
     fn close_context_menu(&mut self) {
@@ -680,6 +709,12 @@ impl App {
                 if self.editor.set_paragraph_type(kind) {
                     self.mark_dirty();
                     self.preferred_column = None;
+                }
+                true
+            }
+            MenuAction::SetChecklistItemChecked(checked) => {
+                if self.editor.set_current_checklist_item_checked(checked) {
+                    self.mark_dirty();
                 }
                 true
             }

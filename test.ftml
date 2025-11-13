@@ -5,7 +5,7 @@
 <ul>
   <li><input type="checkbox" /> Jumping by word</li>
   <li>
-    <input type="checkbox" /> Fix changing paragraph types for list paragraphs (to ensure we're not
+    <input type="checkbox" checked /> Fix changing paragraph types for list paragraphs (to ensure we're not
     creating a Text paragraph inside a List one, but to split the list, change
     one item, etc.)
   </li>
@@ -21,7 +21,10 @@
     paragraph)
   </li>
   <li>
-    <input type="checkbox" /> Keyboard shortcut and context menu entry to toggle checklist items
+    <input type="checkbox" /> Keyboard shortcut to toggle checklist items
+  </li>
+  <li>
+    <input type="checkbox" checked /> Context menu entry to toggle checklist items
   </li>
   <li>
     <input type="checkbox" /> Wire keyboard shortcuts for basic inline styling where possible (Ctrl-B,
