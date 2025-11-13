@@ -394,7 +394,7 @@ fn default_context_menu_entries() -> Vec<MenuEntry> {
 fn is_context_menu_shortcut(code: KeyCode, modifiers: KeyModifiers) -> bool {
     match code {
         KeyCode::Esc => modifiers.is_empty(),
-        KeyCode::Char(' ') | KeyCode::Char('p') => modifiers.contains(KeyModifiers::CONTROL),
+        KeyCode::Char(' ') => modifiers.contains(KeyModifiers::CONTROL),
         _ => false,
     }
 }
@@ -679,9 +679,7 @@ impl App {
                 }
                 true
             }
-            KeyCode::Char(' ') | KeyCode::Char('p')
-                if modifiers.contains(KeyModifiers::CONTROL) =>
-            {
+            KeyCode::Char(' ') if modifiers.contains(KeyModifiers::CONTROL) => {
                 self.close_context_menu();
                 true
             }
@@ -1035,6 +1033,12 @@ impl App {
                 }
                 (KeyCode::Char('j'), m) if m.contains(KeyModifiers::CONTROL) => {
                     if self.editor.insert_char('\n') {
+                        self.mark_dirty();
+                        self.preferred_column = None;
+                    }
+                }
+                (KeyCode::Char('p'), m) if m.contains(KeyModifiers::CONTROL) => {
+                    if self.editor.insert_paragraph_break_as_sibling() {
                         self.mark_dirty();
                         self.preferred_column = None;
                     }

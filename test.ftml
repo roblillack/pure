@@ -20,11 +20,11 @@
     paragraphs using Ctrl-[ anc Ctrl-]
   </li>
   <li>
-    <input type="checkbox" /> Find a way to add adjacent paragraphs on the same level (follow-up
-    paragraph)
+    <input type="checkbox" checked /> Find a way to add adjacent paragraphs on the same level (follow-up
+    paragraph) --> Ctrl-P
   </li>
   <li>
-    <input type="checkbox" /> Keyboard shortcut to toggle checklist items
+    <input type="checkbox" /> Keyboard shortcut to toggle checklist items?
   </li>
   <li>
     <input type="checkbox" checked /> Context menu entry to toggle checklist items
@@ -34,7 +34,7 @@
     Ctrl-I, Ctrl-U, Ctrl-K)
   </li>
   <li>
-    <input type="checkbox" /> Make sure that changing the paragraph style "does the right thing"-ie.
+    <input type="checkbox" checked /> Make sure that changing the paragraph style "does the right thing"-ie.
     we're not nesting paragraphs just because we change the paragraph style of
     the Text inside a Quote.
   </li>
@@ -75,15 +75,11 @@
   <li>
     <p>Pure: Only allows for text content</p>
   </li>
-</ul>
 
-<ul>
   <li>
     <p>Leaf: Allows for text content with inline styling</p>
   </li>
-</ul>
 
-<ul>
   <li>
     <p>Container: Allows list of children which can be any paragraph type</p>
   </li>
@@ -100,18 +96,14 @@
       requested one.
     </p>
   </li>
-</ul>
 
-<ul>
   <li>
     <p>
       If the current paragraph is the sole child of it's parent container:
       Change the parent container's type.
     </p>
   </li>
-</ul>
 
-<ul>
   <li>
     <p>
       If other siblings to the current paragraph exist: Only change this

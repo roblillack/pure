@@ -630,12 +630,25 @@ impl DocumentEditor {
         removed
     }
 
-    pub fn insert_paragraph_break(&mut self) -> bool {
+    fn insert_paragraph_break_internal(&mut self, prefer_entry_sibling: bool) -> bool {
         let pointer = self.cursor.clone();
         if !pointer.is_valid() {
             return false;
         }
-        let Some(new_pointer) = split_paragraph_break(&mut self.document, &pointer) else {
+        let prefer_entry_sibling = if prefer_entry_sibling {
+            match paragraph_ref(&self.document, &pointer.paragraph_path) {
+                Some(paragraph) if paragraph.paragraph_type == ParagraphType::ChecklistItem => {
+                    false
+                }
+                Some(_) => true,
+                None => false,
+            }
+        } else {
+            false
+        };
+        let Some(new_pointer) =
+            split_paragraph_break(&mut self.document, &pointer, prefer_entry_sibling)
+        else {
             return false;
         };
         self.rebuild_segments();
@@ -643,6 +656,14 @@ impl DocumentEditor {
             self.cursor = new_pointer;
         }
         true
+    }
+
+    pub fn insert_paragraph_break(&mut self) -> bool {
+        self.insert_paragraph_break_internal(false)
+    }
+
+    pub fn insert_paragraph_break_as_sibling(&mut self) -> bool {
+        self.insert_paragraph_break_internal(true)
     }
 
     pub fn clone_with_markers(&self, sentinel: char) -> (Document, Vec<MarkerRef>, bool) {
@@ -1808,6 +1829,7 @@ fn collect_span_rec(
 fn split_paragraph_break(
     document: &mut Document,
     pointer: &CursorPointer,
+    prefer_entry_sibling: bool,
 ) -> Option<CursorPointer> {
     let steps_vec: Vec<PathStep> = pointer.paragraph_path.steps().to_vec();
     let (last_step, prefix) = steps_vec.split_last()?;
@@ -1862,11 +1884,38 @@ fn split_paragraph_break(
         }
         PathStep::Entry {
             entry_index,
-            paragraph_index: _,
+            paragraph_index,
         } => {
             let parent_path = ParagraphPath::from_steps(prefix.to_vec());
             let parent = paragraph_mut(document, &parent_path)?;
-            let insert_idx = (entry_index + 1).min(parent.entries.len());
+
+            if prefer_entry_sibling
+                && matches!(
+                    parent.paragraph_type,
+                    ParagraphType::OrderedList | ParagraphType::UnorderedList
+                )
+            {
+                let entry = parent.entries.get_mut(*entry_index)?;
+                let insert_idx = (*paragraph_index + 1).min(entry.len());
+                let mut new_paragraph = Paragraph::new_text();
+                new_paragraph.content = right_spans;
+                entry.insert(insert_idx, new_paragraph);
+
+                let mut new_steps = prefix.to_vec();
+                new_steps.push(PathStep::Entry {
+                    entry_index: *entry_index,
+                    paragraph_index: insert_idx,
+                });
+                let new_path = ParagraphPath::from_steps(new_steps);
+                let span_path = SpanPath::new(vec![0]);
+                return Some(CursorPointer {
+                    paragraph_path: new_path,
+                    span_path,
+                    offset: 0,
+                });
+            }
+
+            let insert_idx = (*entry_index + 1).min(parent.entries.len());
 
             let new_entry = match parent.paragraph_type {
                 ParagraphType::Checklist => {
@@ -2316,9 +2365,54 @@ mod tests {
     }
 
     #[test]
+    fn ctrl_p_in_unordered_list_creates_sibling_paragraph() {
+        let list = unordered_list(&["Alpha Beta"]);
+        let document = Document::new().with_paragraphs(vec![list]);
+        let mut editor = DocumentEditor::new(document);
+
+        let mut pointer = pointer_to_entry_span(0, 0, 0);
+        pointer.offset = 5;
+        assert!(editor.move_to_pointer(&pointer));
+
+        assert!(editor.insert_paragraph_break_as_sibling());
+
+        let doc = editor.document();
+        assert_eq!(doc.paragraphs.len(), 1);
+        let list = &doc.paragraphs[0];
+        assert_eq!(list.entries.len(), 1);
+        let entry = &list.entries[0];
+        assert_eq!(entry.len(), 2);
+        assert_eq!(entry[0].content[0].text, "Alpha");
+        assert_eq!(entry[1].content[0].text, " Beta");
+    }
+
+    #[test]
+    fn ctrl_p_in_checklist_behaves_like_enter() {
+        let checklist = checklist(&["Task"]);
+        let document = Document::new().with_paragraphs(vec![checklist]);
+        let mut editor = DocumentEditor::new(document);
+
+        let mut pointer = pointer_to_entry_span(0, 0, 0);
+        pointer.offset = 4;
+        assert!(editor.move_to_pointer(&pointer));
+
+        assert!(editor.insert_paragraph_break_as_sibling());
+
+        let doc = editor.document();
+        assert_eq!(doc.paragraphs.len(), 1);
+        let checklist = &doc.paragraphs[0];
+        assert_eq!(checklist.entries.len(), 2);
+        assert_eq!(checklist.entries[0].len(), 1);
+        assert_eq!(checklist.entries[0][0].content[0].text, "Task");
+        assert_eq!(
+            checklist.entries[1][0].paragraph_type,
+            ParagraphType::ChecklistItem
+        );
+    }
+
+    #[test]
     fn move_word_left_within_span() {
-        let document =
-            Document::new().with_paragraphs(vec![text_paragraph("hello world")]);
+        let document = Document::new().with_paragraphs(vec![text_paragraph("hello world")]);
         let mut editor = DocumentEditor::new(document);
         let pointer = pointer_to_root_span(0);
         assert!(editor.move_to_pointer(&pointer));
@@ -2333,8 +2427,7 @@ mod tests {
 
     #[test]
     fn move_word_right_advances_to_next_word() {
-        let document =
-            Document::new().with_paragraphs(vec![text_paragraph("foo bar baz")]);
+        let document = Document::new().with_paragraphs(vec![text_paragraph("foo bar baz")]);
         let mut editor = DocumentEditor::new(document);
         let pointer = pointer_to_root_span(0);
         assert!(editor.move_to_pointer(&pointer));
@@ -2348,8 +2441,7 @@ mod tests {
 
     #[test]
     fn delete_word_backward_removes_previous_word() {
-        let document =
-            Document::new().with_paragraphs(vec![text_paragraph("foo bar baz")]);
+        let document = Document::new().with_paragraphs(vec![text_paragraph("foo bar baz")]);
         let mut editor = DocumentEditor::new(document);
         let pointer = pointer_to_root_span(0);
         assert!(editor.move_to_pointer(&pointer));
@@ -2366,8 +2458,7 @@ mod tests {
 
     #[test]
     fn delete_word_forward_removes_next_word() {
-        let document =
-            Document::new().with_paragraphs(vec![text_paragraph("foo bar baz")]);
+        let document = Document::new().with_paragraphs(vec![text_paragraph("foo bar baz")]);
         let mut editor = DocumentEditor::new(document);
         let pointer = pointer_to_root_span(0);
         assert!(editor.move_to_pointer(&pointer));
@@ -2381,8 +2472,8 @@ mod tests {
 
     #[test]
     fn move_word_navigation_crosses_segments() {
-        let document = Document::new()
-            .with_paragraphs(vec![text_paragraph("alpha"), text_paragraph("beta")]);
+        let document =
+            Document::new().with_paragraphs(vec![text_paragraph("alpha"), text_paragraph("beta")]);
         let mut editor = DocumentEditor::new(document);
 
         let first = pointer_to_root_span(0);

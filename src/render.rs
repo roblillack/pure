@@ -269,6 +269,9 @@ impl<'a> Renderer<'a> {
         }
 
         for rest in iter {
+            if rest.paragraph_type == ParagraphType::Text {
+                self.push_plain_line("", false);
+            }
             self.render_paragraph(rest, continuation_prefix);
         }
     }
@@ -971,6 +974,40 @@ mod tests {
                 "• Showcase the FTML standard formatting enforced by fmtftml."
             ]
         );
+    }
+
+    #[test]
+    fn unordered_list_paragraph_break_inserts_blank_line() {
+        let input = r#"
+<ul>
+  <li>
+    <p>First paragraph.</p>
+    <p>Second paragraph.</p>
+  </li>
+</ul>
+"#;
+        let rendered = render_input(input);
+        let lines = lines_to_strings(&rendered.lines);
+        assert_eq!(lines, vec!["• First paragraph.", "", "  Second paragraph."]);
+    }
+
+    #[test]
+    fn unordered_list_render_after_editor_split_has_single_blank_line() {
+        let list = Paragraph::new_unordered_list().with_entries(vec![vec![
+            Paragraph::new_text().with_content(vec![DocSpan::new_text("Alpha Beta")]),
+        ]]);
+        let document = Document::new().with_paragraphs(vec![list]);
+        let mut editor = DocumentEditor::new(document);
+        editor.ensure_cursor_selectable();
+        for _ in 0..6 {
+            assert!(editor.move_right());
+        }
+        assert!(editor.insert_paragraph_break_as_sibling());
+
+        let (doc_with_markers, markers, _) = editor.clone_with_markers(SENTINEL);
+        let rendered = render_document(&doc_with_markers, 120, &markers, SENTINEL);
+        let lines = lines_to_strings(&rendered.lines);
+        assert_eq!(lines, vec!["• Alpha ", "", "  Beta"]);
     }
 
     #[test]
