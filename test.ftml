@@ -65,6 +65,7 @@
   <li>
     <input type="checkbox" /> Implement drag-to-select, double-click, triple-click
   </li>
+  <li><input type="checkbox" checked /> Add support for Markdown files</li>
 </ul>
 
 <h2>FTML improvements</h2>

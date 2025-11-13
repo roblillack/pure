@@ -1,6 +1,6 @@
 use std::{
     env, fs, io,
-    path::PathBuf,
+    path::{Path, PathBuf},
     time::{Duration, Instant},
 };
 
@@ -21,7 +21,7 @@ use ratatui::{
         ScrollbarOrientation, ScrollbarState, Wrap,
     },
 };
-use tdoc::{Document, ParagraphType, parse, writer::Writer};
+use tdoc::{markdown, Document, ParagraphType, parse, writer::Writer};
 
 mod editor;
 mod render;
@@ -31,6 +31,27 @@ use render::{CursorVisualPosition, RenderResult, render_document};
 
 const SENTINEL: char = '\u{F8FF}';
 const STATUS_TIMEOUT: Duration = Duration::from_secs(4);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DocumentFormat {
+    Ftml,
+    Markdown,
+}
+
+impl DocumentFormat {
+    fn from_path(path: &Path) -> Self {
+        let ext = path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .map(|ext| ext.to_ascii_lowercase());
+        match ext.as_deref() {
+            Some("md") | Some("markdown") | Some("mkd") | Some("mdown") | Some("mdtxt") => {
+                DocumentFormat::Markdown
+            }
+            _ => DocumentFormat::Ftml,
+        }
+    }
+}
 
 fn main() -> Result<()> {
     run()
@@ -48,8 +69,8 @@ fn run() -> Result<()> {
     };
     let path = PathBuf::from(path_arg);
 
-    let (document, initial_status) = load_document(&path)?;
-    let mut app = App::new(document, path, initial_status);
+    let (document, format, initial_status) = load_document(&path)?;
+    let mut app = App::new(document, path, format, initial_status);
 
     enable_raw_mode().context("failed to enable raw mode")?;
     let mut stdout = io::stdout();
@@ -67,19 +88,25 @@ fn run() -> Result<()> {
     res
 }
 
-fn load_document(path: &PathBuf) -> Result<(Document, Option<String>)> {
+fn load_document(path: &PathBuf) -> Result<(Document, DocumentFormat, Option<String>)> {
+    let format = DocumentFormat::from_path(path);
     if path.exists() {
         let content = fs::read_to_string(path)
             .with_context(|| format!("failed to read {}", path.display()))?;
-        match parse(std::io::Cursor::new(content)) {
-            Ok(doc) => Ok((doc, None)),
+        let parsed = match format {
+            DocumentFormat::Ftml => parse(std::io::Cursor::new(content))
+                .map_err(|err| -> Box<dyn std::error::Error + Send + Sync> { Box::new(err) }),
+            DocumentFormat::Markdown => markdown::parse(std::io::Cursor::new(content)),
+        };
+        match parsed {
+            Ok(doc) => Ok((doc, format, None)),
             Err(err) => {
                 let message = format!("Parse error: {err}. Starting with empty document.");
-                Ok((Document::new(), Some(message)))
+                Ok((Document::new(), format, Some(message)))
             }
         }
     } else {
-        Ok((Document::new(), Some("New document".to_string())))
+        Ok((Document::new(), format, Some("New document".to_string())))
     }
 }
 
@@ -402,6 +429,7 @@ fn is_context_menu_shortcut(code: KeyCode, modifiers: KeyModifiers) -> bool {
 struct App {
     editor: DocumentEditor,
     file_path: PathBuf,
+    document_format: DocumentFormat,
     scroll_top: usize,
     last_view_height: usize,
     should_quit: bool,
@@ -414,13 +442,19 @@ struct App {
 }
 
 impl App {
-    fn new(document: Document, path: PathBuf, initial_status: Option<String>) -> Self {
+    fn new(
+        document: Document,
+        path: PathBuf,
+        format: DocumentFormat,
+        initial_status: Option<String>,
+    ) -> Self {
         let mut editor = DocumentEditor::new(document);
         editor.ensure_cursor_selectable();
 
         Self {
             editor,
             file_path: path,
+            document_format: format,
             scroll_top: 0,
             last_view_height: 1,
             should_quit: false,
@@ -1136,12 +1170,23 @@ impl App {
     }
 
     fn save(&mut self) -> Result<()> {
-        let writer = Writer::new();
-        let contents = writer
-            .write_to_string(self.editor.document())
-            .context("failed to render FTML")?;
-        fs::write(&self.file_path, contents)
-            .with_context(|| format!("failed to write {}", self.file_path.display()))?;
+        match self.document_format {
+            DocumentFormat::Ftml => {
+                let writer = Writer::new();
+                let contents = writer
+                    .write_to_string(self.editor.document())
+                    .context("failed to render FTML")?;
+                fs::write(&self.file_path, contents)
+                    .with_context(|| format!("failed to write {}", self.file_path.display()))?;
+            }
+            DocumentFormat::Markdown => {
+                let mut contents = Vec::new();
+                markdown::write(&mut contents, self.editor.document())
+                    .context("failed to render Markdown")?;
+                fs::write(&self.file_path, contents)
+                    .with_context(|| format!("failed to write {}", self.file_path.display()))?;
+            }
+        }
 
         self.dirty = false;
         self.status_message = Some(("Saved".to_string(), Instant::now()));
