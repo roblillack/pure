@@ -3,7 +3,7 @@
 <h2>Todos</h2>
 
 <ul>
-  <li><input type="checkbox" /> Jumping by word</li>
+  <li><input type="checkbox" checked /> Jumping by word</li>
   <li>
     <input type="checkbox" /> Delete by word (Ctrl-Backspace, Ctrl-Delete, Ctrl-W)
   </li>

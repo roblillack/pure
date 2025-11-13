@@ -268,6 +268,67 @@ impl DocumentEditor {
         self.shift_to_next_segment()
     }
 
+    pub fn move_word_left(&mut self) -> bool {
+        if self.segments.is_empty() {
+            return false;
+        }
+
+        if let Some(text) = self.current_span_text() {
+            let current_offset = self.cursor.offset.min(text.chars().count());
+            let new_offset = previous_word_boundary(text, current_offset);
+            if new_offset < current_offset {
+                self.cursor.offset = new_offset;
+                return true;
+            }
+        }
+
+        while self.shift_to_previous_segment() {
+            let len = self.current_segment_len();
+            self.cursor.offset = len;
+            if len == 0 {
+                continue;
+            }
+            if let Some(text) = self.current_span_text() {
+                let new_offset = previous_word_boundary(text, len);
+                self.cursor.offset = new_offset;
+            }
+            return true;
+        }
+
+        false
+    }
+
+    pub fn move_word_right(&mut self) -> bool {
+        if self.segments.is_empty() {
+            return false;
+        }
+
+        if let Some(text) = self.current_span_text() {
+            let len = text.chars().count();
+            let current_offset = self.cursor.offset.min(len);
+            let new_offset = next_word_boundary(text, current_offset);
+            if new_offset > current_offset {
+                self.cursor.offset = new_offset;
+                return true;
+            }
+        }
+
+        while self.shift_to_next_segment() {
+            let len = self.current_segment_len();
+            self.cursor.offset = 0;
+            if len == 0 {
+                continue;
+            }
+            if let Some(text) = self.current_span_text() {
+                let new_offset = skip_leading_whitespace(text).min(len);
+                self.cursor.offset = new_offset;
+            }
+            return true;
+        }
+
+        false
+    }
+
     pub fn move_to_segment_start(&mut self) {
         self.cursor.offset = 0;
     }
@@ -563,6 +624,12 @@ impl DocumentEditor {
             .get(self.cursor_segment)
             .map(|segment| segment.len)
             .unwrap_or(0)
+    }
+
+    fn current_span_text(&self) -> Option<&str> {
+        let paragraph = paragraph_ref(&self.document, &self.cursor.paragraph_path)?;
+        let span = span_ref(paragraph, &self.cursor.span_path)?;
+        Some(span.text.as_str())
     }
 
     fn rebuild_segments(&mut self) {
@@ -1752,6 +1819,16 @@ fn paragraph_mut<'a>(
     Some(paragraph)
 }
 
+fn span_ref<'a>(paragraph: &'a Paragraph, path: &SpanPath) -> Option<&'a Span> {
+    let mut iter = path.indices().iter();
+    let first = iter.next()?;
+    let mut span = paragraph.content.get(*first)?;
+    for idx in iter {
+        span = span.children.get(*idx)?;
+    }
+    Some(span)
+}
+
 fn span_mut<'a>(paragraph: &'a mut Paragraph, path: &SpanPath) -> Option<&'a mut Span> {
     let mut iter = path.indices().iter();
     let first = iter.next()?;
@@ -1813,6 +1890,84 @@ fn char_to_byte_idx(text: &str, char_idx: usize) -> usize {
         count += 1;
     }
     text.len()
+}
+
+fn is_word_char(ch: char) -> bool {
+    ch.is_alphanumeric() || ch == '_'
+}
+
+fn previous_word_boundary(text: &str, offset: usize) -> usize {
+    let chars: Vec<char> = text.chars().collect();
+    let mut idx = offset.min(chars.len());
+    if idx == 0 {
+        return 0;
+    }
+
+    while idx > 0 && chars[idx - 1].is_whitespace() {
+        idx -= 1;
+    }
+    if idx == 0 {
+        return 0;
+    }
+
+    while idx > 0 && is_word_char(chars[idx - 1]) {
+        idx -= 1;
+    }
+    if idx > 0 && !is_word_char(chars[idx - 1]) && !chars[idx - 1].is_whitespace() {
+        while idx > 0 && !is_word_char(chars[idx - 1]) && !chars[idx - 1].is_whitespace() {
+            idx -= 1;
+        }
+    }
+    idx
+}
+
+fn next_word_boundary(text: &str, offset: usize) -> usize {
+    let chars: Vec<char> = text.chars().collect();
+    let len = chars.len();
+    let mut idx = offset.min(len);
+    if idx >= len {
+        return len;
+    }
+
+    if chars[idx].is_whitespace() {
+        while idx < len && chars[idx].is_whitespace() {
+            idx += 1;
+        }
+        return idx;
+    }
+
+    if is_word_char(chars[idx]) {
+        while idx < len && is_word_char(chars[idx]) {
+            idx += 1;
+        }
+        while idx < len && !chars[idx].is_whitespace() && !is_word_char(chars[idx]) {
+            idx += 1;
+        }
+        while idx < len && chars[idx].is_whitespace() {
+            idx += 1;
+        }
+        return idx;
+    }
+
+    while idx < len && !chars[idx].is_whitespace() && !is_word_char(chars[idx]) {
+        idx += 1;
+    }
+    while idx < len && chars[idx].is_whitespace() {
+        idx += 1;
+    }
+    idx
+}
+
+fn skip_leading_whitespace(text: &str) -> usize {
+    let mut count = 0;
+    for ch in text.chars() {
+        if ch.is_whitespace() {
+            count += 1;
+        } else {
+            break;
+        }
+    }
+    count
 }
 
 fn paragraph_is_empty(paragraph: &Paragraph) -> bool {
@@ -1909,6 +2064,62 @@ mod tests {
             })
             .collect::<Vec<_>>();
         Paragraph::new_checklist().with_entries(entries)
+    }
+
+    #[test]
+    fn move_word_left_within_span() {
+        let document =
+            Document::new().with_paragraphs(vec![text_paragraph("hello world")]);
+        let mut editor = DocumentEditor::new(document);
+        let pointer = pointer_to_root_span(0);
+        assert!(editor.move_to_pointer(&pointer));
+        editor.move_to_segment_end();
+
+        assert!(editor.move_word_left());
+        assert_eq!(editor.cursor_pointer().offset, 6);
+
+        assert!(editor.move_word_left());
+        assert_eq!(editor.cursor_pointer().offset, 0);
+    }
+
+    #[test]
+    fn move_word_right_advances_to_next_word() {
+        let document =
+            Document::new().with_paragraphs(vec![text_paragraph("foo bar baz")]);
+        let mut editor = DocumentEditor::new(document);
+        let pointer = pointer_to_root_span(0);
+        assert!(editor.move_to_pointer(&pointer));
+
+        assert!(editor.move_word_right());
+        assert_eq!(editor.cursor_pointer().offset, 4);
+
+        assert!(editor.move_word_right());
+        assert_eq!(editor.cursor_pointer().offset, 8);
+    }
+
+    #[test]
+    fn move_word_navigation_crosses_segments() {
+        let document = Document::new()
+            .with_paragraphs(vec![text_paragraph("alpha"), text_paragraph("beta")]);
+        let mut editor = DocumentEditor::new(document);
+
+        let first = pointer_to_root_span(0);
+        assert!(editor.move_to_pointer(&first));
+        editor.move_to_segment_end();
+
+        assert!(editor.move_word_right());
+        let pointer = editor.cursor_pointer();
+        let expected_second = pointer_to_root_span(1);
+        assert_eq!(pointer.paragraph_path, expected_second.paragraph_path);
+        assert_eq!(pointer.span_path, expected_second.span_path);
+        assert_eq!(pointer.offset, 0);
+
+        assert!(editor.move_word_left());
+        let pointer = editor.cursor_pointer();
+        let expected_first = pointer_to_root_span(0);
+        assert_eq!(pointer.paragraph_path, expected_first.paragraph_path);
+        assert_eq!(pointer.span_path, expected_first.span_path);
+        assert_eq!(pointer.offset, 0);
     }
 
     #[test]

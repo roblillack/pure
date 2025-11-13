@@ -1004,6 +1004,16 @@ impl App {
                 (KeyCode::Char('c'), m) if m.contains(KeyModifiers::CONTROL) => {
                     self.should_quit = true;
                 }
+                (KeyCode::Left, m) if m.contains(KeyModifiers::CONTROL) => {
+                    if self.editor.move_word_left() {
+                        self.preferred_column = None;
+                    }
+                }
+                (KeyCode::Right, m) if m.contains(KeyModifiers::CONTROL) => {
+                    if self.editor.move_word_right() {
+                        self.preferred_column = None;
+                    }
+                }
                 (KeyCode::Left, _) => {
                     if self.editor.move_left() {
                         self.preferred_column = None;
