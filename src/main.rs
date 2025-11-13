@@ -1033,11 +1033,39 @@ impl App {
                 (KeyCode::Char('a'), m) if m.contains(KeyModifiers::CONTROL) => {
                     self.move_to_visual_line_start();
                 }
+                (KeyCode::Char('j'), m) if m.contains(KeyModifiers::CONTROL) => {
+                    if self.editor.insert_char('\n') {
+                        self.mark_dirty();
+                        self.preferred_column = None;
+                    }
+                }
                 (KeyCode::Char('e'), m) if m.contains(KeyModifiers::CONTROL) => {
                     self.move_to_visual_line_end();
                 }
+                (KeyCode::Char('w'), m) if m.contains(KeyModifiers::CONTROL) => {
+                    if self.editor.delete_word_backward() {
+                        self.mark_dirty();
+                        self.preferred_column = None;
+                    }
+                }
+                (KeyCode::Backspace, m)
+                    if m.contains(KeyModifiers::CONTROL) || m.contains(KeyModifiers::ALT) =>
+                {
+                    if self.editor.delete_word_backward() {
+                        self.mark_dirty();
+                        self.preferred_column = None;
+                    }
+                }
                 (KeyCode::Backspace, _) => {
                     if self.editor.backspace() {
+                        self.mark_dirty();
+                        self.preferred_column = None;
+                    }
+                }
+                (KeyCode::Delete, m)
+                    if m.contains(KeyModifiers::CONTROL) || m.contains(KeyModifiers::ALT) =>
+                {
+                    if self.editor.delete_word_forward() {
                         self.mark_dirty();
                         self.preferred_column = None;
                     }
@@ -1063,12 +1091,6 @@ impl App {
                 }
                 (KeyCode::Tab, _) => {
                     if self.editor.insert_char('\t') {
-                        self.mark_dirty();
-                        self.preferred_column = None;
-                    }
-                }
-                (KeyCode::Char('j'), m) if m.contains(KeyModifiers::CONTROL) => {
-                    if self.editor.insert_char('\n') {
                         self.mark_dirty();
                         self.preferred_column = None;
                     }

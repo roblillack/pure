@@ -532,6 +532,104 @@ impl DocumentEditor {
         }
     }
 
+    pub fn delete_word_backward(&mut self) -> bool {
+        if self.segments.is_empty() {
+            return false;
+        }
+
+        let Some((target_segment, target_pointer)) = self.previous_word_position() else {
+            return false;
+        };
+
+        let target_offset = target_pointer.offset;
+        let steps = self.count_backward_steps(target_segment, target_offset);
+        if steps == 0 {
+            return false;
+        }
+
+        let mut removed = false;
+        let mut remaining = steps;
+
+        while remaining > 0 {
+            if !self.backspace() {
+                break;
+            }
+            removed = true;
+            remaining -= 1;
+            if self.cursor.paragraph_path == target_pointer.paragraph_path
+                && self.cursor.span_path == target_pointer.span_path
+                && self.cursor.offset == target_pointer.offset
+            {
+                break;
+            }
+        }
+
+        if removed
+            && !(self.cursor.paragraph_path == target_pointer.paragraph_path
+                && self.cursor.span_path == target_pointer.span_path
+                && self.cursor.offset == target_pointer.offset)
+        {
+            let _ = self.move_to_pointer(&target_pointer);
+        }
+
+        removed
+    }
+
+    pub fn delete_word_forward(&mut self) -> bool {
+        if self.segments.is_empty() {
+            return false;
+        }
+
+        let start_pointer = self.cursor_pointer();
+
+        let Some((target_segment, target_pointer)) = self.next_word_position() else {
+            return false;
+        };
+
+        let target_offset = target_pointer.offset;
+        let steps = self.count_forward_steps(target_segment, target_offset);
+        if steps == 0 {
+            return false;
+        }
+
+        if !self.move_to_pointer(&target_pointer) {
+            self.cursor = target_pointer.clone();
+            if self.segments.is_empty() {
+                self.cursor_segment = 0;
+            } else {
+                self.cursor_segment = target_segment.min(self.segments.len() - 1);
+            }
+            self.clamp_cursor_offset();
+        }
+
+        let mut removed = false;
+        let mut remaining = steps;
+
+        while remaining > 0 {
+            if !self.backspace() {
+                break;
+            }
+            removed = true;
+            remaining -= 1;
+            if self.cursor.paragraph_path == start_pointer.paragraph_path
+                && self.cursor.span_path == start_pointer.span_path
+                && self.cursor.offset == start_pointer.offset
+            {
+                break;
+            }
+        }
+
+        if removed
+            && !(self.cursor.paragraph_path == start_pointer.paragraph_path
+                && self.cursor.span_path == start_pointer.span_path
+                && self.cursor.offset == start_pointer.offset)
+        {
+            let _ = self.move_to_pointer(&start_pointer);
+        }
+
+        removed
+    }
+
     pub fn insert_paragraph_break(&mut self) -> bool {
         let pointer = self.cursor.clone();
         if !pointer.is_valid() {
@@ -630,6 +728,157 @@ impl DocumentEditor {
         let paragraph = paragraph_ref(&self.document, &self.cursor.paragraph_path)?;
         let span = span_ref(paragraph, &self.cursor.span_path)?;
         Some(span.text.as_str())
+    }
+
+    fn segment_text(&self, segment: &SegmentRef) -> Option<&str> {
+        let paragraph = paragraph_ref(&self.document, &segment.paragraph_path)?;
+        let span = span_ref(paragraph, &segment.span_path)?;
+        Some(span.text.as_str())
+    }
+
+    fn previous_word_position(&self) -> Option<(usize, CursorPointer)> {
+        if self.segments.is_empty() {
+            return None;
+        }
+
+        if let Some(text) = self.current_span_text() {
+            let len = text.chars().count();
+            let current_offset = self.cursor.offset.min(len);
+            let new_offset = previous_word_boundary(text, current_offset);
+            if new_offset < current_offset {
+                let mut pointer = self.cursor.clone();
+                pointer.offset = new_offset;
+                return Some((self.cursor_segment, pointer));
+            }
+        }
+
+        let mut idx = self.cursor_segment;
+        while idx > 0 {
+            idx -= 1;
+            let segment = &self.segments[idx];
+            let len = segment.len;
+            if len == 0 {
+                continue;
+            }
+            let Some(text) = self.segment_text(segment) else {
+                continue;
+            };
+            let new_offset = previous_word_boundary(text, len);
+            let pointer = CursorPointer {
+                paragraph_path: segment.paragraph_path.clone(),
+                span_path: segment.span_path.clone(),
+                offset: new_offset.min(len),
+            };
+            return Some((idx, pointer));
+        }
+
+        None
+    }
+
+    fn next_word_position(&self) -> Option<(usize, CursorPointer)> {
+        if self.segments.is_empty() {
+            return None;
+        }
+
+        if let Some(text) = self.current_span_text() {
+            let len = text.chars().count();
+            let current_offset = self.cursor.offset.min(len);
+            let new_offset = next_word_boundary(text, current_offset);
+            if new_offset > current_offset {
+                let mut pointer = self.cursor.clone();
+                pointer.offset = new_offset.min(len);
+                return Some((self.cursor_segment, pointer));
+            }
+        }
+
+        let mut idx = self.cursor_segment + 1;
+        while idx < self.segments.len() {
+            let segment = &self.segments[idx];
+            let len = segment.len;
+            if len == 0 {
+                idx += 1;
+                continue;
+            }
+            let Some(text) = self.segment_text(segment) else {
+                idx += 1;
+                continue;
+            };
+            let new_offset = next_word_boundary(text, 0).min(len);
+            let pointer = CursorPointer {
+                paragraph_path: segment.paragraph_path.clone(),
+                span_path: segment.span_path.clone(),
+                offset: new_offset,
+            };
+            return Some((idx, pointer));
+        }
+
+        None
+    }
+
+    fn count_backward_steps(&self, target_segment: usize, target_offset: usize) -> usize {
+        if self.segments.is_empty() {
+            return 0;
+        }
+
+        if self.cursor_segment == target_segment {
+            let len = self.current_segment_len();
+            let clamped_target = target_offset.min(len);
+            return self.cursor.offset.min(len).saturating_sub(clamped_target);
+        }
+
+        if self.cursor_segment < target_segment {
+            return 0;
+        }
+
+        let mut count = self.cursor.offset;
+        let mut idx = self.cursor_segment;
+
+        while idx > target_segment {
+            idx -= 1;
+            let segment = &self.segments[idx];
+            if idx == target_segment {
+                let len = segment.len;
+                let clamped_target = target_offset.min(len);
+                count += len.saturating_sub(clamped_target);
+            } else {
+                count += segment.len;
+            }
+        }
+
+        count
+    }
+
+    fn count_forward_steps(&self, target_segment: usize, target_offset: usize) -> usize {
+        if self.segments.is_empty() {
+            return 0;
+        }
+
+        if self.cursor_segment == target_segment {
+            let len = self.current_segment_len();
+            let clamped_target = target_offset.min(len);
+            return clamped_target.saturating_sub(self.cursor.offset.min(len));
+        }
+
+        if self.cursor_segment > target_segment {
+            return 0;
+        }
+
+        let mut count = {
+            let len = self.current_segment_len();
+            len.saturating_sub(self.cursor.offset.min(len))
+        };
+
+        let mut idx = self.cursor_segment + 1;
+        while idx < target_segment {
+            count += self.segments[idx].len;
+            idx += 1;
+        }
+
+        if let Some(segment) = self.segments.get(target_segment) {
+            count += target_offset.min(segment.len);
+        }
+
+        count
     }
 
     fn rebuild_segments(&mut self) {
@@ -2095,6 +2344,39 @@ mod tests {
 
         assert!(editor.move_word_right());
         assert_eq!(editor.cursor_pointer().offset, 8);
+    }
+
+    #[test]
+    fn delete_word_backward_removes_previous_word() {
+        let document =
+            Document::new().with_paragraphs(vec![text_paragraph("foo bar baz")]);
+        let mut editor = DocumentEditor::new(document);
+        let pointer = pointer_to_root_span(0);
+        assert!(editor.move_to_pointer(&pointer));
+
+        assert!(editor.move_word_right());
+        assert!(editor.move_word_right());
+
+        assert!(editor.delete_word_backward());
+
+        let doc = editor.document();
+        assert_eq!(doc.paragraphs[0].content[0].text, "foo baz");
+        assert_eq!(editor.cursor_pointer().offset, 4);
+    }
+
+    #[test]
+    fn delete_word_forward_removes_next_word() {
+        let document =
+            Document::new().with_paragraphs(vec![text_paragraph("foo bar baz")]);
+        let mut editor = DocumentEditor::new(document);
+        let pointer = pointer_to_root_span(0);
+        assert!(editor.move_to_pointer(&pointer));
+
+        assert!(editor.delete_word_forward());
+
+        let doc = editor.document();
+        assert_eq!(doc.paragraphs[0].content[0].text, "bar baz");
+        assert_eq!(editor.cursor_pointer().offset, 0);
     }
 
     #[test]

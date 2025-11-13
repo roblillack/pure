@@ -5,7 +5,7 @@
 <ul>
   <li><input type="checkbox" checked /> Jumping by word</li>
   <li>
-    <input type="checkbox" /> Delete by word (Ctrl-Backspace, Ctrl-Delete, Ctrl-W)
+    <input type="checkbox" checked /> Delete by word (Ctrl-Backspace, Ctrl-Delete, Ctrl-W) alskjhdkasjhd as
   </li>
   <li>
     <input type="checkbox" checked /> Fix changing paragraph types for list paragraphs (to ensure we're not
