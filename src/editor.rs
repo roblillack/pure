@@ -256,34 +256,108 @@ impl DocumentEditor {
         let current_pointer = self.cursor.clone();
         let mut replacement_pointer = None;
 
-        if is_list_type(target) {
-            if let Some(list_path) =
-                find_list_ancestor_path(&self.document, &current_pointer.paragraph_path)
+        let mut operation_path = current_pointer.paragraph_path.clone();
+        let mut pointer_hint = None;
+        let mut post_merge_pointer = None;
+        let mut handled_directly = false;
+
+        if let Some(scope) = determine_parent_scope(&self.document, &operation_path) {
+            operation_path = scope.parent_path.clone();
+            let needs_promotion = match scope.relation {
+                ParentRelation::Child(_) => true,
+                ParentRelation::Entry { .. } => !is_list_type(target),
+            };
+
+            if needs_promotion {
+                if !promote_single_child_into_parent(&mut self.document, &scope) {
+                    return false;
+                }
+                pointer_hint = Some(CursorPointer {
+                    paragraph_path: operation_path.clone(),
+                    span_path: current_pointer.span_path.clone(),
+                    offset: current_pointer.offset,
+                });
+            }
+        }
+
+        if !is_list_type(target) {
+            if let Some(pointer) =
+                break_list_entry_for_non_list_target(&mut self.document, &operation_path, target)
             {
+                operation_path = pointer.paragraph_path.clone();
+                pointer_hint = Some(pointer);
+                handled_directly = true;
+            }
+        }
+
+        if !handled_directly && is_list_type(target) {
+            if let Some(list_path) = find_list_ancestor_path(&self.document, &operation_path) {
                 if !update_existing_list_type(&mut self.document, &list_path, target) {
                     return false;
                 }
+                operation_path = list_path;
             } else {
-                match convert_paragraph_into_list(
-                    &mut self.document,
-                    &current_pointer.paragraph_path,
-                    target,
-                ) {
+                match convert_paragraph_into_list(&mut self.document, &operation_path, target) {
                     Some(pointer) => replacement_pointer = Some(pointer),
                     None => return false,
                 }
             }
-        } else if !update_paragraph_type(
-            &mut self.document,
-            &current_pointer.paragraph_path,
-            target,
-        ) {
+        } else if !handled_directly
+            && !update_paragraph_type(&mut self.document, &operation_path, target)
+        {
             return false;
+        }
+
+        if !handled_directly && is_list_type(target) {
+            let pointer_for_merge = replacement_pointer
+                .clone()
+                .or_else(|| pointer_hint.clone())
+                .or_else(|| Some(current_pointer.clone()));
+
+            if let Some(pointer) = pointer_for_merge {
+                if let Some(ctx) = extract_entry_context(&pointer.paragraph_path) {
+                    if let Some((merged_list_path, merged_entry_idx)) =
+                        merge_adjacent_lists(&mut self.document, &ctx.list_path, ctx.entry_index)
+                    {
+                        let mut steps = merged_list_path.steps().to_vec();
+                        steps.push(PathStep::Entry {
+                            entry_index: merged_entry_idx,
+                            paragraph_index: ctx.paragraph_index,
+                        });
+                        steps.extend(ctx.tail_steps.iter().cloned());
+                        let new_paragraph_path = ParagraphPath::from_steps(steps);
+                        let new_pointer = CursorPointer {
+                            paragraph_path: new_paragraph_path,
+                            span_path: pointer.span_path.clone(),
+                            offset: pointer.offset,
+                        };
+                        if replacement_pointer.is_some() {
+                            replacement_pointer = Some(new_pointer.clone());
+                        }
+                        if pointer_hint.is_some() {
+                            pointer_hint = Some(new_pointer.clone());
+                        }
+                        post_merge_pointer = Some(new_pointer);
+                    }
+                } else {
+                    merge_adjacent_lists(&mut self.document, &operation_path, 0);
+                }
+            } else {
+                merge_adjacent_lists(&mut self.document, &operation_path, 0);
+            }
         }
 
         self.rebuild_segments();
 
-        let desired = replacement_pointer.unwrap_or(current_pointer);
+        let desired = if let Some(pointer) = replacement_pointer {
+            pointer
+        } else if let Some(pointer) = post_merge_pointer {
+            pointer
+        } else if let Some(pointer) = pointer_hint {
+            pointer
+        } else {
+            current_pointer
+        };
 
         if !self.move_to_pointer(&desired) {
             self.ensure_cursor_selectable();
@@ -687,6 +761,437 @@ fn collect_inline_labels(paragraph: &Paragraph, span_path: &SpanPath) -> Option<
     Some(labels)
 }
 
+#[derive(Clone)]
+struct ParentScope {
+    parent_path: ParagraphPath,
+    relation: ParentRelation,
+}
+
+#[derive(Clone, Copy)]
+enum ParentRelation {
+    Child(usize),
+    Entry {
+        entry_index: usize,
+        paragraph_index: usize,
+    },
+}
+
+fn determine_parent_scope(document: &Document, path: &ParagraphPath) -> Option<ParentScope> {
+    let steps = path.steps();
+    if steps.len() <= 1 {
+        return None;
+    }
+
+    let (last, prefix) = steps.split_last()?;
+    let parent_path = ParagraphPath::from_steps(prefix.to_vec());
+    let parent = paragraph_ref(document, &parent_path)?;
+
+    match *last {
+        PathStep::Child(idx) => {
+            if parent.children.len() == 1 && idx < parent.children.len() {
+                Some(ParentScope {
+                    parent_path,
+                    relation: ParentRelation::Child(idx),
+                })
+            } else {
+                None
+            }
+        }
+        PathStep::Entry {
+            entry_index,
+            paragraph_index,
+        } => {
+            if entry_index >= parent.entries.len() {
+                return None;
+            }
+            let entry = parent.entries.get(entry_index)?;
+            if parent.entries.len() == 1 && entry.len() == 1 && paragraph_index < entry.len() {
+                Some(ParentScope {
+                    parent_path,
+                    relation: ParentRelation::Entry {
+                        entry_index,
+                        paragraph_index,
+                    },
+                })
+            } else {
+                None
+            }
+        }
+        PathStep::Root(_) => None,
+    }
+}
+
+fn promote_single_child_into_parent(document: &mut Document, scope: &ParentScope) -> bool {
+    let Some(parent) = paragraph_mut(document, &scope.parent_path) else {
+        return false;
+    };
+
+    let child = match scope.relation {
+        ParentRelation::Child(idx) => {
+            if idx >= parent.children.len() {
+                return false;
+            }
+            parent.children.remove(idx)
+        }
+        ParentRelation::Entry {
+            entry_index,
+            paragraph_index,
+        } => {
+            if entry_index >= parent.entries.len() {
+                return false;
+            }
+            let mut entry = parent.entries.remove(entry_index);
+            if paragraph_index >= entry.len() {
+                return false;
+            }
+            let child = entry.remove(paragraph_index);
+            if !entry.is_empty() {
+                parent.entries.insert(entry_index, entry);
+            }
+            child
+        }
+    };
+
+    parent.content = child.content;
+    parent.children = child.children;
+    parent.entries = child.entries;
+    parent.checklist_item_checked = child.checklist_item_checked;
+    true
+}
+
+fn apply_paragraph_type_in_place(paragraph: &mut Paragraph, target: ParagraphType) {
+    paragraph.paragraph_type = target;
+    paragraph.checklist_item_checked = None;
+
+    if target.is_leaf() {
+        paragraph.children.clear();
+        paragraph.entries.clear();
+    } else if target == ParagraphType::Quote {
+        paragraph.entries.clear();
+    }
+
+    if paragraph.content.is_empty() {
+        paragraph.content.push(Span::new_text(""));
+    }
+}
+
+fn break_list_entry_for_non_list_target(
+    document: &mut Document,
+    entry_path: &ParagraphPath,
+    target: ParagraphType,
+) -> Option<CursorPointer> {
+    let steps = entry_path.steps();
+    let (last_step, prefix) = steps.split_last()?;
+    let (entry_index, paragraph_index) = match *last_step {
+        PathStep::Entry {
+            entry_index,
+            paragraph_index,
+        } => (entry_index, paragraph_index),
+        _ => return None,
+    };
+
+    let list_path = ParagraphPath::from_steps(prefix.to_vec());
+    let Some(list_paragraph) = paragraph_ref(document, &list_path) else {
+        return None;
+    };
+    if !is_list_type(list_paragraph.paragraph_type) {
+        return None;
+    }
+
+    let (list_type, entries_after, extracted_paragraphs, target_offset, has_prefix_entries) = {
+        let list = paragraph_mut(document, &list_path)?;
+        if entry_index >= list.entries.len() {
+            return None;
+        }
+        let entries_after = list.entries.split_off(entry_index + 1);
+        let selected_entry = list.entries.remove(entry_index);
+        if paragraph_index >= selected_entry.len() {
+            return None;
+        }
+
+        let mut extracted = Vec::new();
+        for (idx, mut paragraph) in selected_entry.into_iter().enumerate() {
+            if idx == paragraph_index {
+                apply_paragraph_type_in_place(&mut paragraph, target);
+            }
+            if paragraph.content.is_empty() {
+                paragraph.content.push(Span::new_text(""));
+            }
+            extracted.push(paragraph);
+        }
+        if extracted.is_empty() {
+            return None;
+        }
+        let target_offset = paragraph_index.min(extracted.len().saturating_sub(1));
+        let has_prefix_entries = !list.entries.is_empty();
+        (
+            list.paragraph_type,
+            entries_after,
+            extracted,
+            target_offset,
+            has_prefix_entries,
+        )
+    };
+
+    let extract_count = extracted_paragraphs.len();
+    let list_steps = list_path.steps();
+    let (list_last_step, list_prefix) = list_steps.split_last()?;
+
+    match *list_last_step {
+        PathStep::Root(idx) if list_prefix.is_empty() => {
+            if has_prefix_entries {
+                let insertion_index = idx + 1;
+                for (offset, paragraph) in extracted_paragraphs.into_iter().enumerate() {
+                    document
+                        .paragraphs
+                        .insert(insertion_index + offset, paragraph);
+                }
+                if !entries_after.is_empty() {
+                    let mut tail = Paragraph::new(list_type);
+                    tail.entries = entries_after;
+                    document
+                        .paragraphs
+                        .insert(insertion_index + extract_count, tail);
+                }
+                let new_path = ParagraphPath::from_steps(vec![PathStep::Root(
+                    insertion_index + target_offset,
+                )]);
+                Some(CursorPointer {
+                    paragraph_path: new_path,
+                    span_path: SpanPath::new(vec![0]),
+                    offset: 0,
+                })
+            } else {
+                document.paragraphs.remove(idx);
+                for (offset, paragraph) in extracted_paragraphs.into_iter().enumerate() {
+                    document.paragraphs.insert(idx + offset, paragraph);
+                }
+                if !entries_after.is_empty() {
+                    let mut tail = Paragraph::new(list_type);
+                    tail.entries = entries_after;
+                    document.paragraphs.insert(idx + extract_count, tail);
+                }
+                let new_path = ParagraphPath::from_steps(vec![PathStep::Root(idx + target_offset)]);
+                Some(CursorPointer {
+                    paragraph_path: new_path,
+                    span_path: SpanPath::new(vec![0]),
+                    offset: 0,
+                })
+            }
+        }
+        PathStep::Child(child_idx) => {
+            let parent_path = ParagraphPath::from_steps(list_prefix.to_vec());
+            let parent = paragraph_mut(document, &parent_path)?;
+            if has_prefix_entries {
+                let insertion_index = child_idx + 1;
+                for (offset, paragraph) in extracted_paragraphs.into_iter().enumerate() {
+                    parent.children.insert(insertion_index + offset, paragraph);
+                }
+                if !entries_after.is_empty() {
+                    let mut tail = Paragraph::new(list_type);
+                    tail.entries = entries_after;
+                    parent
+                        .children
+                        .insert(insertion_index + extract_count, tail);
+                }
+                let mut new_steps = list_prefix.to_vec();
+                new_steps.push(PathStep::Child(child_idx + 1 + target_offset));
+                Some(CursorPointer {
+                    paragraph_path: ParagraphPath::from_steps(new_steps),
+                    span_path: SpanPath::new(vec![0]),
+                    offset: 0,
+                })
+            } else {
+                parent.children.remove(child_idx);
+                for (offset, paragraph) in extracted_paragraphs.into_iter().enumerate() {
+                    parent.children.insert(child_idx + offset, paragraph);
+                }
+                if !entries_after.is_empty() {
+                    let mut tail = Paragraph::new(list_type);
+                    tail.entries = entries_after;
+                    parent.children.insert(child_idx + extract_count, tail);
+                }
+                let mut new_steps = list_prefix.to_vec();
+                new_steps.push(PathStep::Child(child_idx + target_offset));
+                Some(CursorPointer {
+                    paragraph_path: ParagraphPath::from_steps(new_steps),
+                    span_path: SpanPath::new(vec![0]),
+                    offset: 0,
+                })
+            }
+        }
+        PathStep::Entry {
+            entry_index,
+            paragraph_index: list_child_idx,
+        } => {
+            let parent_path = ParagraphPath::from_steps(list_prefix.to_vec());
+            let parent = paragraph_mut(document, &parent_path)?;
+            if entry_index >= parent.entries.len() {
+                return None;
+            }
+            let entry = &mut parent.entries[entry_index];
+            if has_prefix_entries {
+                let insertion_index = list_child_idx + 1;
+                for (offset, paragraph) in extracted_paragraphs.into_iter().enumerate() {
+                    entry.insert(insertion_index + offset, paragraph);
+                }
+                if !entries_after.is_empty() {
+                    let mut tail = Paragraph::new(list_type);
+                    tail.entries = entries_after;
+                    entry.insert(insertion_index + extract_count, tail);
+                }
+                let mut new_steps = list_prefix.to_vec();
+                new_steps.push(PathStep::Entry {
+                    entry_index,
+                    paragraph_index: list_child_idx + 1 + target_offset,
+                });
+                Some(CursorPointer {
+                    paragraph_path: ParagraphPath::from_steps(new_steps),
+                    span_path: SpanPath::new(vec![0]),
+                    offset: 0,
+                })
+            } else {
+                if list_child_idx >= entry.len() {
+                    return None;
+                }
+                entry.remove(list_child_idx);
+                for (offset, paragraph) in extracted_paragraphs.into_iter().enumerate() {
+                    entry.insert(list_child_idx + offset, paragraph);
+                }
+                if !entries_after.is_empty() {
+                    let mut tail = Paragraph::new(list_type);
+                    tail.entries = entries_after;
+                    entry.insert(list_child_idx + extract_count, tail);
+                }
+                let mut new_steps = list_prefix.to_vec();
+                new_steps.push(PathStep::Entry {
+                    entry_index,
+                    paragraph_index: list_child_idx + target_offset,
+                });
+                Some(CursorPointer {
+                    paragraph_path: ParagraphPath::from_steps(new_steps),
+                    span_path: SpanPath::new(vec![0]),
+                    offset: 0,
+                })
+            }
+        }
+        _ => None,
+    }
+}
+
+#[derive(Clone)]
+struct EntryContext {
+    list_path: ParagraphPath,
+    entry_index: usize,
+    paragraph_index: usize,
+    tail_steps: Vec<PathStep>,
+}
+
+fn extract_entry_context(path: &ParagraphPath) -> Option<EntryContext> {
+    let steps = path.steps();
+    for idx in (0..steps.len()).rev() {
+        if let PathStep::Entry {
+            entry_index,
+            paragraph_index,
+        } = steps[idx]
+        {
+            let list_path = ParagraphPath::from_steps(steps[..idx].to_vec());
+            let tail_steps = steps[idx + 1..].to_vec();
+            return Some(EntryContext {
+                list_path,
+                entry_index,
+                paragraph_index,
+                tail_steps,
+            });
+        }
+    }
+    None
+}
+
+fn merge_adjacent_lists(
+    document: &mut Document,
+    list_path: &ParagraphPath,
+    entry_index: usize,
+) -> Option<(ParagraphPath, usize)> {
+    let list_type = paragraph_ref(document, list_path)?.paragraph_type;
+
+    let steps = list_path.steps();
+    let (last_step, prefix) = steps.split_last()?;
+
+    match *last_step {
+        PathStep::Root(idx) if prefix.is_empty() => {
+            let (new_idx, new_entry_idx) =
+                merge_adjacent_lists_in_vec(&mut document.paragraphs, idx, entry_index, list_type)?;
+            let new_path = ParagraphPath::from_steps(vec![PathStep::Root(new_idx)]);
+            Some((new_path, new_entry_idx))
+        }
+        PathStep::Child(child_idx) => {
+            let parent_path = ParagraphPath::from_steps(prefix.to_vec());
+            let parent = paragraph_mut(document, &parent_path)?;
+            let (new_idx, new_entry_idx) = merge_adjacent_lists_in_vec(
+                &mut parent.children,
+                child_idx,
+                entry_index,
+                list_type,
+            )?;
+            let mut steps = prefix.to_vec();
+            steps.push(PathStep::Child(new_idx));
+            Some((ParagraphPath::from_steps(steps), new_entry_idx))
+        }
+        PathStep::Entry {
+            entry_index: parent_entry_index,
+            paragraph_index,
+        } => {
+            let parent_path = ParagraphPath::from_steps(prefix.to_vec());
+            let parent = paragraph_mut(document, &parent_path)?;
+            if parent_entry_index >= parent.entries.len() {
+                return None;
+            }
+            let entry = &mut parent.entries[parent_entry_index];
+            let (new_idx, new_entry_idx) =
+                merge_adjacent_lists_in_vec(entry, paragraph_index, entry_index, list_type)?;
+            let mut steps = prefix.to_vec();
+            steps.push(PathStep::Entry {
+                entry_index: parent_entry_index,
+                paragraph_index: new_idx,
+            });
+            Some((ParagraphPath::from_steps(steps), new_entry_idx))
+        }
+        _ => None,
+    }
+}
+
+fn merge_adjacent_lists_in_vec(
+    paragraphs: &mut Vec<Paragraph>,
+    index: usize,
+    entry_index: usize,
+    list_type: ParagraphType,
+) -> Option<(usize, usize)> {
+    if index >= paragraphs.len() {
+        return None;
+    }
+
+    let mut list_index = index;
+    let mut target_entry_index = entry_index;
+
+    if list_index > 0 && paragraphs[list_index - 1].paragraph_type == list_type {
+        let previous_entry_count = paragraphs[list_index - 1].entries.len();
+        let current = paragraphs.remove(list_index);
+        let previous = &mut paragraphs[list_index - 1];
+        target_entry_index += previous_entry_count;
+        previous.entries.extend(current.entries);
+        list_index -= 1;
+    }
+
+    if list_index + 1 < paragraphs.len() && paragraphs[list_index + 1].paragraph_type == list_type {
+        let next = paragraphs.remove(list_index + 1);
+        let current = &mut paragraphs[list_index];
+        current.entries.extend(next.entries);
+    }
+
+    Some((list_index, target_entry_index))
+}
+
 fn is_list_type(kind: ParagraphType) -> bool {
     matches!(
         kind,
@@ -811,20 +1316,7 @@ fn update_paragraph_type(
         return false;
     };
 
-    paragraph.paragraph_type = target;
-    paragraph.checklist_item_checked = None;
-
-    if target.is_leaf() {
-        paragraph.children.clear();
-        paragraph.entries.clear();
-    } else if target == ParagraphType::Quote {
-        paragraph.entries.clear();
-    }
-
-    if paragraph.content.is_empty() {
-        paragraph.content.push(Span::new_text(""));
-    }
-
+    apply_paragraph_type_in_place(paragraph, target);
     true
 }
 
@@ -1311,4 +1803,310 @@ fn paragraph_is_empty(paragraph: &Paragraph) -> bool {
 
 fn span_is_empty(span: &Span) -> bool {
     span.text.is_empty() && span.children.iter().all(span_is_empty)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pointer_to_root_span(root_index: usize) -> CursorPointer {
+        CursorPointer {
+            paragraph_path: ParagraphPath::new_root(root_index),
+            span_path: SpanPath::new(vec![0]),
+            offset: 0,
+        }
+    }
+
+    fn pointer_to_child_span(root_index: usize, child_index: usize) -> CursorPointer {
+        let mut path = ParagraphPath::new_root(root_index);
+        path.push_child(child_index);
+        CursorPointer {
+            paragraph_path: path,
+            span_path: SpanPath::new(vec![0]),
+            offset: 0,
+        }
+    }
+
+    fn pointer_to_child_entry_span(
+        root_index: usize,
+        child_index: usize,
+        entry_index: usize,
+        paragraph_index: usize,
+    ) -> CursorPointer {
+        let mut path = ParagraphPath::new_root(root_index);
+        path.push_child(child_index);
+        path.push_entry(entry_index, paragraph_index);
+        CursorPointer {
+            paragraph_path: path,
+            span_path: SpanPath::new(vec![0]),
+            offset: 0,
+        }
+    }
+
+    fn pointer_to_entry_span(
+        root_index: usize,
+        entry_index: usize,
+        paragraph_index: usize,
+    ) -> CursorPointer {
+        let mut path = ParagraphPath::new_root(root_index);
+        path.push_entry(entry_index, paragraph_index);
+        CursorPointer {
+            paragraph_path: path,
+            span_path: SpanPath::new(vec![0]),
+            offset: 0,
+        }
+    }
+
+    fn text_paragraph(text: &str) -> Paragraph {
+        Paragraph::new_text().with_content(vec![Span::new_text(text)])
+    }
+
+    fn unordered_list(items: &[&str]) -> Paragraph {
+        let entries = items
+            .iter()
+            .map(|text| vec![text_paragraph(text)])
+            .collect::<Vec<_>>();
+        Paragraph::new_unordered_list().with_entries(entries)
+    }
+
+    fn ordered_list(items: &[&str]) -> Paragraph {
+        let entries = items
+            .iter()
+            .map(|text| vec![text_paragraph(text)])
+            .collect::<Vec<_>>();
+        Paragraph::new_ordered_list().with_entries(entries)
+    }
+
+    fn checklist(items: &[&str]) -> Paragraph {
+        let entries = items
+            .iter()
+            .map(|text| {
+                vec![Paragraph::new_checklist_item(false).with_content(vec![Span::new_text(*text)])]
+            })
+            .collect::<Vec<_>>();
+        Paragraph::new_checklist().with_entries(entries)
+    }
+
+    #[test]
+    fn top_level_paragraph_type_change_updates_current_paragraph() {
+        let document =
+            Document::new().with_paragraphs(vec![text_paragraph("Alpha"), text_paragraph("Beta")]);
+        let mut editor = DocumentEditor::new(document);
+        let pointer = pointer_to_root_span(0);
+        assert!(editor.move_to_pointer(&pointer));
+        assert!(editor.set_paragraph_type(ParagraphType::Header1));
+
+        let doc = editor.document();
+        assert_eq!(doc.paragraphs.len(), 2);
+        assert_eq!(doc.paragraphs[0].paragraph_type, ParagraphType::Header1);
+        assert_eq!(doc.paragraphs[1].paragraph_type, ParagraphType::Text);
+    }
+
+    #[test]
+    fn changing_sole_child_promotes_parent_container() {
+        let quote = Paragraph::new_quote().with_children(vec![text_paragraph("Nested")]);
+        let document = Document::new().with_paragraphs(vec![quote]);
+        let mut editor = DocumentEditor::new(document);
+        let pointer = pointer_to_child_span(0, 0);
+        assert!(editor.move_to_pointer(&pointer));
+        assert!(editor.set_paragraph_type(ParagraphType::Header2));
+
+        let doc = editor.document();
+        assert_eq!(doc.paragraphs.len(), 1);
+        let paragraph = &doc.paragraphs[0];
+        assert_eq!(paragraph.paragraph_type, ParagraphType::Header2);
+        assert!(paragraph.children.is_empty());
+        assert!(paragraph.entries.is_empty());
+        assert_eq!(paragraph.content.len(), 1);
+        assert_eq!(paragraph.content[0].text, "Nested");
+    }
+
+    #[test]
+    fn changing_child_with_siblings_only_updates_that_child() {
+        let quote = Paragraph::new_quote()
+            .with_children(vec![text_paragraph("First"), text_paragraph("Second")]);
+        let document = Document::new().with_paragraphs(vec![quote]);
+        let mut editor = DocumentEditor::new(document);
+        let pointer = pointer_to_child_span(0, 0);
+        assert!(editor.move_to_pointer(&pointer));
+        assert!(editor.set_paragraph_type(ParagraphType::Header3));
+
+        let doc = editor.document();
+        assert_eq!(doc.paragraphs.len(), 1);
+        let quote = &doc.paragraphs[0];
+        assert_eq!(quote.paragraph_type, ParagraphType::Quote);
+        assert_eq!(quote.children.len(), 2);
+        assert_eq!(quote.children[0].paragraph_type, ParagraphType::Header3);
+        assert_eq!(quote.children[1].paragraph_type, ParagraphType::Text);
+    }
+
+    #[test]
+    fn checklist_item_to_text_promotes_parent_list_when_single_item() {
+        let item = Paragraph::new_checklist_item(false).with_content(vec![Span::new_text("Task")]);
+        let checklist = Paragraph::new_checklist().with_entries(vec![vec![item]]);
+        let document = Document::new().with_paragraphs(vec![checklist]);
+
+        let mut editor = DocumentEditor::new(document);
+        let pointer = pointer_to_entry_span(0, 0, 0);
+        assert!(editor.move_to_pointer(&pointer));
+        assert!(editor.set_paragraph_type(ParagraphType::Text));
+
+        let doc = editor.document();
+        assert_eq!(doc.paragraphs.len(), 1);
+        let paragraph = &doc.paragraphs[0];
+        assert_eq!(paragraph.paragraph_type, ParagraphType::Text);
+        assert!(paragraph.entries.is_empty());
+        assert_eq!(paragraph.content.len(), 1);
+        assert_eq!(paragraph.content[0].text, "Task");
+    }
+
+    #[test]
+    fn checklist_item_with_siblings_only_changes_item() {
+        let first =
+            Paragraph::new_checklist_item(false).with_content(vec![Span::new_text("First")]);
+        let second =
+            Paragraph::new_checklist_item(false).with_content(vec![Span::new_text("Second")]);
+        let checklist =
+            Paragraph::new_checklist().with_entries(vec![vec![first], vec![second.clone()]]);
+        let document = Document::new().with_paragraphs(vec![checklist]);
+
+        let mut editor = DocumentEditor::new(document);
+        let pointer = pointer_to_entry_span(0, 0, 0);
+        assert!(editor.move_to_pointer(&pointer));
+        assert!(editor.set_paragraph_type(ParagraphType::Header1));
+
+        let doc = editor.document();
+        assert_eq!(doc.paragraphs.len(), 2);
+        assert_eq!(doc.paragraphs[0].paragraph_type, ParagraphType::Header1);
+        assert_eq!(doc.paragraphs[0].content[0].text, "First");
+
+        let checklist = &doc.paragraphs[1];
+        assert_eq!(checklist.paragraph_type, ParagraphType::Checklist);
+        assert_eq!(checklist.entries.len(), 1);
+        assert_eq!(checklist.entries[0][0].content[0].text, "Second");
+    }
+
+    #[test]
+    fn unordered_list_item_conversion_splits_list() {
+        let first = text_paragraph("First");
+        let second = text_paragraph("Second");
+        let third = text_paragraph("Third");
+        let list = Paragraph::new_unordered_list().with_entries(vec![
+            vec![first],
+            vec![second],
+            vec![third],
+        ]);
+        let document = Document::new().with_paragraphs(vec![list]);
+
+        let mut editor = DocumentEditor::new(document);
+        let pointer = pointer_to_entry_span(0, 1, 0);
+        assert!(editor.move_to_pointer(&pointer));
+        assert!(editor.set_paragraph_type(ParagraphType::Header2));
+
+        let doc = editor.document();
+        assert_eq!(doc.paragraphs.len(), 3);
+        assert_eq!(
+            doc.paragraphs[0].paragraph_type,
+            ParagraphType::UnorderedList
+        );
+        assert_eq!(doc.paragraphs[0].entries.len(), 1);
+        assert_eq!(doc.paragraphs[0].entries[0][0].content[0].text, "First");
+
+        assert_eq!(doc.paragraphs[1].paragraph_type, ParagraphType::Header2);
+        assert_eq!(doc.paragraphs[1].content[0].text, "Second");
+
+        assert_eq!(
+            doc.paragraphs[2].paragraph_type,
+            ParagraphType::UnorderedList
+        );
+        assert_eq!(doc.paragraphs[2].entries.len(), 1);
+        assert_eq!(doc.paragraphs[2].entries[0][0].content[0].text, "Third");
+    }
+
+    #[test]
+    fn nested_list_item_conversion_inside_quote() {
+        let list = Paragraph::new_unordered_list().with_entries(vec![
+            vec![text_paragraph("Alpha")],
+            vec![text_paragraph("Beta")],
+        ]);
+        let quote = Paragraph::new_quote().with_children(vec![list]);
+        let document = Document::new().with_paragraphs(vec![quote]);
+
+        let mut editor = DocumentEditor::new(document);
+        let pointer = pointer_to_child_entry_span(0, 0, 1, 0);
+        assert!(editor.move_to_pointer(&pointer));
+        assert!(editor.set_paragraph_type(ParagraphType::Text));
+
+        let doc = editor.document();
+        assert_eq!(doc.paragraphs.len(), 1);
+        let quote = &doc.paragraphs[0];
+        assert_eq!(quote.children.len(), 2);
+        assert_eq!(
+            quote.children[0].paragraph_type,
+            ParagraphType::UnorderedList
+        );
+        assert_eq!(quote.children[0].entries.len(), 1);
+        assert_eq!(quote.children[0].entries[0][0].content[0].text, "Alpha");
+
+        assert_eq!(quote.children[1].paragraph_type, ParagraphType::Text);
+        assert_eq!(quote.children[1].content[0].text, "Beta");
+    }
+
+    #[test]
+    fn converting_between_lists_merges_all_entries() {
+        let document = Document::new().with_paragraphs(vec![
+            unordered_list(&["One"]),
+            text_paragraph("Two"),
+            unordered_list(&["Three"]),
+        ]);
+        let mut editor = DocumentEditor::new(document);
+        let pointer = pointer_to_root_span(1);
+        assert!(editor.move_to_pointer(&pointer));
+        assert!(editor.set_paragraph_type(ParagraphType::UnorderedList));
+
+        let doc = editor.document();
+        assert_eq!(doc.paragraphs.len(), 1);
+        let list = &doc.paragraphs[0];
+        assert_eq!(list.paragraph_type, ParagraphType::UnorderedList);
+        assert_eq!(list.entries.len(), 3);
+        assert_eq!(list.entries[0][0].content[0].text, "One");
+        assert_eq!(list.entries[1][0].content[0].text, "Two");
+        assert_eq!(list.entries[2][0].content[0].text, "Three");
+    }
+
+    #[test]
+    fn converting_before_list_merges_forward_only() {
+        let document =
+            Document::new().with_paragraphs(vec![text_paragraph("Start"), ordered_list(&["Next"])]);
+        let mut editor = DocumentEditor::new(document);
+        let pointer = pointer_to_root_span(0);
+        assert!(editor.move_to_pointer(&pointer));
+        assert!(editor.set_paragraph_type(ParagraphType::OrderedList));
+
+        let doc = editor.document();
+        assert_eq!(doc.paragraphs.len(), 1);
+        let list = &doc.paragraphs[0];
+        assert_eq!(list.paragraph_type, ParagraphType::OrderedList);
+        assert_eq!(list.entries.len(), 2);
+        assert_eq!(list.entries[0][0].content[0].text, "Start");
+        assert_eq!(list.entries[1][0].content[0].text, "Next");
+    }
+
+    #[test]
+    fn converting_to_checklist_merges_with_previous_only() {
+        let document =
+            Document::new().with_paragraphs(vec![checklist(&["Item 1"]), text_paragraph("Item 2")]);
+        let mut editor = DocumentEditor::new(document);
+        let pointer = pointer_to_root_span(1);
+        assert!(editor.move_to_pointer(&pointer));
+        assert!(editor.set_paragraph_type(ParagraphType::Checklist));
+
+        let doc = editor.document();
+        assert_eq!(doc.paragraphs.len(), 1);
+        let list = &doc.paragraphs[0];
+        assert_eq!(list.paragraph_type, ParagraphType::Checklist);
+        assert_eq!(list.entries.len(), 2);
+        assert_eq!(list.entries[0][0].content[0].text, "Item 1");
+        assert_eq!(list.entries[1][0].content[0].text, "Item 2");
+    }
 }

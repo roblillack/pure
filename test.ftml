@@ -5,6 +5,11 @@
 <ul>
   <li><input type="checkbox" /> Jumping by word</li>
   <li>
+    <input type="checkbox" /> Fix changing paragraph types for list paragraphs (to ensure we're not
+    creating a Text paragraph inside a List one, but to split the list, change
+    one item, etc.)
+  </li>
+  <li>
     <input type="checkbox" /> Text selection to make inline styles even possible
   </li>
   <li>
@@ -37,6 +42,19 @@
   <li><input type="checkbox" /> Style statusbar like in Elma</li>
   <li><input type="checkbox" /> Add menu/shortcut bar like in Elma?</li>
   <li><input type="checkbox" /> Fix page up/down to feel more natural</li>
+  <li>
+    <input type="checkbox" /> Fix styling of quotes (vertical bar is missing for empty lines introduced
+    by child paragraphs like bullet point lists)
+  </li>
+  <li>
+    <input type="checkbox" /> Introduce mode which shows paragraph and inline style tags (in two
+    different colors) as part of the editor--much like WordPerfect back in the
+    day, where it was called "**Reveal Codes**" (reachable using the keyboard
+    via Alt-F3 or F11) and based off a splitscreen view. I _think_ we can make
+    this happen with a direct inline view: Paragraph styles on their own line,
+    but indented correctly; inline styles directly in line with the rest of the
+    content, but with colorful `[Bold>`tags with user-friendly names`&lt;Bold]`
+  </li>
 </ul>
 
 <h2>FTML improvements</h2>
@@ -91,6 +109,13 @@
     </p>
   </li>
 </ul>
+
+<p>
+  Apart from this, we should introduce an action to add a sibling or
+  "follow-up" paragraph on the same level (if part of a container) using
+  Ctrl-P, so that users can efficiently manage the structure of the document
+  they are editing.
+</p>
 
 <p>These are our currently supported paragraph types:</p>
 
