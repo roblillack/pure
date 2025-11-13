@@ -54,7 +54,7 @@
   </li>
   <li>
     <input type="checkbox" /> Introduce mode which shows paragraph and inline style tags (in two
-    different colors) as part of the editor--much like WordPerfect back in the
+    different colors) as part of the editor—much like WordPerfect back in the
     day, where it was called "<b>Reveal Codes</b>" (reachable using the keyboard via Alt-F3 or F11) and based off a
     splitscreen view. I <i>think</i> we can make this happen with a direct inline view: Paragraph styles on
     their own line, but indented correctly; inline styles directly in line with
@@ -66,6 +66,25 @@
   </li>
   <li><input type="checkbox" checked /> Add support for Markdown files</li>
 </ul>
+
+<h2>Scratch</h2>
+
+<p>Hello World!</p>
+
+<h3>Width/Padding calculation:</h3>
+
+<pre>
+if width &lt; 60 {
+    wrap_width = width - 1; // leave space for cursor at the end of the line
+    left_padding = 0;
+} else if width &lt; 100 {
+    wrap_width = width.saturating_sub(2);
+    left_padding = 2;
+} else {
+    left_padding = (width.saturating_sub(100)) / 2 + 4;
+    wrap_width = width.saturating_sub(left_padding);
+}
+</pre>
 
 <h2>FTML improvements</h2>
 

@@ -855,12 +855,18 @@ impl App {
         }
 
         let marker = if self.dirty { "*" } else { "" };
+        let reveal_indicator = if self.editor.reveal_codes() {
+            " | Reveal"
+        } else {
+            ""
+        };
         format!(
-            "{} | {}{} | Lines: {} | Ctrl-S save | Ctrl-Q quit",
+            "{} | {}{} | Lines: {}{} | Ctrl-S save | Ctrl-Q quit",
             cursor_details,
             self.file_path.display(),
             marker,
-            total_lines
+            total_lines,
+            reveal_indicator
         )
     }
 
@@ -1092,7 +1098,7 @@ impl App {
 
     fn render_document(&mut self, width: usize) -> RenderResult {
         let selection = self.current_selection();
-        let (clone, markers, _) = self.editor.clone_with_markers(
+        let (clone, markers, reveal_tags, _) = self.editor.clone_with_markers(
             CURSOR_SENTINEL,
             selection.clone(),
             SELECTION_START_SENTINEL,
@@ -1102,6 +1108,7 @@ impl App {
             &clone,
             width,
             &markers,
+            &reveal_tags,
             RenderSentinels {
                 cursor: CURSOR_SENTINEL,
                 selection_start: SELECTION_START_SENTINEL,
@@ -1141,6 +1148,17 @@ impl App {
                 }
                 (KeyCode::Char('s'), m) if m.contains(KeyModifiers::CONTROL) => {
                     self.save()?;
+                }
+                (KeyCode::F(9), _) => {
+                    let enabled = !self.editor.reveal_codes();
+                    self.editor.set_reveal_codes(enabled);
+                    self.preferred_column = None;
+                    let message = if enabled {
+                        "Reveal codes enabled"
+                    } else {
+                        "Reveal codes disabled"
+                    };
+                    self.status_message = Some((message.to_string(), Instant::now()));
                 }
                 (KeyCode::Char('c'), m) if m.contains(KeyModifiers::CONTROL) => {
                     self.should_quit = true;

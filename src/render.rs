@@ -8,7 +8,7 @@ use unicode_width::UnicodeWidthChar;
 
 use tdoc::{Document, InlineStyle, Paragraph, ParagraphType, Span as DocSpan};
 
-use crate::editor::{CursorPointer, MarkerRef};
+use crate::editor::{CursorPointer, MarkerRef, RevealTagKind, RevealTagRef, SegmentKind};
 
 #[derive(Clone, Copy)]
 pub struct RenderSentinels {
@@ -33,13 +33,63 @@ pub struct RenderResult {
     pub cursor_map: Vec<(CursorPointer, CursorVisualPosition)>,
 }
 
+struct FragmentContext<'a> {
+    sentinels: RenderSentinels,
+    marker_map: &'a HashMap<usize, CursorPointer>,
+    reveal_tags: &'a HashMap<usize, RevealTagRef>,
+}
+
+fn inline_style_display(style: InlineStyle) -> &'static str {
+    match style {
+        InlineStyle::None => "Text",
+        InlineStyle::Bold => "Bold",
+        InlineStyle::Italic => "Italic",
+        InlineStyle::Highlight => "Highlight",
+        InlineStyle::Underline => "Underline",
+        InlineStyle::Strike => "Strikethrough",
+        InlineStyle::Link => "Link",
+        InlineStyle::Code => "Code",
+    }
+}
+
+fn reveal_tag_display(style: InlineStyle, kind: RevealTagKind) -> String {
+    let label = inline_style_display(style);
+    match kind {
+        RevealTagKind::Start => format!("[{label}>"),
+        RevealTagKind::End => format!("<{label}]"),
+    }
+}
+
+fn reveal_pointer_hints(pointer: &CursorPointer) -> Option<(usize, usize)> {
+    match pointer.segment_kind {
+        SegmentKind::RevealStart(style) => {
+            let width = visible_width(&reveal_tag_display(style, RevealTagKind::Start));
+            match pointer.offset {
+                0 => Some((0, 1)),
+                1 => Some((width, 1)),
+                _ => None,
+            }
+        }
+        SegmentKind::RevealEnd(style) => {
+            let width = visible_width(&reveal_tag_display(style, RevealTagKind::End));
+            match pointer.offset {
+                0 => Some((0, 1)),
+                1 => Some((width, 1)),
+                _ => None,
+            }
+        }
+        SegmentKind::Text => None,
+    }
+}
+
 pub fn render_document(
     document: &Document,
     width: usize,
     markers: &[MarkerRef],
+    reveal_tags: &[RevealTagRef],
     sentinels: RenderSentinels,
 ) -> RenderResult {
-    let mut renderer = Renderer::new(width.max(1), sentinels, markers);
+    let mut renderer = Renderer::new(width.max(1), sentinels, markers, reveal_tags);
     renderer.render_document(document);
     renderer.finish()
 }
@@ -54,11 +104,26 @@ struct Renderer<'a> {
     lines: Vec<Line<'static>>,
     current_line_index: usize,
     markers: &'a [MarkerRef],
+    marker_map: HashMap<usize, CursorPointer>,
+    reveal_tags: HashMap<usize, RevealTagRef>,
 }
 
 impl<'a> Renderer<'a> {
-    fn new(wrap_width: usize, sentinels: RenderSentinels, markers: &'a [MarkerRef]) -> Self {
+    fn new(
+        wrap_width: usize,
+        sentinels: RenderSentinels,
+        markers: &'a [MarkerRef],
+        reveal_tags: &[RevealTagRef],
+    ) -> Self {
         let wrap_limit = if wrap_width > 1 { wrap_width - 1 } else { 1 };
+        let marker_map = markers
+            .iter()
+            .map(|marker| (marker.id, marker.pointer.clone()))
+            .collect::<HashMap<usize, CursorPointer>>();
+        let reveal_map = reveal_tags
+            .iter()
+            .map(|tag| (tag.id, tag.clone()))
+            .collect::<HashMap<usize, RevealTagRef>>();
         Self {
             wrap_width,
             wrap_limit,
@@ -69,6 +134,8 @@ impl<'a> Renderer<'a> {
             lines: Vec::new(),
             current_line_index: 0,
             markers,
+            marker_map,
+            reveal_tags: reveal_map,
         }
     }
 
@@ -103,8 +170,13 @@ impl<'a> Renderer<'a> {
         continuation_prefix: &str,
     ) {
         let mut fragments = Vec::new();
+        let ctx = FragmentContext {
+            sentinels: self.sentinels,
+            marker_map: &self.marker_map,
+            reveal_tags: &self.reveal_tags,
+        };
         for span in &paragraph.content {
-            collect_fragments(span, Style::default(), self.sentinels, &mut fragments);
+            collect_fragments(span, Style::default(), &ctx, &mut fragments);
         }
         let fragments = trim_layout_fragments(fragments);
         let lines = wrap_fragments(
@@ -118,8 +190,13 @@ impl<'a> Renderer<'a> {
 
     fn render_header(&mut self, paragraph: &Paragraph, prefix: &str, level: HeaderLevel) {
         let mut fragments = Vec::new();
+        let ctx = FragmentContext {
+            sentinels: self.sentinels,
+            marker_map: &self.marker_map,
+            reveal_tags: &self.reveal_tags,
+        };
         for span in &paragraph.content {
-            collect_fragments(span, Style::default(), self.sentinels, &mut fragments);
+            collect_fragments(span, Style::default(), &ctx, &mut fragments);
         }
         let fragments = trim_layout_fragments(fragments);
         let mut lines = wrap_fragments(&fragments, prefix, prefix, self.wrap_limit);
@@ -160,8 +237,13 @@ impl<'a> Renderer<'a> {
         self.push_plain_line(&fence, false);
 
         let mut fragments = Vec::new();
+        let ctx = FragmentContext {
+            sentinels: self.sentinels,
+            marker_map: &self.marker_map,
+            reveal_tags: &self.reveal_tags,
+        };
         for span in &paragraph.content {
-            collect_fragments(span, Style::default(), self.sentinels, &mut fragments);
+            collect_fragments(span, Style::default(), &ctx, &mut fragments);
         }
         let lines = wrap_fragments(&fragments, prefix, prefix, usize::MAX / 4);
         self.consume_lines(lines);
@@ -374,6 +456,8 @@ impl<'a> Renderer<'a> {
             }
         }
 
+        adjust_reveal_content_columns(&mut cursor_map);
+
         RenderResult {
             lines: self.lines,
             cursor,
@@ -416,13 +500,16 @@ struct Fragment {
     style: Style,
     kind: FragmentKind,
     width: usize,
+    content_width: usize,
     events: Vec<TextEvent>,
+    reveal_kind: Option<RevealTagKind>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum FragmentKind {
     Word,
     Whitespace,
+    RevealTag,
 }
 
 #[derive(Clone)]
@@ -434,6 +521,9 @@ enum FragmentItem {
 #[derive(Clone)]
 struct TextEvent {
     offset: usize,
+    content_offset: usize,
+    offset_hint: Option<usize>,
+    content_offset_hint: Option<usize>,
     kind: TextEventKind,
 }
 
@@ -448,16 +538,41 @@ enum TextEventKind {
 fn collect_fragments(
     span: &DocSpan,
     base_style: Style,
-    sentinels: RenderSentinels,
+    ctx: &FragmentContext<'_>,
     fragments: &mut Vec<FragmentItem>,
 ) {
     let style = merge_style(base_style, span.style, span.link_target.as_deref());
+
+    let mut local: Vec<FragmentItem> = Vec::new();
     if !span.text.is_empty() {
-        tokenize_text(&span.text, style, sentinels, fragments);
+        tokenize_text(&span.text, style, ctx, &mut local);
     }
+
+    let mut prefix: Vec<FragmentItem> = Vec::new();
+    let mut middle: Vec<FragmentItem> = Vec::new();
+    let mut suffix: Vec<FragmentItem> = Vec::new();
+
+    for item in local.into_iter() {
+        match item {
+            FragmentItem::Token(fragment) if fragment.kind == FragmentKind::RevealTag => {
+                match fragment.reveal_kind {
+                    Some(RevealTagKind::Start) => prefix.push(FragmentItem::Token(fragment)),
+                    Some(RevealTagKind::End) => suffix.push(FragmentItem::Token(fragment)),
+                    None => middle.push(FragmentItem::Token(fragment)),
+                }
+            }
+            other => middle.push(other),
+        }
+    }
+
+    fragments.extend(prefix.into_iter());
+    fragments.extend(middle.into_iter());
+
     for child in &span.children {
-        collect_fragments(child, style, sentinels, fragments);
+        collect_fragments(child, style, ctx, fragments);
     }
+
+    fragments.extend(suffix.into_iter());
 }
 
 fn trim_layout_fragments(fragments: Vec<FragmentItem>) -> Vec<FragmentItem> {
@@ -511,7 +626,7 @@ fn apply_selection_style(style: Style, selected: bool) -> Style {
 fn tokenize_text(
     text: &str,
     style: Style,
-    sentinels: RenderSentinels,
+    ctx: &FragmentContext<'_>,
     fragments: &mut Vec<FragmentItem>,
 ) {
     let mut builder: Option<TokenBuilder> = None;
@@ -520,33 +635,95 @@ fn tokenize_text(
     let bytes = text.as_bytes();
     let mut idx = 0;
     while idx < bytes.len() {
-        if let Some((id, next_idx)) = parse_marker(bytes, idx) {
-            pending_events.push(TextEvent {
-                offset: 0,
-                kind: TextEventKind::Marker(id),
-            });
+        if let Some((marker, next_idx)) = parse_marker(bytes, idx) {
+            match marker {
+                ParsedMarker::Pointer(id) => {
+                    let mut event = TextEvent {
+                        offset: 0,
+                        content_offset: 0,
+                        offset_hint: None,
+                        content_offset_hint: None,
+                        kind: TextEventKind::Marker(id),
+                    };
+                    if let Some(pointer) = ctx.marker_map.get(&id) {
+                        if let Some((offset_hint, content_hint)) = reveal_pointer_hints(pointer) {
+                            event.offset_hint = Some(offset_hint);
+                            event.content_offset_hint = Some(content_hint);
+                        }
+                    }
+                    pending_events.push(event);
+                }
+                ParsedMarker::Reveal(id) => {
+                    if let Some(mut token) = builder.take() {
+                        token.add_events(&mut pending_events);
+                        fragments.push(FragmentItem::Token(token.finish()));
+                    }
+                    if let Some(tag) = ctx.reveal_tags.get(&id) {
+                        let display = reveal_tag_display(tag.style, tag.kind);
+                        let style = Style::default().fg(Color::Yellow).bg(Color::Blue);
+                        let width = visible_width(&display);
+                        let mut events = Vec::new();
+                        for mut event in pending_events.drain(..) {
+                            if let Some(pointer) = match event.kind {
+                                TextEventKind::Marker(marker_id) => ctx.marker_map.get(&marker_id),
+                                _ => None,
+                            } {
+                                if event.offset_hint.is_none() {
+                                    if let Some((offset_hint, content_hint)) =
+                                        reveal_pointer_hints(pointer)
+                                    {
+                                        event.offset_hint = Some(offset_hint);
+                                        event.content_offset_hint = Some(content_hint);
+                                    }
+                                }
+                            }
+                            events.push(event);
+                        }
+                        fragments.push(FragmentItem::Token(Fragment {
+                            text: display,
+                            style,
+                            kind: FragmentKind::RevealTag,
+                            width,
+                            content_width: 0,
+                            events,
+                            reveal_kind: Some(tag.kind),
+                        }));
+                    } else {
+                        pending_events.clear();
+                    }
+                }
+            }
             idx = next_idx;
             continue;
         }
         if let Some(ch) = text[idx..].chars().next() {
             idx += ch.len_utf8();
-            if ch == sentinels.cursor {
+            if ch == ctx.sentinels.cursor {
                 pending_events.push(TextEvent {
                     offset: 0,
+                    content_offset: 0,
+                    offset_hint: None,
+                    content_offset_hint: None,
                     kind: TextEventKind::Cursor,
                 });
                 continue;
             }
-            if ch == sentinels.selection_start {
+            if ch == ctx.sentinels.selection_start {
                 pending_events.push(TextEvent {
                     offset: 0,
+                    content_offset: 0,
+                    offset_hint: None,
+                    content_offset_hint: None,
                     kind: TextEventKind::SelectionStart,
                 });
                 continue;
             }
-            if ch == sentinels.selection_end {
+            if ch == ctx.sentinels.selection_end {
                 pending_events.push(TextEvent {
                     offset: 0,
+                    content_offset: 0,
+                    offset_hint: None,
+                    content_offset_hint: None,
                     kind: TextEventKind::SelectionEnd,
                 });
                 continue;
@@ -564,7 +741,9 @@ fn tokenize_text(
                         style,
                         kind: FragmentKind::Word,
                         width: 0,
+                        content_width: 0,
                         events: pending_events.drain(..).collect(),
+                        reveal_kind: None,
                     }));
                 }
                 fragments.push(FragmentItem::LineBreak);
@@ -616,12 +795,19 @@ fn tokenize_text(
             style,
             kind: FragmentKind::Word,
             width: 0,
+            content_width: 0,
             events: pending_events,
+            reveal_kind: None,
         }));
     }
 }
 
-fn parse_marker(bytes: &[u8], idx: usize) -> Option<(usize, usize)> {
+enum ParsedMarker {
+    Pointer(usize),
+    Reveal(usize),
+}
+
+fn parse_marker(bytes: &[u8], idx: usize) -> Option<(ParsedMarker, usize)> {
     if bytes[idx] != 0x1B {
         return None;
     }
@@ -633,11 +819,20 @@ fn parse_marker(bytes: &[u8], idx: usize) -> Option<(usize, usize)> {
     if cursor + 6 >= bytes.len() {
         return None;
     }
-    let prefix = &bytes[cursor..cursor + 6];
-    if prefix != b"1337;M" {
+    if &bytes[cursor..cursor + 5] != b"1337;" {
         return None;
     }
-    cursor += 6;
+    cursor += 5;
+    if cursor >= bytes.len() {
+        return None;
+    }
+    let kind_byte = bytes[cursor];
+    cursor += 1;
+    let kind = match kind_byte {
+        b'M' => ParsedMarker::Pointer,
+        b'R' => ParsedMarker::Reveal,
+        _ => return None,
+    };
     let start = cursor;
     while cursor < bytes.len() && bytes[cursor].is_ascii_digit() {
         cursor += 1;
@@ -645,7 +840,7 @@ fn parse_marker(bytes: &[u8], idx: usize) -> Option<(usize, usize)> {
     if cursor >= bytes.len() || bytes[cursor] != 0x1B {
         return None;
     }
-    let id = std::str::from_utf8(&bytes[start..cursor])
+    let id: usize = std::str::from_utf8(&bytes[start..cursor])
         .ok()?
         .parse()
         .ok()?;
@@ -653,7 +848,7 @@ fn parse_marker(bytes: &[u8], idx: usize) -> Option<(usize, usize)> {
     if cursor >= bytes.len() || bytes[cursor] != b'\\' {
         return None;
     }
-    Some((id, cursor + 1))
+    Some((kind(id), cursor + 1))
 }
 
 struct TokenBuilder {
@@ -661,6 +856,7 @@ struct TokenBuilder {
     style: Style,
     kind: FragmentKind,
     width: usize,
+    content_width: usize,
     events: Vec<TextEvent>,
 }
 
@@ -675,6 +871,7 @@ impl TokenBuilder {
                 FragmentKind::Word
             },
             width: 0,
+            content_width: 0,
             events: Vec::new(),
         }
     }
@@ -688,7 +885,10 @@ impl TokenBuilder {
 
     fn add_events(&mut self, pending: &mut Vec<TextEvent>) {
         for mut event in pending.drain(..) {
-            event.offset = self.width;
+            let offset = event.offset_hint.unwrap_or(self.width);
+            let content_offset = event.content_offset_hint.unwrap_or(self.content_width);
+            event.offset = offset;
+            event.content_offset = content_offset;
             self.events.push(event);
         }
     }
@@ -696,6 +896,7 @@ impl TokenBuilder {
     fn push_char(&mut self, ch: char) {
         self.text.push(ch);
         self.width += UnicodeWidthChar::width(ch).unwrap_or(0);
+        self.content_width += UnicodeWidthChar::width(ch).unwrap_or(0);
     }
 
     fn finish(self) -> Fragment {
@@ -704,7 +905,9 @@ impl TokenBuilder {
             style: self.style,
             kind: self.kind,
             width: self.width,
+            content_width: self.content_width,
             events: self.events,
+            reveal_kind: None,
         }
     }
 }
@@ -732,7 +935,7 @@ fn wrap_fragments(
                 FragmentKind::Whitespace => {
                     pending_whitespace.push(token.clone());
                 }
-                FragmentKind::Word => {
+                FragmentKind::Word | FragmentKind::RevealTag => {
                     let mut token = token.clone();
                     loop {
                         let whitespace_width: usize =
@@ -754,6 +957,10 @@ fn wrap_fragments(
                         let line_start = builder.current_width() == builder.prefix_width;
                         let available = width.saturating_sub(builder.prefix_width);
                         if line_start && token.width > available {
+                            if token.kind == FragmentKind::RevealTag {
+                                builder.append_with_pending(token, &mut pending_whitespace);
+                                break;
+                            }
                             let split_limit = available.max(1);
                             let (head, tail_opt) = split_fragment(token, split_limit);
                             builder.append_with_pending(head, &mut pending_whitespace);
@@ -825,6 +1032,12 @@ fn split_fragment(fragment: Fragment, limit: usize) -> (Fragment, Option<Fragmen
 
     let tail_text = fragment.text[split_byte_index..].to_string();
     let tail_width = fragment.width.saturating_sub(head_width);
+    let head_content_width = if fragment.content_width <= head_width {
+        fragment.content_width.min(head_width)
+    } else {
+        head_width
+    };
+    let tail_content_width = fragment.content_width.saturating_sub(head_content_width);
 
     let mut head_events = Vec::new();
     let mut tail_events = Vec::new();
@@ -833,6 +1046,7 @@ fn split_fragment(fragment: Fragment, limit: usize) -> (Fragment, Option<Fragmen
             head_events.push(event);
         } else {
             event.offset = event.offset.saturating_sub(head_width);
+            event.content_offset = event.content_offset.saturating_sub(head_content_width);
             tail_events.push(event);
         }
     }
@@ -842,7 +1056,9 @@ fn split_fragment(fragment: Fragment, limit: usize) -> (Fragment, Option<Fragmen
         style: fragment.style,
         kind: fragment.kind,
         width: head_width,
+        content_width: head_content_width,
         events: head_events,
+        reveal_kind: fragment.reveal_kind,
     };
     let tail_fragment = if tail_text.is_empty() && tail_events.is_empty() {
         None
@@ -852,7 +1068,9 @@ fn split_fragment(fragment: Fragment, limit: usize) -> (Fragment, Option<Fragmen
             style: fragment.style,
             kind: fragment.kind,
             width: tail_width,
+            content_width: tail_content_width,
             events: tail_events,
+            reveal_kind: fragment.reveal_kind,
         })
     };
 
@@ -864,6 +1082,7 @@ struct LineBuilder {
     events: Vec<LocatedEvent>,
     width: usize,
     prefix_width: usize,
+    content_width: usize,
     has_word: bool,
     selection_active: bool,
 }
@@ -888,6 +1107,7 @@ impl LineBuilder {
             events: Vec::new(),
             width: prefix_width,
             prefix_width,
+            content_width: 0,
             has_word: false,
             selection_active,
         }
@@ -914,7 +1134,9 @@ impl LineBuilder {
             style,
             kind,
             width,
+            content_width: _content_width,
             mut events,
+            ..
         } = fragment;
 
         if kind == FragmentKind::Word && width > 0 {
@@ -923,6 +1145,8 @@ impl LineBuilder {
 
         events.sort_by_key(|event| event.offset);
         let base_width = self.width;
+        let base_content_width = self.content_width;
+        let counts_content = kind != FragmentKind::RevealTag;
         let mut events_iter = events.into_iter().peekable();
         let mut current_offset = 0usize;
         let mut buffer = String::new();
@@ -933,8 +1157,22 @@ impl LineBuilder {
                 if event.offset > current_offset {
                     break;
                 }
-                let event = events_iter.next().unwrap();
-                self.handle_event(event, base_width, &mut buffer, style, &mut buffer_selected);
+                let mut event = events_iter.next().unwrap();
+                if let Some(hint) = event.offset_hint {
+                    event.offset = hint;
+                }
+                if let Some(content_hint) = event.content_offset_hint {
+                    event.content_offset = content_hint;
+                }
+                self.handle_event(
+                    event,
+                    base_width,
+                    base_content_width,
+                    &mut buffer,
+                    style,
+                    &mut buffer_selected,
+                    counts_content,
+                );
             }
 
             buffer.push(ch);
@@ -942,13 +1180,28 @@ impl LineBuilder {
         }
 
         while let Some(event) = events_iter.next() {
-            self.handle_event(event, base_width, &mut buffer, style, &mut buffer_selected);
+            let mut event = event;
+            if let Some(hint) = event.offset_hint {
+                event.offset = hint;
+            }
+            if let Some(content_hint) = event.content_offset_hint {
+                event.content_offset = content_hint;
+            }
+            self.handle_event(
+                event,
+                base_width,
+                base_content_width,
+                &mut buffer,
+                style,
+                &mut buffer_selected,
+                counts_content,
+            );
         }
 
         if !buffer.is_empty() {
             let text_segment = std::mem::take(&mut buffer);
             let segment_style = apply_selection_style(style, buffer_selected);
-            self.push_segment(text_segment, segment_style);
+            self.push_segment(text_segment, segment_style, counts_content);
         }
     }
 
@@ -956,16 +1209,18 @@ impl LineBuilder {
         &mut self,
         event: TextEvent,
         base_width: usize,
+        base_content_width: usize,
         buffer: &mut String,
         fragment_style: Style,
         buffer_selected: &mut bool,
+        counts_content: bool,
     ) {
         match event.kind {
             TextEventKind::SelectionStart => {
                 if !buffer.is_empty() {
                     let text = std::mem::take(buffer);
                     let style = apply_selection_style(fragment_style, *buffer_selected);
-                    self.push_segment(text, style);
+                    self.push_segment(text, style, counts_content);
                 }
                 self.selection_active = true;
                 *buffer_selected = self.selection_active;
@@ -974,7 +1229,7 @@ impl LineBuilder {
                 if !buffer.is_empty() {
                     let text = std::mem::take(buffer);
                     let style = apply_selection_style(fragment_style, *buffer_selected);
-                    self.push_segment(text, style);
+                    self.push_segment(text, style, counts_content);
                 }
                 self.selection_active = false;
                 *buffer_selected = self.selection_active;
@@ -982,9 +1237,8 @@ impl LineBuilder {
             TextEventKind::Marker(_) | TextEventKind::Cursor => {
                 let column = base_width + event.offset;
                 let display_column = column.min(u16::MAX as usize) as u16;
-                let content_column = column
-                    .saturating_sub(self.prefix_width)
-                    .min(u16::MAX as usize) as u16;
+                let content_position = base_content_width + event.content_offset;
+                let content_column = content_position.min(u16::MAX as usize) as u16;
                 self.events.push(LocatedEvent {
                     column: display_column,
                     content_column,
@@ -994,13 +1248,16 @@ impl LineBuilder {
         }
     }
 
-    fn push_segment(&mut self, text: String, style: Style) {
+    fn push_segment(&mut self, text: String, style: Style, counts_content: bool) {
         if text.is_empty() {
             return;
         }
         let width = visible_width(&text);
         self.segments.push(LineSegment { text, style });
         self.width += width;
+        if counts_content {
+            self.content_width += width;
+        }
     }
 
     fn build_line(mut self) -> (LineOutput, bool) {
@@ -1050,12 +1307,66 @@ struct LineMetric {
     counts_as_content: bool,
 }
 
+fn adjust_reveal_content_columns(cursor_map: &mut [(CursorPointer, CursorVisualPosition)]) {
+    for idx in 0..cursor_map.len() {
+        let is_reveal = matches!(
+            cursor_map[idx].0.segment_kind,
+            SegmentKind::RevealStart(_) | SegmentKind::RevealEnd(_)
+        );
+        if !is_reveal {
+            continue;
+        }
+        let content_line = cursor_map[idx].1.content_line;
+        if let Some(adjacent_column) =
+            find_adjacent_text_content_column(cursor_map, idx, content_line)
+        {
+            cursor_map[idx].1.content_column = adjacent_column;
+        }
+    }
+}
+
+fn find_adjacent_text_content_column(
+    cursor_map: &[(CursorPointer, CursorVisualPosition)],
+    idx: usize,
+    target_content_line: usize,
+) -> Option<u16> {
+    find_in_direction(
+        cursor_map.iter().enumerate().skip(idx + 1),
+        target_content_line,
+    )
+    .or_else(|| {
+        find_in_direction(
+            cursor_map[..idx]
+                .iter()
+                .enumerate()
+                .rev()
+                .map(|(i, entry)| (i, entry)),
+            target_content_line,
+        )
+    })
+}
+
+fn find_in_direction<'a, I>(iter: I, target_content_line: usize) -> Option<u16>
+where
+    I: Iterator<Item = (usize, &'a (CursorPointer, CursorVisualPosition))>,
+{
+    for (_, (pointer, position)) in iter {
+        if position.content_line != target_content_line {
+            continue;
+        }
+        if matches!(pointer.segment_kind, SegmentKind::Text) {
+            return Some(position.content_column);
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::editor::DocumentEditor;
+    use crate::editor::{CursorPointer, DocumentEditor};
     use std::io::Cursor;
-    use tdoc::parse;
+    use tdoc::{ftml, parse};
 
     const SENTINELS: RenderSentinels = RenderSentinels {
         cursor: '\u{F8FF}',
@@ -1066,7 +1377,7 @@ mod tests {
 
     fn render_input(input: &str) -> RenderResult {
         let document = parse(Cursor::new(input)).expect("failed to parse document");
-        render_document(&document, 120, &[], SENTINELS)
+        render_document(&document, 120, &[], &[], SENTINELS)
     }
 
     fn lines_to_strings(lines: &[Line<'_>]) -> Vec<String> {
@@ -1133,13 +1444,13 @@ mod tests {
         }
         assert!(editor.insert_paragraph_break_as_sibling());
 
-        let (doc_with_markers, markers, _) = editor.clone_with_markers(
+        let (doc_with_markers, markers, reveal_tags, _) = editor.clone_with_markers(
             SENTINELS.cursor,
             None,
             SENTINELS.selection_start,
             SENTINELS.selection_end,
         );
-        let rendered = render_document(&doc_with_markers, 120, &markers, SENTINELS);
+        let rendered = render_document(&doc_with_markers, 120, &markers, &reveal_tags, SENTINELS);
         let lines = lines_to_strings(&rendered.lines);
         assert_eq!(lines, vec!["• Alpha ", "", "  Beta"]);
     }
@@ -1195,13 +1506,13 @@ mod tests {
         let document = parse(Cursor::new(input)).expect("failed to parse document");
         let mut editor = DocumentEditor::new(document);
         editor.ensure_cursor_selectable();
-        let (doc_with_markers, markers, _) = editor.clone_with_markers(
+        let (doc_with_markers, markers, reveal_tags, _) = editor.clone_with_markers(
             SENTINELS.cursor,
             None,
             SENTINELS.selection_start,
             SENTINELS.selection_end,
         );
-        let rendered = render_document(&doc_with_markers, 12, &markers, SENTINELS);
+        let rendered = render_document(&doc_with_markers, 12, &markers, &reveal_tags, SENTINELS);
 
         let mut columns_per_line: Vec<Vec<(u16, u16)>> = Vec::new();
         for (_, position) in rendered.cursor_map {
@@ -1237,7 +1548,7 @@ mod tests {
                 "failed to advance cursor to wrap boundary"
             );
         }
-        let (doc_with_markers, markers, inserted_cursor) = editor.clone_with_markers(
+        let (doc_with_markers, markers, reveal_tags, inserted_cursor) = editor.clone_with_markers(
             SENTINELS.cursor,
             None,
             SENTINELS.selection_start,
@@ -1248,7 +1559,7 @@ mod tests {
             "cursor sentinel should be inserted at wrap boundary"
         );
 
-        let rendered = render_document(&doc_with_markers, 10, &markers, SENTINELS);
+        let rendered = render_document(&doc_with_markers, 10, &markers, &reveal_tags, SENTINELS);
         let cursor = rendered.cursor.expect("cursor position missing");
         let lines = lines_to_strings(&rendered.lines);
 
@@ -1268,6 +1579,133 @@ mod tests {
             (boundary_position.line, boundary_position.column),
             (1, 1),
             "visual position after wrapping should provide a dedicated cell past the wrapped word"
+        );
+    }
+
+    #[test]
+    fn reveal_codes_cursor_positions_follow_content_columns() {
+        let document = ftml! { p { "Hello " b { "World" } "!" } };
+        let mut editor = DocumentEditor::new(document.clone());
+        editor.set_reveal_codes(true);
+        editor.ensure_cursor_selectable();
+
+        let (doc_with_markers, markers, reveal_tags, _) = editor.clone_with_markers(
+            SENTINELS.cursor,
+            None,
+            SENTINELS.selection_start,
+            SENTINELS.selection_end,
+        );
+        let rendered = render_document(&doc_with_markers, 120, &markers, &reveal_tags, SENTINELS);
+        let lines = lines_to_strings(&rendered.lines);
+        assert_eq!(lines, vec!["Hello [Bold>World<Bold]!"]);
+
+        let logical_chars: Vec<char> = "Hello World!".chars().collect();
+        let expectations: Vec<(char, usize)> = vec![
+            ('H', 1),
+            ('e', 2),
+            ('l', 3),
+            ('l', 4),
+            ('o', 5),
+            (' ', 6),
+            ('>', 7),
+            ('W', 7),
+            ('o', 8),
+            ('r', 9),
+            ('l', 10),
+            ('d', 11),
+            ('<', 12),
+            ('!', 12),
+            ('\n', 13),
+        ];
+        let total = expectations.len();
+
+        fn assert_pointer_state(
+            pointer: &CursorPointer,
+            rendered: &RenderResult,
+            logical_chars: &[char],
+            expected_char: char,
+            expected_position: usize,
+            context: &str,
+        ) {
+            let (_, position) = rendered
+                .cursor_map
+                .iter()
+                .find(|(candidate, _)| candidate == pointer)
+                .unwrap_or_else(|| {
+                    panic!("cursor map should contain pointer for traversal {context}")
+                });
+            let actual_position = usize::from(position.content_column) + 1;
+            assert_eq!(
+                actual_position, expected_position,
+                "content column mismatch for character {expected_char} while moving {context}"
+            );
+
+            let actual_char = match pointer.segment_kind {
+                SegmentKind::RevealStart(_) => '>',
+                SegmentKind::RevealEnd(_) => '<',
+                SegmentKind::Text => {
+                    assert!(
+                        actual_position > 0,
+                        "text segment should advance content column for character {expected_char}"
+                    );
+                    let idx = actual_position - 1;
+                    if idx < logical_chars.len() {
+                        logical_chars[idx]
+                    } else {
+                        '\n'
+                    }
+                }
+            };
+            assert_eq!(
+                actual_char, expected_char,
+                "character mismatch at reported position {actual_position} while moving {context}"
+            );
+        }
+
+        for (idx, (expected_char, expected_position)) in expectations.iter().enumerate() {
+            let pointer = editor.cursor_pointer();
+            assert_pointer_state(
+                &pointer,
+                &rendered,
+                &logical_chars,
+                *expected_char,
+                *expected_position,
+                "forward",
+            );
+            if idx + 1 < expectations.len() {
+                assert!(
+                    editor.move_right(),
+                    "failed to advance cursor for expected character {expected_char}"
+                );
+            }
+        }
+
+        assert!(
+            !editor.move_right(),
+            "cursor should not advance past the end of the paragraph"
+        );
+
+        for (idx, (expected_char, expected_position)) in expectations.iter().rev().enumerate() {
+            let pointer = editor.cursor_pointer();
+            assert_pointer_state(
+                &pointer,
+                &rendered,
+                &logical_chars,
+                *expected_char,
+                *expected_position,
+                "backward",
+            );
+            if idx + 1 < total {
+                assert!(
+                    editor.move_left(),
+                    "failed to move cursor left for expected character {expected_char}"
+                );
+            }
+        }
+
+        assert!(
+            !editor.move_left(),
+            "cursor should not move left past the start of the paragraph"
         );
     }
 }

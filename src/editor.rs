@@ -1,4 +1,5 @@
-const MARKER_PREFIX: &str = "1337;M";
+const MARKER_POINTER_PREFIX: &str = "1337;M";
+const MARKER_REVEAL_PREFIX: &str = "1337;R";
 use std::{cmp::Ordering, mem};
 use tdoc::{Document, InlineStyle, Paragraph, ParagraphType, Span};
 
@@ -100,12 +101,14 @@ pub struct CursorPointer {
     pub paragraph_path: ParagraphPath,
     pub span_path: SpanPath,
     pub offset: usize,
+    pub segment_kind: SegmentKind,
 }
 
 impl CursorPointer {
     fn update_from_segment(&mut self, segment: &SegmentRef) {
         self.paragraph_path = segment.paragraph_path.clone();
         self.span_path = segment.span_path.clone();
+        self.segment_kind = segment.kind;
     }
 
     fn is_valid(&self) -> bool {
@@ -119,6 +122,7 @@ impl Default for CursorPointer {
             paragraph_path: ParagraphPath::default(),
             span_path: SpanPath::default(),
             offset: 0,
+            segment_kind: SegmentKind::Text,
         }
     }
 }
@@ -128,15 +132,20 @@ pub struct SegmentRef {
     pub paragraph_path: ParagraphPath,
     pub span_path: SpanPath,
     pub len: usize,
+    pub kind: SegmentKind,
 }
 
 impl SegmentRef {
     fn matches(&self, cursor: &CursorPointer) -> bool {
-        self.paragraph_path == cursor.paragraph_path && self.span_path == cursor.span_path
+        self.paragraph_path == cursor.paragraph_path
+            && self.span_path == cursor.span_path
+            && self.kind == cursor.segment_kind
     }
 
     fn matches_pointer(&self, pointer: &CursorPointer) -> bool {
-        self.paragraph_path == pointer.paragraph_path && self.span_path == pointer.span_path
+        self.paragraph_path == pointer.paragraph_path
+            && self.span_path == pointer.span_path
+            && self.kind == pointer.segment_kind
     }
 }
 
@@ -152,10 +161,30 @@ pub struct MarkerRef {
     pub pointer: CursorPointer,
 }
 
+#[derive(Clone)]
+pub struct RevealTagRef {
+    pub id: usize,
+    pub style: InlineStyle,
+    pub kind: RevealTagKind,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RevealTagKind {
+    Start,
+    End,
+}
+
 #[derive(Clone, Copy)]
 enum RemovalDirection {
     Backward,
     Forward,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SegmentKind {
+    Text,
+    RevealStart(InlineStyle),
+    RevealEnd(InlineStyle),
 }
 
 pub struct DocumentEditor {
@@ -163,6 +192,7 @@ pub struct DocumentEditor {
     segments: Vec<SegmentRef>,
     cursor: CursorPointer,
     cursor_segment: usize,
+    reveal_codes: bool,
 }
 
 impl DocumentEditor {
@@ -173,6 +203,7 @@ impl DocumentEditor {
             segments: Vec::new(),
             cursor: CursorPointer::default(),
             cursor_segment: 0,
+            reveal_codes: false,
         };
         editor.rebuild_segments();
         editor.ensure_cursor_selectable();
@@ -188,6 +219,7 @@ impl DocumentEditor {
                 paragraph_path: first.paragraph_path.clone(),
                 span_path: first.span_path.clone(),
                 offset: self.cursor.offset.min(first.len),
+                segment_kind: first.kind,
             };
             self.cursor_segment = 0;
         } else {
@@ -228,6 +260,18 @@ impl DocumentEditor {
         self.cursor.clone()
     }
 
+    pub fn reveal_codes(&self) -> bool {
+        self.reveal_codes
+    }
+
+    pub fn set_reveal_codes(&mut self, enabled: bool) {
+        if self.reveal_codes != enabled {
+            self.reveal_codes = enabled;
+            self.rebuild_segments();
+            self.ensure_cursor_selectable();
+        }
+    }
+
     pub fn cursor_breadcrumbs(&self) -> Option<Vec<String>> {
         breadcrumbs_for_pointer(&self.document, &self.cursor)
     }
@@ -255,23 +299,32 @@ impl DocumentEditor {
         if self.segments.is_empty() {
             return false;
         }
+        let mut crossed_boundary = false;
         if self.cursor.offset > 0 {
             self.cursor.offset -= 1;
-            return true;
+        } else if self.shift_to_previous_segment() {
+            crossed_boundary = true;
+        } else {
+            return false;
         }
-        self.shift_to_previous_segment()
+        self.normalize_cursor_after_backward_move(crossed_boundary);
+        true
     }
 
     pub fn move_right(&mut self) -> bool {
         if self.segments.is_empty() {
             return false;
         }
-        let current_len = self.current_segment_len();
-        if self.cursor.offset < current_len {
+        if self.cursor.offset < self.current_segment_len() {
             self.cursor.offset += 1;
-            return true;
+        } else {
+            if !self.shift_to_next_segment() {
+                return false;
+            }
+            self.skip_forward_reveal_segments();
         }
-        self.shift_to_next_segment()
+        self.normalize_cursor_after_forward_move();
+        true
     }
 
     pub fn move_word_left(&mut self) -> bool {
@@ -367,6 +420,7 @@ impl DocumentEditor {
                     paragraph_path: operation_path.clone(),
                     span_path: current_pointer.span_path.clone(),
                     offset: current_pointer.offset,
+                    segment_kind: current_pointer.segment_kind,
                 });
             }
         }
@@ -421,6 +475,7 @@ impl DocumentEditor {
                             paragraph_path: new_paragraph_path,
                             span_path: pointer.span_path.clone(),
                             offset: pointer.offset,
+                            segment_kind: pointer.segment_kind,
                         };
                         if replacement_pointer.is_some() {
                             replacement_pointer = Some(new_pointer.clone());
@@ -458,6 +513,9 @@ impl DocumentEditor {
     }
 
     pub fn insert_char(&mut self, ch: char) -> bool {
+        if !self.prepare_cursor_for_text_insertion() {
+            return false;
+        }
         let pointer = self.cursor.clone();
         if !pointer.is_valid() {
             return false;
@@ -468,6 +526,42 @@ impl DocumentEditor {
             true
         } else {
             false
+        }
+    }
+
+    fn prepare_cursor_for_text_insertion(&mut self) -> bool {
+        if self.segments.is_empty() {
+            return false;
+        }
+        match self.cursor.segment_kind {
+            SegmentKind::Text => self.cursor.is_valid(),
+            SegmentKind::RevealStart(_) => {
+                if let Some(idx) = self.find_previous_text_segment_in_paragraph(self.cursor_segment)
+                {
+                    if let Some(segment) = self.segments.get(idx).cloned() {
+                        self.cursor_segment = idx;
+                        self.cursor.update_from_segment(&segment);
+                        self.cursor.offset = segment.len;
+                        return self.cursor.is_valid();
+                    }
+                }
+                let pointer = self.cursor.clone();
+                if !self.fallback_move_to_text(&pointer, false) {
+                    return false;
+                }
+                self.cursor.offset = 0;
+                self.cursor.segment_kind = SegmentKind::Text;
+                self.cursor.is_valid()
+            }
+            SegmentKind::RevealEnd(_) => {
+                let pointer = self.cursor.clone();
+                if !self.fallback_move_to_text(&pointer, true) {
+                    return false;
+                }
+                self.cursor.offset = self.current_segment_len();
+                self.cursor.segment_kind = SegmentKind::Text;
+                self.cursor.is_valid()
+            }
         }
     }
 
@@ -492,6 +586,21 @@ impl DocumentEditor {
         } else {
             self.cursor.offset -= 1;
         }
+        if let Some(segment) = self.segments.get(self.cursor_segment) {
+            if segment.kind != SegmentKind::Text {
+                if let Some(target_pointer) = self.remove_reveal_tag_segment(self.cursor_segment) {
+                    self.rebuild_segments();
+                    if !self.move_to_pointer(&target_pointer) {
+                        if !self.fallback_move_to_text(&target_pointer, false) {
+                            self.ensure_cursor_selectable();
+                        }
+                    }
+                    return true;
+                } else {
+                    return false;
+                }
+            }
+        }
         let pointer = self.cursor.clone();
         if remove_char_at(&mut self.document, &pointer, self.cursor.offset) {
             self.rebuild_segments();
@@ -512,6 +621,19 @@ impl DocumentEditor {
         }
         let current_len = self.current_segment_len();
         if self.cursor.offset < current_len {
+            if self.cursor.segment_kind != SegmentKind::Text {
+                if let Some(target_pointer) = self.remove_reveal_tag_segment(self.cursor_segment) {
+                    self.rebuild_segments();
+                    if !self.move_to_pointer(&target_pointer) {
+                        if !self.fallback_move_to_text(&target_pointer, false) {
+                            self.ensure_cursor_selectable();
+                        }
+                    }
+                    return true;
+                } else {
+                    return false;
+                }
+            }
             let pointer = self.cursor.clone();
             if remove_char_at(&mut self.document, &pointer, self.cursor.offset) {
                 self.rebuild_segments();
@@ -525,10 +647,24 @@ impl DocumentEditor {
         }
 
         let next_segment = &self.segments[self.cursor_segment + 1];
+        if next_segment.kind != SegmentKind::Text {
+            if let Some(target_pointer) = self.remove_reveal_tag_segment(self.cursor_segment + 1) {
+                self.rebuild_segments();
+                if !self.move_to_pointer(&target_pointer) {
+                    if !self.fallback_move_to_text(&target_pointer, false) {
+                        self.ensure_cursor_selectable();
+                    }
+                }
+                return true;
+            } else {
+                return false;
+            }
+        }
         let pointer = CursorPointer {
             paragraph_path: next_segment.paragraph_path.clone(),
             span_path: next_segment.span_path.clone(),
             offset: 0,
+            segment_kind: next_segment.kind,
         };
         if remove_char_at(&mut self.document, &pointer, 0) {
             self.rebuild_segments();
@@ -564,6 +700,7 @@ impl DocumentEditor {
             remaining -= 1;
             if self.cursor.paragraph_path == target_pointer.paragraph_path
                 && self.cursor.span_path == target_pointer.span_path
+                && self.cursor.segment_kind == target_pointer.segment_kind
                 && self.cursor.offset == target_pointer.offset
             {
                 break;
@@ -573,6 +710,7 @@ impl DocumentEditor {
         if removed
             && !(self.cursor.paragraph_path == target_pointer.paragraph_path
                 && self.cursor.span_path == target_pointer.span_path
+                && self.cursor.segment_kind == target_pointer.segment_kind
                 && self.cursor.offset == target_pointer.offset)
         {
             let _ = self.move_to_pointer(&target_pointer);
@@ -619,6 +757,7 @@ impl DocumentEditor {
             remaining -= 1;
             if self.cursor.paragraph_path == start_pointer.paragraph_path
                 && self.cursor.span_path == start_pointer.span_path
+                && self.cursor.segment_kind == start_pointer.segment_kind
                 && self.cursor.offset == start_pointer.offset
             {
                 break;
@@ -628,12 +767,120 @@ impl DocumentEditor {
         if removed
             && !(self.cursor.paragraph_path == start_pointer.paragraph_path
                 && self.cursor.span_path == start_pointer.span_path
+                && self.cursor.segment_kind == start_pointer.segment_kind
                 && self.cursor.offset == start_pointer.offset)
         {
             let _ = self.move_to_pointer(&start_pointer);
         }
 
         removed
+    }
+
+    fn remove_reveal_tag_segment(&mut self, segment_index: usize) -> Option<CursorPointer> {
+        let segment = self.segments.get(segment_index)?.clone();
+        let style = match segment.kind {
+            SegmentKind::RevealStart(style) | SegmentKind::RevealEnd(style) => style,
+            SegmentKind::Text => return None,
+        };
+        let Some(paragraph) = paragraph_mut(&mut self.document, &segment.paragraph_path) else {
+            return None;
+        };
+        let Some(span) = span_mut(paragraph, &segment.span_path) else {
+            return None;
+        };
+        if span.style != style {
+            // Style mismatch indicates the structure changed; treat as no-op.
+            return None;
+        }
+        span.style = InlineStyle::None;
+        span.link_target = None;
+        let span_len = span.text.chars().count();
+        prune_and_merge_spans(&mut paragraph.content);
+        let offset = match segment.kind {
+            SegmentKind::RevealStart(_) => 0,
+            SegmentKind::RevealEnd(_) => span_len,
+            SegmentKind::Text => span_len,
+        };
+        Some(CursorPointer {
+            paragraph_path: segment.paragraph_path,
+            span_path: segment.span_path,
+            offset,
+            segment_kind: SegmentKind::Text,
+        })
+    }
+
+    fn fallback_move_to_text(&mut self, pointer: &CursorPointer, prefer_trailing: bool) -> bool {
+        if let Some((index, segment)) = self.segments.iter().enumerate().find(|(_, segment)| {
+            segment.paragraph_path == pointer.paragraph_path
+                && segment.span_path == pointer.span_path
+                && segment.kind == SegmentKind::Text
+        }) {
+            self.cursor_segment = index;
+            self.cursor = CursorPointer {
+                paragraph_path: segment.paragraph_path.clone(),
+                span_path: segment.span_path.clone(),
+                offset: pointer.offset.min(segment.len),
+                segment_kind: SegmentKind::Text,
+            };
+            self.clamp_cursor_offset();
+            return true;
+        }
+
+        let mut descendant_match: Option<(usize, SegmentRef)> = None;
+        for (index, segment) in self.segments.iter().enumerate() {
+            if segment.paragraph_path != pointer.paragraph_path {
+                continue;
+            }
+            if segment.kind != SegmentKind::Text {
+                continue;
+            }
+            if !span_path_is_prefix(pointer.span_path.indices(), segment.span_path.indices()) {
+                continue;
+            }
+            descendant_match = match descendant_match {
+                None => Some((index, segment.clone())),
+                Some((current_index, current_segment)) => {
+                    if prefer_trailing {
+                        Some((index, segment.clone()))
+                    } else {
+                        Some((current_index, current_segment))
+                    }
+                }
+            };
+            if !prefer_trailing {
+                break;
+            }
+        }
+
+        if let Some((index, segment)) = descendant_match {
+            self.cursor_segment = index;
+            self.cursor = CursorPointer {
+                paragraph_path: segment.paragraph_path.clone(),
+                span_path: segment.span_path.clone(),
+                offset: pointer.offset.min(segment.len),
+                segment_kind: SegmentKind::Text,
+            };
+            self.clamp_cursor_offset();
+            return true;
+        }
+
+        if let Some((index, segment)) = select_text_in_paragraph(
+            &self.segments,
+            &pointer.paragraph_path,
+            prefer_trailing,
+        ) {
+            self.cursor_segment = index;
+            self.cursor = CursorPointer {
+                paragraph_path: segment.paragraph_path.clone(),
+                span_path: segment.span_path.clone(),
+                offset: pointer.offset.min(segment.len),
+                segment_kind: SegmentKind::Text,
+            };
+            self.clamp_cursor_offset();
+            return true;
+        }
+
+        false
     }
 
     fn insert_paragraph_break_internal(&mut self, prefer_entry_sibling: bool) -> bool {
@@ -678,9 +925,20 @@ impl DocumentEditor {
         selection: Option<(CursorPointer, CursorPointer)>,
         selection_start_sentinel: char,
         selection_end_sentinel: char,
-    ) -> (Document, Vec<MarkerRef>, bool) {
+    ) -> (Document, Vec<MarkerRef>, Vec<RevealTagRef>, bool) {
+        #[derive(Clone)]
+        struct SpanAssembly {
+            paragraph_path: ParagraphPath,
+            span_path: SpanPath,
+            original_text: String,
+            start: Option<String>,
+            text: Option<String>,
+            end: Option<String>,
+        }
+
         let mut clone = self.document.clone();
         let mut markers = Vec::new();
+        let mut reveal_tags = Vec::new();
         let mut inserted_cursor = false;
 
         let selection_bounds = selection.and_then(|(start_ptr, end_ptr)| {
@@ -693,56 +951,201 @@ impl DocumentEditor {
             }
         });
 
+        let mut assemblies: Vec<SpanAssembly> = Vec::new();
+
         for (segment_index, segment) in self.segments.iter().enumerate() {
-            let Some(paragraph) = paragraph_mut(&mut clone, &segment.paragraph_path) else {
+            let Some(paragraph) = paragraph_ref(&self.document, &segment.paragraph_path) else {
                 continue;
             };
-            let Some(span) = span_mut(paragraph, &segment.span_path) else {
+            let Some(span) = span_ref(paragraph, &segment.span_path) else {
                 continue;
             };
 
-            let original: Vec<char> = span.text.chars().collect();
-            let mut rebuilt = String::new();
-
-            for offset in 0..=original.len() {
-                let id = markers.len();
-                rebuilt.push_str(&format!("\x1b]{}{}\x1b\\", MARKER_PREFIX, id));
-                markers.push(MarkerRef {
-                    id,
-                    pointer: CursorPointer {
-                        paragraph_path: segment.paragraph_path.clone(),
-                        span_path: segment.span_path.clone(),
-                        offset,
-                    },
+            let assembly = if let Some(existing) = assemblies.iter_mut().find(|entry| {
+                entry.paragraph_path == segment.paragraph_path
+                    && entry.span_path == segment.span_path
+            }) {
+                existing
+            } else {
+                assemblies.push(SpanAssembly {
+                    paragraph_path: segment.paragraph_path.clone(),
+                    span_path: segment.span_path.clone(),
+                    original_text: span.text.clone(),
+                    start: None,
+                    text: None,
+                    end: None,
                 });
+                assemblies.last_mut().unwrap()
+            };
 
-                if let Some((start_key, end_key)) = selection_bounds {
-                    let current_key = PointerKey {
-                        segment_index,
-                        offset,
-                    };
-                    if current_key == start_key {
-                        rebuilt.push(selection_start_sentinel);
+            match segment.kind {
+                SegmentKind::Text => {
+                    let original_chars: Vec<char> = assembly.original_text.chars().collect();
+                    let len = original_chars.len();
+                    let mut rebuilt = String::new();
+
+                    for offset in 0..=len {
+                        let id = markers.len();
+                        rebuilt.push_str(&format!("\x1b]{}{}\x1b\\", MARKER_POINTER_PREFIX, id));
+                        markers.push(MarkerRef {
+                            id,
+                            pointer: CursorPointer {
+                                paragraph_path: segment.paragraph_path.clone(),
+                                span_path: segment.span_path.clone(),
+                                offset,
+                                segment_kind: SegmentKind::Text,
+                            },
+                        });
+
+                        if let Some((start_key, end_key)) = selection_bounds {
+                            let current_key = PointerKey {
+                                segment_index,
+                                offset,
+                            };
+                            if current_key == start_key {
+                                rebuilt.push(selection_start_sentinel);
+                            }
+                            if current_key == end_key {
+                                rebuilt.push(selection_end_sentinel);
+                            }
+                        }
+
+                        if segment.matches(&self.cursor) && offset == self.cursor.offset {
+                            rebuilt.push(cursor_sentinel);
+                            inserted_cursor = true;
+                        }
+
+                        if offset < len {
+                            rebuilt.push(original_chars[offset]);
+                        }
                     }
-                    if current_key == end_key {
-                        rebuilt.push(selection_end_sentinel);
+
+                    assembly.text = Some(rebuilt);
+                }
+                SegmentKind::RevealStart(style) => {
+                    let len = segment.len.max(1);
+                    let mut rebuilt = String::new();
+                    for offset in 0..=len {
+                        let id = markers.len();
+                        rebuilt.push_str(&format!("\x1b]{}{}\x1b\\", MARKER_POINTER_PREFIX, id));
+                        markers.push(MarkerRef {
+                            id,
+                            pointer: CursorPointer {
+                                paragraph_path: segment.paragraph_path.clone(),
+                                span_path: segment.span_path.clone(),
+                                offset,
+                                segment_kind: SegmentKind::RevealStart(style),
+                            },
+                        });
+
+                        if let Some((start_key, end_key)) = selection_bounds {
+                            let current_key = PointerKey {
+                                segment_index,
+                                offset,
+                            };
+                            if current_key == start_key {
+                                rebuilt.push(selection_start_sentinel);
+                            }
+                            if current_key == end_key {
+                                rebuilt.push(selection_end_sentinel);
+                            }
+                        }
+
+                        if segment.matches(&self.cursor) && offset == self.cursor.offset {
+                            rebuilt.push(cursor_sentinel);
+                            inserted_cursor = true;
+                        }
+
+                        if offset < len {
+                            let tag_id = reveal_tags.len();
+                            reveal_tags.push(RevealTagRef {
+                                id: tag_id,
+                                style,
+                                kind: RevealTagKind::Start,
+                            });
+                            rebuilt.push_str(&format!(
+                                "\x1b]{}{}\x1b\\",
+                                MARKER_REVEAL_PREFIX, tag_id
+                            ));
+                        }
                     }
+                    assembly.start = Some(rebuilt);
                 }
+                SegmentKind::RevealEnd(style) => {
+                    let len = segment.len.max(1);
+                    let mut rebuilt = String::new();
+                    for offset in 0..=len {
+                        let id = markers.len();
+                        rebuilt.push_str(&format!("\x1b]{}{}\x1b\\", MARKER_POINTER_PREFIX, id));
+                        markers.push(MarkerRef {
+                            id,
+                            pointer: CursorPointer {
+                                paragraph_path: segment.paragraph_path.clone(),
+                                span_path: segment.span_path.clone(),
+                                offset,
+                                segment_kind: SegmentKind::RevealEnd(style),
+                            },
+                        });
 
-                if segment.matches(&self.cursor) && offset == self.cursor.offset {
-                    rebuilt.push(cursor_sentinel);
-                    inserted_cursor = true;
-                }
+                        if let Some((start_key, end_key)) = selection_bounds {
+                            let current_key = PointerKey {
+                                segment_index,
+                                offset,
+                            };
+                            if current_key == start_key {
+                                rebuilt.push(selection_start_sentinel);
+                            }
+                            if current_key == end_key {
+                                rebuilt.push(selection_end_sentinel);
+                            }
+                        }
 
-                if offset < original.len() {
-                    rebuilt.push(original[offset]);
+                        if segment.matches(&self.cursor) && offset == self.cursor.offset {
+                            rebuilt.push(cursor_sentinel);
+                            inserted_cursor = true;
+                        }
+
+                        if offset < len {
+                            let tag_id = reveal_tags.len();
+                            reveal_tags.push(RevealTagRef {
+                                id: tag_id,
+                                style,
+                                kind: RevealTagKind::End,
+                            });
+                            rebuilt.push_str(&format!(
+                                "\x1b]{}{}\x1b\\",
+                                MARKER_REVEAL_PREFIX, tag_id
+                            ));
+                        }
+                    }
+                    assembly.end = Some(rebuilt);
                 }
             }
-
-            span.text = rebuilt;
         }
 
-        (clone, markers, inserted_cursor)
+        for assembly in assemblies.into_iter() {
+            let Some(paragraph) = paragraph_mut(&mut clone, &assembly.paragraph_path) else {
+                continue;
+            };
+            let Some(span) = span_mut(paragraph, &assembly.span_path) else {
+                continue;
+            };
+            let mut combined = String::new();
+            if let Some(start) = assembly.start {
+                combined.push_str(&start);
+            }
+            if let Some(text) = assembly.text {
+                combined.push_str(&text);
+            } else {
+                combined.push_str(&assembly.original_text);
+            }
+            if let Some(end) = assembly.end {
+                combined.push_str(&end);
+            }
+            span.text = combined;
+        }
+
+        (clone, markers, reveal_tags, inserted_cursor)
     }
 
     pub fn apply_inline_style_to_selection(
@@ -785,6 +1188,9 @@ impl DocumentEditor {
             };
             let len = segment.len;
             if len == 0 {
+                continue;
+            }
+            if segment.kind != SegmentKind::Text {
                 continue;
             }
 
@@ -892,6 +1298,17 @@ impl DocumentEditor {
         }
     }
 
+    fn skip_forward_reveal_segments(&mut self) {
+        while matches!(
+            self.current_segment_kind(),
+            Some(SegmentKind::RevealStart(_) | SegmentKind::RevealEnd(_))
+        ) {
+            if !self.shift_to_next_segment() {
+                break;
+            }
+        }
+    }
+
     fn current_segment_len(&self) -> usize {
         self.segments
             .get(self.cursor_segment)
@@ -899,13 +1316,105 @@ impl DocumentEditor {
             .unwrap_or(0)
     }
 
+    fn find_previous_text_segment_in_paragraph(&self, start_idx: usize) -> Option<usize> {
+        if self.segments.is_empty() || start_idx == 0 {
+            return None;
+        }
+        let paragraph_path = self.segments.get(start_idx)?.paragraph_path.clone();
+        let mut idx = start_idx;
+        while idx > 0 {
+            idx -= 1;
+            let segment = &self.segments[idx];
+            if segment.paragraph_path != paragraph_path {
+                continue;
+            }
+            if matches!(segment.kind, SegmentKind::Text) {
+                return Some(idx);
+            }
+        }
+        None
+    }
+
+    fn current_segment_kind(&self) -> Option<SegmentKind> {
+        self.segments
+            .get(self.cursor_segment)
+            .map(|segment| segment.kind)
+    }
+
+    fn next_segment_kind(&self) -> Option<SegmentKind> {
+        self.segments
+            .get(self.cursor_segment + 1)
+            .map(|segment| segment.kind)
+    }
+
+    fn normalize_cursor_after_forward_move(&mut self) {
+        loop {
+            let current_len = self.current_segment_len();
+            if self.cursor.offset < current_len {
+                break;
+            }
+            if matches!(
+                self.current_segment_kind(),
+                Some(SegmentKind::RevealStart(_) | SegmentKind::RevealEnd(_))
+            ) {
+                if !self.shift_to_next_segment() {
+                    break;
+                }
+                continue;
+            }
+            match self.next_segment_kind() {
+                Some(SegmentKind::RevealStart(_) | SegmentKind::RevealEnd(_)) => {
+                    if !self.shift_to_next_segment() {
+                        break;
+                    }
+                }
+                _ => break,
+            }
+        }
+    }
+
+    fn normalize_cursor_after_backward_move(&mut self, crossed_boundary: bool) {
+        let pending_boundary = crossed_boundary;
+        loop {
+            let Some(segment) = self.segments.get(self.cursor_segment) else {
+                return;
+            };
+            match segment.kind {
+                SegmentKind::RevealStart(_) | SegmentKind::RevealEnd(_) => {
+                    if self.cursor.offset > 0 {
+                        self.cursor.offset = 0;
+                    }
+                    return;
+                }
+                SegmentKind::Text => {
+                    if pending_boundary {
+                        if segment.len == 0 {
+                            return;
+                        }
+                        if self.cursor.offset >= segment.len {
+                            self.cursor.offset = segment.len.saturating_sub(1);
+                        }
+                    }
+                    return;
+                }
+            }
+        }
+    }
+
     fn current_span_text(&self) -> Option<&str> {
+        let segment = self.segments.get(self.cursor_segment)?;
+        if segment.kind != SegmentKind::Text {
+            return None;
+        }
         let paragraph = paragraph_ref(&self.document, &self.cursor.paragraph_path)?;
         let span = span_ref(paragraph, &self.cursor.span_path)?;
         Some(span.text.as_str())
     }
 
     fn segment_text(&self, segment: &SegmentRef) -> Option<&str> {
+        if segment.kind != SegmentKind::Text {
+            return None;
+        }
         let paragraph = paragraph_ref(&self.document, &segment.paragraph_path)?;
         let span = span_ref(paragraph, &segment.span_path)?;
         Some(span.text.as_str())
@@ -943,6 +1452,7 @@ impl DocumentEditor {
                 paragraph_path: segment.paragraph_path.clone(),
                 span_path: segment.span_path.clone(),
                 offset: new_offset.min(len),
+                segment_kind: segment.kind,
             };
             return Some((idx, pointer));
         }
@@ -983,6 +1493,7 @@ impl DocumentEditor {
                 paragraph_path: segment.paragraph_path.clone(),
                 span_path: segment.span_path.clone(),
                 offset: new_offset,
+                segment_kind: segment.kind,
             };
             return Some((idx, pointer));
         }
@@ -1057,10 +1568,10 @@ impl DocumentEditor {
     }
 
     fn rebuild_segments(&mut self) {
-        self.segments = collect_segments(&self.document);
+        self.segments = collect_segments(&self.document, self.reveal_codes);
         if self.segments.is_empty() {
             self.ensure_placeholder_segment();
-            self.segments = collect_segments(&self.document);
+            self.segments = collect_segments(&self.document, self.reveal_codes);
         }
         if self.segments.is_empty() {
             self.cursor = CursorPointer::default();
@@ -1145,6 +1656,7 @@ impl DocumentEditor {
                         paragraph_path: prev.paragraph_path.clone(),
                         span_path: prev.span_path.clone(),
                         offset: prev.len,
+                        segment_kind: prev.kind,
                     })
                 } else if end_idx < self.segments.len() {
                     let next = &self.segments[end_idx];
@@ -1152,6 +1664,7 @@ impl DocumentEditor {
                         paragraph_path: next.paragraph_path.clone(),
                         span_path: next.span_path.clone(),
                         offset: 0,
+                        segment_kind: next.kind,
                     })
                 } else {
                     None
@@ -1164,6 +1677,7 @@ impl DocumentEditor {
                         paragraph_path: next.paragraph_path.clone(),
                         span_path: next.span_path.clone(),
                         offset: 0,
+                        segment_kind: next.kind,
                     })
                 } else if start_idx > 0 {
                     let prev = &self.segments[start_idx - 1];
@@ -1171,6 +1685,7 @@ impl DocumentEditor {
                         paragraph_path: prev.paragraph_path.clone(),
                         span_path: prev.span_path.clone(),
                         offset: prev.len,
+                        segment_kind: prev.kind,
                     })
                 } else {
                     None
@@ -1212,11 +1727,36 @@ fn ensure_document_initialized(document: &mut Document) {
     }
 }
 
-fn collect_segments(document: &Document) -> Vec<SegmentRef> {
+fn span_path_is_prefix(prefix: &[usize], target: &[usize]) -> bool {
+    prefix.len() <= target.len() && target.starts_with(prefix)
+}
+
+fn select_text_in_paragraph(
+    segments: &[SegmentRef],
+    paragraph_path: &ParagraphPath,
+    prefer_trailing: bool,
+) -> Option<(usize, SegmentRef)> {
+    let mut result: Option<(usize, SegmentRef)> = None;
+    for (index, segment) in segments.iter().enumerate() {
+        if segment.paragraph_path != *paragraph_path {
+            continue;
+        }
+        if segment.kind != SegmentKind::Text {
+            continue;
+        }
+        if !prefer_trailing {
+            return Some((index, segment.clone()));
+        }
+        result = Some((index, segment.clone()));
+    }
+    result
+}
+
+fn collect_segments(document: &Document, reveal_codes: bool) -> Vec<SegmentRef> {
     let mut result = Vec::new();
     for (idx, paragraph) in document.paragraphs.iter().enumerate() {
         let mut path = ParagraphPath::new_root(idx);
-        collect_paragraph_segments(paragraph, &mut path, &mut result);
+        collect_paragraph_segments(paragraph, &mut path, reveal_codes, &mut result);
     }
     result
 }
@@ -1475,6 +2015,7 @@ fn break_list_entry_for_non_list_target(
                     paragraph_path: new_path,
                     span_path: SpanPath::new(vec![0]),
                     offset: 0,
+                    segment_kind: SegmentKind::Text,
                 })
             } else {
                 document.paragraphs.remove(idx);
@@ -1491,6 +2032,7 @@ fn break_list_entry_for_non_list_target(
                     paragraph_path: new_path,
                     span_path: SpanPath::new(vec![0]),
                     offset: 0,
+                    segment_kind: SegmentKind::Text,
                 })
             }
         }
@@ -1515,6 +2057,7 @@ fn break_list_entry_for_non_list_target(
                     paragraph_path: ParagraphPath::from_steps(new_steps),
                     span_path: SpanPath::new(vec![0]),
                     offset: 0,
+                    segment_kind: SegmentKind::Text,
                 })
             } else {
                 parent.children.remove(child_idx);
@@ -1532,6 +2075,7 @@ fn break_list_entry_for_non_list_target(
                     paragraph_path: ParagraphPath::from_steps(new_steps),
                     span_path: SpanPath::new(vec![0]),
                     offset: 0,
+                    segment_kind: SegmentKind::Text,
                 })
             }
         }
@@ -1564,6 +2108,7 @@ fn break_list_entry_for_non_list_target(
                     paragraph_path: ParagraphPath::from_steps(new_steps),
                     span_path: SpanPath::new(vec![0]),
                     offset: 0,
+                    segment_kind: SegmentKind::Text,
                 })
             } else {
                 if list_child_idx >= entry.len() {
@@ -1587,6 +2132,7 @@ fn break_list_entry_for_non_list_target(
                     paragraph_path: ParagraphPath::from_steps(new_steps),
                     span_path: SpanPath::new(vec![0]),
                     offset: 0,
+                    segment_kind: SegmentKind::Text,
                 })
             }
         }
@@ -1819,6 +2365,7 @@ fn convert_paragraph_into_list(
         paragraph_path: new_path,
         span_path,
         offset: 0,
+        segment_kind: SegmentKind::Text,
     })
 }
 
@@ -1924,18 +2471,19 @@ fn inline_style_label(style: InlineStyle) -> Option<&'static str> {
 fn collect_paragraph_segments(
     paragraph: &Paragraph,
     path: &mut ParagraphPath,
+    reveal_codes: bool,
     segments: &mut Vec<SegmentRef>,
 ) {
-    collect_span_segments(paragraph, path, segments);
+    collect_span_segments(paragraph, path, reveal_codes, segments);
     for (child_index, child) in paragraph.children.iter().enumerate() {
         path.push_child(child_index);
-        collect_paragraph_segments(child, path, segments);
+        collect_paragraph_segments(child, path, reveal_codes, segments);
         path.pop();
     }
     for (entry_index, entry) in paragraph.entries.iter().enumerate() {
         for (child_index, child) in entry.iter().enumerate() {
             path.push_entry(entry_index, child_index);
-            collect_paragraph_segments(child, path, segments);
+            collect_paragraph_segments(child, path, reveal_codes, segments);
             path.pop();
         }
     }
@@ -1944,11 +2492,12 @@ fn collect_paragraph_segments(
 fn collect_span_segments(
     paragraph: &Paragraph,
     path: &ParagraphPath,
+    reveal_codes: bool,
     segments: &mut Vec<SegmentRef>,
 ) {
     for (index, span) in paragraph.content.iter().enumerate() {
         let mut span_path = SpanPath::new(vec![index]);
-        collect_span_rec(span, path, &mut span_path, segments);
+        collect_span_rec(span, path, &mut span_path, reveal_codes, segments);
     }
 }
 
@@ -1956,27 +2505,48 @@ fn collect_span_rec(
     span: &Span,
     paragraph_path: &ParagraphPath,
     span_path: &mut SpanPath,
+    reveal_codes: bool,
     segments: &mut Vec<SegmentRef>,
 ) {
     let len = span.text.chars().count();
+    if reveal_codes && span.style != InlineStyle::None {
+        segments.push(SegmentRef {
+            paragraph_path: paragraph_path.clone(),
+            span_path: span_path.clone(),
+            len: 1,
+            kind: SegmentKind::RevealStart(span.style),
+        });
+    }
+
     if span.children.is_empty() || !span.text.is_empty() {
         segments.push(SegmentRef {
             paragraph_path: paragraph_path.clone(),
             span_path: span_path.clone(),
             len,
+            kind: SegmentKind::Text,
         });
     } else if len == 0 && span.children.is_empty() {
         segments.push(SegmentRef {
             paragraph_path: paragraph_path.clone(),
             span_path: span_path.clone(),
             len: 0,
+            kind: SegmentKind::Text,
         });
     }
 
     for (child_index, child) in span.children.iter().enumerate() {
         span_path.push(child_index);
-        collect_span_rec(child, paragraph_path, span_path, segments);
+        collect_span_rec(child, paragraph_path, span_path, reveal_codes, segments);
         span_path.pop();
+    }
+
+    if reveal_codes && span.style != InlineStyle::None {
+        segments.push(SegmentRef {
+            paragraph_path: paragraph_path.clone(),
+            span_path: span_path.clone(),
+            len: 1,
+            kind: SegmentKind::RevealEnd(span.style),
+        });
     }
 }
 
@@ -2128,6 +2698,7 @@ fn split_paragraph_break(
                 paragraph_path: new_path,
                 span_path,
                 offset: 0,
+                segment_kind: SegmentKind::Text,
             })
         }
         PathStep::Child(child_idx) => {
@@ -2146,6 +2717,7 @@ fn split_paragraph_break(
                 paragraph_path: new_path,
                 span_path,
                 offset: 0,
+                segment_kind: SegmentKind::Text,
             })
         }
         PathStep::Entry {
@@ -2178,6 +2750,7 @@ fn split_paragraph_break(
                     paragraph_path: new_path,
                     span_path,
                     offset: 0,
+                    segment_kind: SegmentKind::Text,
                 });
             }
 
@@ -2209,6 +2782,7 @@ fn split_paragraph_break(
                 paragraph_path: new_path,
                 span_path,
                 offset: 0,
+                segment_kind: SegmentKind::Text,
             })
         }
         _ => None,
@@ -2557,6 +3131,7 @@ mod tests {
             paragraph_path: ParagraphPath::new_root(root_index),
             span_path: SpanPath::new(vec![0]),
             offset: 0,
+            segment_kind: SegmentKind::Text,
         }
     }
 
@@ -2567,6 +3142,7 @@ mod tests {
             paragraph_path: path,
             span_path: SpanPath::new(vec![0]),
             offset: 0,
+            segment_kind: SegmentKind::Text,
         }
     }
 
@@ -2583,6 +3159,7 @@ mod tests {
             paragraph_path: path,
             span_path: SpanPath::new(vec![0]),
             offset: 0,
+            segment_kind: SegmentKind::Text,
         }
     }
 
@@ -2597,6 +3174,7 @@ mod tests {
             paragraph_path: path,
             span_path: SpanPath::new(vec![0]),
             offset: 0,
+            segment_kind: SegmentKind::Text,
         }
     }
 
@@ -2628,6 +3206,48 @@ mod tests {
             })
             .collect::<Vec<_>>();
         Paragraph::new_checklist().with_entries(entries)
+    }
+
+    fn document_with_bold_span() -> Document {
+        let mut bold = Span::new_text("World");
+        bold.style = InlineStyle::Bold;
+        let paragraph = Paragraph::new_text().with_content(vec![
+            Span::new_text("Hello "),
+            bold,
+            Span::new_text("!"),
+        ]);
+        Document::new().with_paragraphs(vec![paragraph])
+    }
+
+    fn document_with_checklist_bold_span() -> Document {
+        let mut bold = Span::new_text("World");
+        bold.style = InlineStyle::Bold;
+        let item = Paragraph::new_checklist_item(false).with_content(vec![
+            Span::new_text("Hello "),
+            bold,
+            Span::new_text("!"),
+        ]);
+        let checklist = Paragraph::new_checklist().with_entries(vec![vec![item]]);
+        Document::new().with_paragraphs(vec![checklist])
+    }
+
+    fn document_with_checklist_nested_bold_span() -> Document {
+        let mut bold = Span::new_text("");
+        bold.style = InlineStyle::Bold;
+        bold.children = vec![Span::new_text("World")];
+        let item = Paragraph::new_checklist_item(false).with_content(vec![
+            Span::new_text("Hello "),
+            bold,
+            Span::new_text("!"),
+        ]);
+        let checklist = Paragraph::new_checklist().with_entries(vec![vec![item]]);
+        Document::new().with_paragraphs(vec![checklist])
+    }
+
+    fn insert_text(editor: &mut DocumentEditor, text: &str) {
+        for ch in text.chars() {
+            assert!(editor.insert_char(ch), "failed to insert char {ch}");
+        }
     }
 
     #[test]
@@ -2783,6 +3403,138 @@ mod tests {
         assert_eq!(paragraph.content[0].style, InlineStyle::Bold);
         assert_eq!(paragraph.content[1].text, " world");
         assert_eq!(paragraph.content[1].style, InlineStyle::None);
+    }
+
+    #[test]
+    fn insert_char_before_reveal_start_marker_inserts_into_previous_span() {
+        let mut editor = DocumentEditor::new(document_with_bold_span());
+        editor.set_reveal_codes(true);
+
+        // Move to the reveal end marker within the checklist item
+        for _ in 0..6 {
+            assert!(editor.move_right());
+        }
+        insert_text(&mut editor, "dear ");
+
+        let doc = editor.document();
+        assert_eq!(doc.paragraphs[0].content[0].text, "Hello dear ");
+        assert_eq!(doc.paragraphs[0].content[1].text, "World");
+    }
+
+    #[test]
+    fn insert_char_before_reveal_start_and_remove_again() {
+        let mut editor = DocumentEditor::new(document_with_bold_span());
+        editor.set_reveal_codes(true);
+
+        // Move to the reveal end marker within the checklist item
+        for _ in 0..6 {
+            assert!(editor.move_right());
+        }
+        insert_text(&mut editor, "cruel ");
+
+        // 1. Ok, let's add some text before the reveal start marker
+        let doc = editor.document();
+        assert_eq!(doc.paragraphs[0].content[0].text, "Hello cruel ");
+        assert_eq!(doc.paragraphs[0].content[1].text, "World");
+
+        // 2. Now remove it again
+        for _ in 0..6 {
+            assert!(editor.backspace());
+        }
+        let doc = editor.document();
+        assert_eq!(doc.paragraphs[0].content[0].text, "Hello ");
+        assert_eq!(doc.paragraphs[0].content[1].text, "World");
+
+        // 3. Now let's move past the reveal start marker and add text after it
+        assert!(editor.move_right());
+        insert_text(&mut editor, "dear ");
+        let doc = editor.document();
+        assert_eq!(doc.paragraphs[0].content[0].text, "Hello ");
+        assert_eq!(doc.paragraphs[0].content[1].text, "dear World");
+    }
+
+    #[test]
+    fn insert_char_before_reveal_end_marker_appends_to_span() {
+        let mut editor = DocumentEditor::new(document_with_bold_span());
+        editor.set_reveal_codes(true);
+
+        // Move to the reveal end marker within the checklist item
+        for _ in 0..12 {
+            assert!(editor.move_right());
+        }
+        insert_text(&mut editor, " class people");
+
+        let doc = editor.document();
+        assert_eq!(doc.paragraphs[0].content[0].text, "Hello ");
+        assert_eq!(doc.paragraphs[0].content[1].text, "World class people");
+    }
+
+    #[test]
+    fn insert_char_before_reveal_end_marker_in_checklist_appends_to_span() {
+        let mut editor = DocumentEditor::new(document_with_checklist_bold_span());
+        editor.set_reveal_codes(true);
+
+        // Move to the reveal end marker within the checklist item
+        for _ in 0..12 {
+            assert!(editor.move_right());
+        }
+        insert_text(&mut editor, " class people");
+
+        let doc = editor.document();
+        let checklist = &doc.paragraphs[0];
+        assert_eq!(checklist.entries[0][0].content[0].text, "Hello ");
+        assert_eq!(
+            checklist.entries[0][0].content[1].text,
+            "World class people"
+        );
+    }
+
+    #[test]
+    fn insert_char_on_reveal_end_marker_in_checklist_appends_to_span() {
+        let mut editor = DocumentEditor::new(document_with_checklist_bold_span());
+        editor.set_reveal_codes(true);
+
+        // Move to the end of the paragraph first
+        while editor.move_right() {}
+        // Walk backwards until we land on the reveal end marker
+        while !matches!(
+            editor.cursor_pointer().segment_kind,
+            SegmentKind::RevealEnd(_)
+        ) {
+            assert!(editor.move_left());
+        }
+        let pointer = editor.cursor_pointer();
+        assert_eq!(pointer.span_path.indices(), &[1]);
+
+        insert_text(&mut editor, " dear");
+
+        let doc = editor.document();
+        let checklist = &doc.paragraphs[0];
+        let item = &checklist.entries[0][0];
+        assert_eq!(item.content[0].text, "Hello ");
+        assert_eq!(item.content[1].text, "World dear");
+    }
+
+    #[test]
+    fn insert_char_on_reveal_end_marker_in_checklist_with_nested_bold_span_appends_to_span() {
+        let mut editor = DocumentEditor::new(document_with_checklist_nested_bold_span());
+        editor.set_reveal_codes(true);
+
+        while editor.move_right() {}
+        while !matches!(
+            editor.cursor_pointer().segment_kind,
+            SegmentKind::RevealEnd(_)
+        ) {
+            assert!(editor.move_left());
+        }
+
+        insert_text(&mut editor, " dear");
+
+        let doc = editor.document();
+        let checklist = &doc.paragraphs[0];
+        let item = &checklist.entries[0][0];
+        assert_eq!(item.content[0].text, "Hello ");
+        assert_eq!(item.content[1].children[0].text, "World dear");
     }
 
     #[test]
