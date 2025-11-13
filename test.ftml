@@ -5,7 +5,7 @@
 <ul>
   <li><input type="checkbox" checked /> Jumping by word</li>
   <li>
-    <input type="checkbox" checked /> Delete by word (Ctrl-Backspace, Ctrl-Delete, Ctrl-W) alskjhdkasjhd as
+    <input type="checkbox" checked /> Delete by word (Ctrl-Backspace, Ctrl-Delete, Ctrl-W)
   </li>
   <li>
     <input type="checkbox" checked /> Fix changing paragraph types for list paragraphs (to ensure we're not
@@ -55,11 +55,10 @@
   <li>
     <input type="checkbox" /> Introduce mode which shows paragraph and inline style tags (in two
     different colors) as part of the editor--much like WordPerfect back in the
-    day, where it was called "**Reveal Codes**" (reachable using the keyboard
-    via Alt-F3 or F11) and based off a splitscreen view. I _think_ we can make
-    this happen with a direct inline view: Paragraph styles on their own line,
-    but indented correctly; inline styles directly in line with the rest of the
-    content, but with colorful `[Bold>`tags with user-friendly names`&lt;Bold]`
+    day, where it was called "<b>Reveal Codes</b>" (reachable using the keyboard via Alt-F3 or F11) and based off a
+    splitscreen view. I <i>think</i> we can make this happen with a direct inline view: Paragraph styles on
+    their own line, but indented correctly; inline styles directly in line with
+    the rest of the content, but with colorful <code>[Bold></code>tags with user-friendly names<code>&lt;Bold]</code>...
   </li>
   <li><input type="checkbox" /> Implement mouse scrolling</li>
   <li>

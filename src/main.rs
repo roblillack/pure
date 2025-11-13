@@ -1,4 +1,5 @@
 use std::{
+    cmp::Ordering,
     env, fs, io,
     path::{Path, PathBuf},
     time::{Duration, Instant},
@@ -21,15 +22,17 @@ use ratatui::{
         ScrollbarOrientation, ScrollbarState, Wrap,
     },
 };
-use tdoc::{markdown, Document, ParagraphType, parse, writer::Writer};
+use tdoc::{Document, InlineStyle, ParagraphType, markdown, parse, writer::Writer};
 
 mod editor;
 mod render;
 
 use editor::{CursorPointer, DocumentEditor};
-use render::{CursorVisualPosition, RenderResult, render_document};
+use render::{CursorVisualPosition, RenderResult, RenderSentinels, render_document};
 
-const SENTINEL: char = '\u{F8FF}';
+const CURSOR_SENTINEL: char = '\u{F8FF}';
+const SELECTION_START_SENTINEL: char = '\u{F8FE}';
+const SELECTION_END_SENTINEL: char = '\u{F8FD}';
 const STATUS_TIMEOUT: Duration = Duration::from_secs(4);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -141,6 +144,7 @@ fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut A
 enum MenuAction {
     SetParagraphType(ParagraphType),
     SetChecklistItemChecked(bool),
+    ApplyInlineStyle(InlineStyle),
 }
 
 #[derive(Clone, Copy)]
@@ -299,7 +303,10 @@ impl ContextMenuState {
     }
 }
 
-fn build_context_menu_entries(checklist_state: Option<bool>) -> Vec<MenuEntry> {
+fn build_context_menu_entries(
+    checklist_state: Option<bool>,
+    has_selection: bool,
+) -> Vec<MenuEntry> {
     let mut entries = Vec::new();
 
     if let Some(is_checked) = checklist_state {
@@ -315,11 +322,11 @@ fn build_context_menu_entries(checklist_state: Option<bool>) -> Vec<MenuEntry> {
         entries.push(MenuEntry::Separator);
     }
 
-    entries.extend(default_context_menu_entries());
+    entries.extend(default_context_menu_entries(has_selection));
     entries
 }
 
-fn default_context_menu_entries() -> Vec<MenuEntry> {
+fn default_context_menu_entries(has_selection: bool) -> Vec<MenuEntry> {
     vec![
         MenuEntry::Section("Paragraph type"),
         MenuEntry::Item(MenuItem::enabled_with_shortcut(
@@ -369,38 +376,73 @@ fn default_context_menu_entries() -> Vec<MenuEntry> {
         )),
         MenuEntry::Separator,
         MenuEntry::Section("Inline style"),
-        MenuEntry::Item(MenuItem::disabled_with_shortcut(
-            "Bold",
-            MenuShortcut::new('b'),
-        )),
-        MenuEntry::Item(MenuItem::disabled_with_shortcut(
-            "Italic",
-            MenuShortcut::new('i'),
-        )),
-        MenuEntry::Item(MenuItem::disabled_with_shortcut(
-            "Underline",
-            MenuShortcut::new('u'),
-        )),
-        MenuEntry::Item(MenuItem::disabled_with_shortcut(
-            "Code",
-            MenuShortcut::with_shift('C'),
-        )),
-        MenuEntry::Item(MenuItem::disabled_with_shortcut(
-            "Highlight",
-            MenuShortcut::with_shift('H'),
-        )),
-        MenuEntry::Item(MenuItem::disabled_with_shortcut(
-            "Strikethrough",
-            MenuShortcut::with_shift('X'),
-        )),
+        MenuEntry::Item(if has_selection {
+            MenuItem::enabled_with_shortcut(
+                "Bold",
+                MenuAction::ApplyInlineStyle(InlineStyle::Bold),
+                MenuShortcut::new('b'),
+            )
+        } else {
+            MenuItem::disabled_with_shortcut("Bold", MenuShortcut::new('b'))
+        }),
+        MenuEntry::Item(if has_selection {
+            MenuItem::enabled_with_shortcut(
+                "Italic",
+                MenuAction::ApplyInlineStyle(InlineStyle::Italic),
+                MenuShortcut::new('i'),
+            )
+        } else {
+            MenuItem::disabled_with_shortcut("Italic", MenuShortcut::new('i'))
+        }),
+        MenuEntry::Item(if has_selection {
+            MenuItem::enabled_with_shortcut(
+                "Underline",
+                MenuAction::ApplyInlineStyle(InlineStyle::Underline),
+                MenuShortcut::new('u'),
+            )
+        } else {
+            MenuItem::disabled_with_shortcut("Underline", MenuShortcut::new('u'))
+        }),
+        MenuEntry::Item(if has_selection {
+            MenuItem::enabled_with_shortcut(
+                "Code",
+                MenuAction::ApplyInlineStyle(InlineStyle::Code),
+                MenuShortcut::with_shift('C'),
+            )
+        } else {
+            MenuItem::disabled_with_shortcut("Code", MenuShortcut::with_shift('C'))
+        }),
+        MenuEntry::Item(if has_selection {
+            MenuItem::enabled_with_shortcut(
+                "Highlight",
+                MenuAction::ApplyInlineStyle(InlineStyle::Highlight),
+                MenuShortcut::with_shift('H'),
+            )
+        } else {
+            MenuItem::disabled_with_shortcut("Highlight", MenuShortcut::with_shift('H'))
+        }),
+        MenuEntry::Item(if has_selection {
+            MenuItem::enabled_with_shortcut(
+                "Strikethrough",
+                MenuAction::ApplyInlineStyle(InlineStyle::Strike),
+                MenuShortcut::with_shift('X'),
+            )
+        } else {
+            MenuItem::disabled_with_shortcut("Strikethrough", MenuShortcut::with_shift('X'))
+        }),
         MenuEntry::Item(MenuItem::disabled_with_shortcut(
             "Edit Link...",
             MenuShortcut::new('k'),
         )),
-        MenuEntry::Item(MenuItem::disabled_with_shortcut(
-            "Clear Formatting",
-            MenuShortcut::new('\\'),
-        )),
+        MenuEntry::Item(if has_selection {
+            MenuItem::enabled_with_shortcut(
+                "Clear Formatting",
+                MenuAction::ApplyInlineStyle(InlineStyle::None),
+                MenuShortcut::new('\\'),
+            )
+        } else {
+            MenuItem::disabled_with_shortcut("Clear Formatting", MenuShortcut::new('\\'))
+        }),
         MenuEntry::Separator,
         MenuEntry::Section("Copy & paste"),
         MenuEntry::Item(MenuItem::disabled_with_shortcut(
@@ -438,6 +480,7 @@ struct App {
     visual_positions: Vec<CursorDisplay>,
     last_cursor_visual: Option<CursorVisualPosition>,
     preferred_column: Option<u16>,
+    selection_anchor: Option<CursorPointer>,
     context_menu: Option<ContextMenuState>,
 }
 
@@ -463,12 +506,57 @@ impl App {
             visual_positions: Vec::new(),
             last_cursor_visual: None,
             preferred_column: None,
+            selection_anchor: None,
             context_menu: None,
         }
     }
 
     fn should_quit(&self) -> bool {
         self.should_quit
+    }
+
+    fn prepare_selection(&mut self, extend: bool) {
+        if extend {
+            if self.selection_anchor.is_none() {
+                self.selection_anchor = Some(self.editor.cursor_pointer());
+            }
+        } else {
+            self.selection_anchor = None;
+        }
+    }
+
+    fn current_selection(&mut self) -> Option<(CursorPointer, CursorPointer)> {
+        let Some(anchor) = self.selection_anchor.clone() else {
+            return None;
+        };
+        let focus = self.editor.cursor_pointer();
+        match self.editor.compare_pointers(&anchor, &focus) {
+            Some(Ordering::Less) => Some((anchor, focus)),
+            Some(Ordering::Equal) => None,
+            Some(Ordering::Greater) => Some((focus, anchor)),
+            None => {
+                self.selection_anchor = None;
+                None
+            }
+        }
+    }
+
+    fn apply_inline_style_action(&mut self, style: InlineStyle) -> bool {
+        let Some(selection) = self.current_selection() else {
+            return false;
+        };
+        if self
+            .editor
+            .apply_inline_style_to_selection(&selection, style)
+        {
+            self.mark_dirty();
+            self.preferred_column = None;
+            self.selection_anchor = None;
+            let _ = self.editor.move_to_pointer(&selection.1);
+            true
+        } else {
+            false
+        }
     }
 
     fn draw(&mut self, frame: &mut Frame) {
@@ -671,7 +759,9 @@ impl App {
     }
 
     fn open_context_menu(&mut self) {
-        let entries = build_context_menu_entries(self.editor.current_checklist_item_state());
+        let has_selection = self.current_selection().is_some();
+        let entries =
+            build_context_menu_entries(self.editor.current_checklist_item_state(), has_selection);
         self.context_menu = Some(ContextMenuState::new(entries));
     }
 
@@ -748,6 +838,10 @@ impl App {
                 if self.editor.set_current_checklist_item_checked(checked) {
                     self.mark_dirty();
                 }
+                true
+            }
+            MenuAction::ApplyInlineStyle(style) => {
+                self.apply_inline_style_action(style);
                 true
             }
         }
@@ -996,9 +1090,24 @@ impl App {
         self.editor.insert_paragraph_break()
     }
 
-    fn render_document(&self, width: usize) -> RenderResult {
-        let (clone, markers, _) = self.editor.clone_with_markers(SENTINEL);
-        render_document(&clone, width, &markers, SENTINEL)
+    fn render_document(&mut self, width: usize) -> RenderResult {
+        let selection = self.current_selection();
+        let (clone, markers, _) = self.editor.clone_with_markers(
+            CURSOR_SENTINEL,
+            selection.clone(),
+            SELECTION_START_SENTINEL,
+            SELECTION_END_SENTINEL,
+        );
+        render_document(
+            &clone,
+            width,
+            &markers,
+            RenderSentinels {
+                cursor: CURSOR_SENTINEL,
+                selection_start: SELECTION_START_SENTINEL,
+                selection_end: SELECTION_END_SENTINEL,
+            },
+        )
     }
 
     fn handle_event(&mut self, event: Event) -> Result<()> {
@@ -1036,33 +1145,72 @@ impl App {
                 (KeyCode::Char('c'), m) if m.contains(KeyModifiers::CONTROL) => {
                     self.should_quit = true;
                 }
+                (KeyCode::Left, m) if m.contains(KeyModifiers::SHIFT | KeyModifiers::CONTROL) => {
+                    self.prepare_selection(true);
+                    if self.editor.move_word_left() {
+                        self.preferred_column = None;
+                    }
+                }
+                (KeyCode::Right, m) if m.contains(KeyModifiers::SHIFT | KeyModifiers::CONTROL) => {
+                    self.prepare_selection(true);
+                    if self.editor.move_word_right() {
+                        self.preferred_column = None;
+                    }
+                }
+                (KeyCode::Left, m) if m.contains(KeyModifiers::SHIFT) => {
+                    self.prepare_selection(true);
+                    if self.editor.move_left() {
+                        self.preferred_column = None;
+                    }
+                }
+                (KeyCode::Right, m) if m.contains(KeyModifiers::SHIFT) => {
+                    self.prepare_selection(true);
+                    if self.editor.move_right() {
+                        self.preferred_column = None;
+                    }
+                }
                 (KeyCode::Left, m) if m.contains(KeyModifiers::CONTROL) => {
+                    self.prepare_selection(false);
                     if self.editor.move_word_left() {
                         self.preferred_column = None;
                     }
                 }
                 (KeyCode::Right, m) if m.contains(KeyModifiers::CONTROL) => {
+                    self.prepare_selection(false);
                     if self.editor.move_word_right() {
                         self.preferred_column = None;
                     }
                 }
                 (KeyCode::Left, _) => {
+                    self.prepare_selection(false);
                     if self.editor.move_left() {
                         self.preferred_column = None;
                     }
                 }
                 (KeyCode::Right, _) => {
+                    self.prepare_selection(false);
                     if self.editor.move_right() {
                         self.preferred_column = None;
                     }
                 }
+                (KeyCode::Home, m) if m.contains(KeyModifiers::SHIFT) => {
+                    self.prepare_selection(true);
+                    self.move_to_visual_line_start();
+                }
+                (KeyCode::End, m) if m.contains(KeyModifiers::SHIFT) => {
+                    self.prepare_selection(true);
+                    self.move_to_visual_line_end();
+                }
                 (KeyCode::Home, _) => {
+                    self.prepare_selection(false);
                     self.move_to_visual_line_start();
                 }
                 (KeyCode::End, _) => {
+                    self.prepare_selection(false);
                     self.move_to_visual_line_end();
                 }
                 (KeyCode::Char('a'), m) if m.contains(KeyModifiers::CONTROL) => {
+                    self.prepare_selection(false);
                     self.move_to_visual_line_start();
                 }
                 (KeyCode::Char('j'), m) if m.contains(KeyModifiers::CONTROL) => {
@@ -1072,12 +1220,14 @@ impl App {
                     }
                 }
                 (KeyCode::Char('p'), m) if m.contains(KeyModifiers::CONTROL) => {
+                    self.prepare_selection(false);
                     if self.editor.insert_paragraph_break_as_sibling() {
                         self.mark_dirty();
                         self.preferred_column = None;
                     }
                 }
                 (KeyCode::Char('e'), m) if m.contains(KeyModifiers::CONTROL) => {
+                    self.prepare_selection(false);
                     self.move_to_visual_line_end();
                 }
                 (KeyCode::Char('w'), m) if m.contains(KeyModifiers::CONTROL) => {
@@ -1141,22 +1291,48 @@ impl App {
                         self.preferred_column = None;
                     }
                 }
+                (KeyCode::Up, m) if m.contains(KeyModifiers::SHIFT) => {
+                    self.prepare_selection(true);
+                    self.move_cursor_vertical(-1);
+                }
                 (KeyCode::Up, m) if m.contains(KeyModifiers::CONTROL) => {
+                    self.prepare_selection(false);
                     self.scroll_top = self.scroll_top.saturating_sub(self.last_view_height);
                 }
                 (KeyCode::Up, _) => {
+                    self.prepare_selection(false);
                     self.move_cursor_vertical(-1);
                 }
+                (KeyCode::Down, m) if m.contains(KeyModifiers::SHIFT) => {
+                    self.prepare_selection(true);
+                    self.move_cursor_vertical(1);
+                }
                 (KeyCode::Down, m) if m.contains(KeyModifiers::CONTROL) => {
+                    self.prepare_selection(false);
                     self.scroll_top += self.last_view_height;
                 }
                 (KeyCode::Down, _) => {
+                    self.prepare_selection(false);
                     self.move_cursor_vertical(1);
                 }
+                (KeyCode::PageUp, m) if m.contains(KeyModifiers::SHIFT) => {
+                    self.prepare_selection(true);
+                    let jump = self.last_view_height.max(1);
+                    self.move_cursor_vertical(-(jump as i32));
+                    self.scroll_top = self.scroll_top.saturating_sub(jump);
+                }
+                (KeyCode::PageDown, m) if m.contains(KeyModifiers::SHIFT) => {
+                    self.prepare_selection(true);
+                    let jump = self.last_view_height.max(1);
+                    self.move_cursor_vertical(jump as i32);
+                    self.scroll_top += jump;
+                }
                 (KeyCode::PageUp, _) => {
+                    self.prepare_selection(false);
                     self.scroll_top = self.scroll_top.saturating_sub(self.last_view_height.max(1));
                 }
                 (KeyCode::PageDown, _) => {
+                    self.prepare_selection(false);
                     self.scroll_top += self.last_view_height.max(1);
                 }
                 _ => {}

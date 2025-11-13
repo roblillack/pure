@@ -1,5 +1,5 @@
 const MARKER_PREFIX: &str = "1337;M";
-use std::mem;
+use std::{cmp::Ordering, mem};
 use tdoc::{Document, InlineStyle, Paragraph, ParagraphType, Span};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -138,6 +138,12 @@ impl SegmentRef {
     fn matches_pointer(&self, pointer: &CursorPointer) -> bool {
         self.paragraph_path == pointer.paragraph_path && self.span_path == pointer.span_path
     }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct PointerKey {
+    segment_index: usize,
+    offset: usize,
 }
 
 #[derive(Clone)]
@@ -666,12 +672,28 @@ impl DocumentEditor {
         self.insert_paragraph_break_internal(true)
     }
 
-    pub fn clone_with_markers(&self, sentinel: char) -> (Document, Vec<MarkerRef>, bool) {
+    pub fn clone_with_markers(
+        &self,
+        cursor_sentinel: char,
+        selection: Option<(CursorPointer, CursorPointer)>,
+        selection_start_sentinel: char,
+        selection_end_sentinel: char,
+    ) -> (Document, Vec<MarkerRef>, bool) {
         let mut clone = self.document.clone();
         let mut markers = Vec::new();
         let mut inserted_cursor = false;
 
-        for segment in &self.segments {
+        let selection_bounds = selection.and_then(|(start_ptr, end_ptr)| {
+            let start_key = self.pointer_key(&start_ptr)?;
+            let end_key = self.pointer_key(&end_ptr)?;
+            if start_key <= end_key {
+                Some((start_key, end_key))
+            } else {
+                Some((end_key, start_key))
+            }
+        });
+
+        for (segment_index, segment) in self.segments.iter().enumerate() {
             let Some(paragraph) = paragraph_mut(&mut clone, &segment.paragraph_path) else {
                 continue;
             };
@@ -694,8 +716,21 @@ impl DocumentEditor {
                     },
                 });
 
+                if let Some((start_key, end_key)) = selection_bounds {
+                    let current_key = PointerKey {
+                        segment_index,
+                        offset,
+                    };
+                    if current_key == start_key {
+                        rebuilt.push(selection_start_sentinel);
+                    }
+                    if current_key == end_key {
+                        rebuilt.push(selection_end_sentinel);
+                    }
+                }
+
                 if segment.matches(&self.cursor) && offset == self.cursor.offset {
-                    rebuilt.push(sentinel);
+                    rebuilt.push(cursor_sentinel);
                     inserted_cursor = true;
                 }
 
@@ -708,6 +743,125 @@ impl DocumentEditor {
         }
 
         (clone, markers, inserted_cursor)
+    }
+
+    pub fn apply_inline_style_to_selection(
+        &mut self,
+        selection: &(CursorPointer, CursorPointer),
+        style: InlineStyle,
+    ) -> bool {
+        if self.segments.is_empty() {
+            return false;
+        }
+
+        let mut start = selection.0.clone();
+        let mut end = selection.1.clone();
+
+        if matches!(self.compare_pointers(&start, &end), Some(Ordering::Greater)) {
+            mem::swap(&mut start, &mut end);
+        }
+
+        let start_key = match self.pointer_key(&start) {
+            Some(key) => key,
+            None => return false,
+        };
+
+        let end_key = match self.pointer_key(&end) {
+            Some(key) => key,
+            None => return false,
+        };
+
+        if start_key > end_key {
+            return false;
+        }
+
+        let segments_snapshot = self.segments.clone();
+        let mut changed = false;
+        let mut touched_paths: Vec<ParagraphPath> = Vec::new();
+
+        for segment_index in (start_key.segment_index..=end_key.segment_index).rev() {
+            let Some(segment) = segments_snapshot.get(segment_index) else {
+                continue;
+            };
+            let len = segment.len;
+            if len == 0 {
+                continue;
+            }
+
+            let seg_start = if segment_index == start_key.segment_index {
+                start_key.offset.min(len)
+            } else {
+                0
+            };
+            let seg_end = if segment_index == end_key.segment_index {
+                end_key.offset.min(len)
+            } else {
+                len
+            };
+
+            if seg_start >= seg_end {
+                continue;
+            }
+
+            if self.apply_inline_style_to_segment(segment, seg_start, seg_end, style) {
+                changed = true;
+                if !touched_paths
+                    .iter()
+                    .any(|path| *path == segment.paragraph_path)
+                {
+                    touched_paths.push(segment.paragraph_path.clone());
+                }
+            }
+        }
+
+        if changed {
+            for path in touched_paths {
+                if let Some(paragraph) = paragraph_mut(&mut self.document, &path) {
+                    prune_and_merge_spans(&mut paragraph.content);
+                }
+            }
+            self.rebuild_segments();
+        }
+
+        changed
+    }
+
+    fn pointer_key(&self, pointer: &CursorPointer) -> Option<PointerKey> {
+        for (index, segment) in self.segments.iter().enumerate() {
+            if segment.matches_pointer(pointer) {
+                let offset = pointer.offset.min(segment.len);
+                return Some(PointerKey {
+                    segment_index: index,
+                    offset,
+                });
+            }
+        }
+        None
+    }
+
+    fn apply_inline_style_to_segment(
+        &mut self,
+        segment: &SegmentRef,
+        start: usize,
+        end: usize,
+        style: InlineStyle,
+    ) -> bool {
+        let Some(paragraph) = paragraph_mut(&mut self.document, &segment.paragraph_path) else {
+            return false;
+        };
+        apply_style_to_span_path(
+            &mut paragraph.content,
+            segment.span_path.indices(),
+            start,
+            end,
+            style,
+        )
+    }
+
+    pub fn compare_pointers(&self, a: &CursorPointer, b: &CursorPointer) -> Option<Ordering> {
+        let key_a = self.pointer_key(a)?;
+        let key_b = self.pointer_key(b)?;
+        Some(key_a.cmp(&key_b))
     }
 
     fn shift_to_previous_segment(&mut self) -> bool {
@@ -1826,6 +1980,118 @@ fn collect_span_rec(
     }
 }
 
+fn apply_style_to_span_path(
+    spans: &mut Vec<Span>,
+    path: &[usize],
+    start: usize,
+    end: usize,
+    style: InlineStyle,
+) -> bool {
+    if path.is_empty() {
+        return false;
+    }
+    let idx = path[0];
+    if idx >= spans.len() {
+        return false;
+    }
+    if path.len() == 1 {
+        apply_style_to_leaf_span(spans, idx, start, end, style)
+    } else {
+        let span = &mut spans[idx];
+        apply_style_to_span_path(&mut span.children, &path[1..], start, end, style)
+    }
+}
+
+fn apply_style_to_leaf_span(
+    spans: &mut Vec<Span>,
+    idx: usize,
+    start: usize,
+    end: usize,
+    style: InlineStyle,
+) -> bool {
+    if idx >= spans.len() {
+        return false;
+    }
+    let original = spans[idx].clone();
+    let len = original.text.chars().count();
+    if len == 0 {
+        return false;
+    }
+    let clamped_end = end.min(len);
+    let clamped_start = start.min(clamped_end);
+    if clamped_start >= clamped_end {
+        return false;
+    }
+
+    let (before_end, right_text) = split_text(&original.text, clamped_end);
+    let (left_text, mid_text) = split_text(&before_end, clamped_start);
+
+    if mid_text.is_empty() {
+        return false;
+    }
+
+    let mut replacements = Vec::new();
+
+    if !left_text.is_empty() {
+        let mut left_span = original.clone();
+        left_span.text = left_text;
+        left_span.children.clear();
+        replacements.push(left_span);
+    }
+
+    let mut mid_span = original.clone();
+    mid_span.text = mid_text;
+    mid_span.children.clear();
+    mid_span.style = style;
+    if mid_span.style != InlineStyle::Link {
+        mid_span.link_target = None;
+    }
+    replacements.push(mid_span);
+
+    if !right_text.is_empty() {
+        let mut right_span = original.clone();
+        right_span.text = right_text;
+        right_span.children.clear();
+        replacements.push(right_span);
+    }
+
+    spans.remove(idx);
+    for (offset, span) in replacements.into_iter().enumerate() {
+        spans.insert(idx + offset, span);
+    }
+
+    true
+}
+
+fn prune_and_merge_spans(spans: &mut Vec<Span>) {
+    let mut idx = 0;
+    while idx < spans.len() {
+        prune_and_merge_spans(&mut spans[idx].children);
+        if spans[idx].text.is_empty() && spans[idx].children.is_empty() {
+            spans.remove(idx);
+        } else {
+            idx += 1;
+        }
+    }
+
+    let mut i = 0;
+    while i + 1 < spans.len() {
+        if can_merge_spans(&spans[i], &spans[i + 1]) {
+            let right = spans.remove(i + 1);
+            spans[i].text.push_str(&right.text);
+        } else {
+            i += 1;
+        }
+    }
+}
+
+fn can_merge_spans(left: &Span, right: &Span) -> bool {
+    left.style == right.style
+        && left.link_target == right.link_target
+        && left.children.is_empty()
+        && right.children.is_empty()
+}
+
 fn split_paragraph_break(
     document: &mut Document,
     pointer: &CursorPointer,
@@ -2493,6 +2759,81 @@ mod tests {
         assert_eq!(pointer.paragraph_path, expected_first.paragraph_path);
         assert_eq!(pointer.span_path, expected_first.span_path);
         assert_eq!(pointer.offset, 0);
+    }
+
+    #[test]
+    fn apply_inline_style_splits_span() {
+        let document = Document::new().with_paragraphs(vec![text_paragraph("hello world")]);
+        let mut editor = DocumentEditor::new(document);
+
+        let mut start = pointer_to_root_span(0);
+        start.offset = 0;
+        let mut end = pointer_to_root_span(0);
+        end.offset = 5;
+
+        assert!(
+            editor
+                .apply_inline_style_to_selection(&(start.clone(), end.clone()), InlineStyle::Bold)
+        );
+
+        let doc = editor.document();
+        let paragraph = &doc.paragraphs[0];
+        assert_eq!(paragraph.content.len(), 2);
+        assert_eq!(paragraph.content[0].text, "hello");
+        assert_eq!(paragraph.content[0].style, InlineStyle::Bold);
+        assert_eq!(paragraph.content[1].text, " world");
+        assert_eq!(paragraph.content[1].style, InlineStyle::None);
+    }
+
+    #[test]
+    fn apply_inline_style_across_segments() {
+        let paragraph = Paragraph::new_text()
+            .with_content(vec![Span::new_text("hello "), Span::new_text("world")]);
+        let document = Document::new().with_paragraphs(vec![paragraph]);
+        let mut editor = DocumentEditor::new(document);
+
+        let mut start = pointer_to_root_span(0);
+        start.span_path = SpanPath::new(vec![0]);
+        start.offset = 3;
+
+        let mut end = pointer_to_root_span(0);
+        end.span_path = SpanPath::new(vec![1]);
+        end.offset = 2;
+
+        assert!(editor.apply_inline_style_to_selection(&(start, end), InlineStyle::Underline));
+
+        let doc = editor.document();
+        let spans = &doc.paragraphs[0].content;
+        assert_eq!(spans.len(), 3);
+        assert_eq!(spans[0].text, "hel");
+        assert_eq!(spans[0].style, InlineStyle::None);
+        assert_eq!(spans[1].text, "lo wo");
+        assert_eq!(spans[1].style, InlineStyle::Underline);
+        assert_eq!(spans[2].text, "rld");
+        assert_eq!(spans[2].style, InlineStyle::None);
+    }
+
+    #[test]
+    fn clear_inline_style_resets_to_plain() {
+        let document = Document::new().with_paragraphs(vec![text_paragraph("styled text")]);
+        let mut editor = DocumentEditor::new(document);
+
+        let mut start = pointer_to_root_span(0);
+        start.offset = 0;
+        let mut end = pointer_to_root_span(0);
+        end.offset = 6;
+
+        assert!(
+            editor
+                .apply_inline_style_to_selection(&(start.clone(), end.clone()), InlineStyle::Code)
+        );
+        assert!(editor.apply_inline_style_to_selection(&(start, end), InlineStyle::None));
+
+        let doc = editor.document();
+        let spans = &doc.paragraphs[0].content;
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].text, "styled text");
+        assert_eq!(spans[0].style, InlineStyle::None);
     }
 
     #[test]
