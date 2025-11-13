@@ -39,6 +39,7 @@ pub fn render_document(
 
 struct Renderer<'a> {
     wrap_width: usize,
+    wrap_limit: usize,
     sentinel: char,
     line_metrics: Vec<LineMetric>,
     marker_pending: HashMap<usize, PendingPosition>,
@@ -50,8 +51,10 @@ struct Renderer<'a> {
 
 impl<'a> Renderer<'a> {
     fn new(wrap_width: usize, sentinel: char, markers: &'a [MarkerRef]) -> Self {
+        let wrap_limit = if wrap_width > 1 { wrap_width - 1 } else { 1 };
         Self {
             wrap_width,
+            wrap_limit,
             sentinel,
             line_metrics: Vec::new(),
             marker_pending: HashMap::new(),
@@ -101,7 +104,7 @@ impl<'a> Renderer<'a> {
             &fragments,
             first_prefix,
             continuation_prefix,
-            self.wrap_width,
+            self.wrap_limit,
         );
         self.consume_lines(lines);
     }
@@ -112,7 +115,7 @@ impl<'a> Renderer<'a> {
             collect_fragments(span, Style::default(), self.sentinel, &mut fragments);
         }
         let fragments = trim_layout_fragments(fragments);
-        let mut lines = wrap_fragments(&fragments, prefix, prefix, self.wrap_width);
+        let mut lines = wrap_fragments(&fragments, prefix, prefix, self.wrap_limit);
 
         match level {
             HeaderLevel::One => {
@@ -688,17 +691,38 @@ fn wrap_fragments(
                     pending_whitespace.push(token.clone());
                 }
                 FragmentKind::Word => {
-                    let whitespace_width: usize =
-                        pending_whitespace.iter().map(|item| item.width).sum();
-                    if builder.current_width() > builder.prefix_width
-                        && builder.current_width() + whitespace_width + token.width > width
-                    {
-                        builder.consume_pending(&mut pending_whitespace);
-                        outputs.push(builder.build_line());
-                        builder = LineBuilder::new(continuation_prefix.to_string(), width);
-                    }
+                    let mut token = token.clone();
+                    loop {
+                        let whitespace_width: usize =
+                            pending_whitespace.iter().map(|item| item.width).sum();
+                        if builder.current_width() > builder.prefix_width
+                            && builder.current_width() + whitespace_width + token.width > width
+                        {
+                            builder.consume_pending(&mut pending_whitespace);
+                            outputs.push(builder.build_line());
+                            builder = LineBuilder::new(continuation_prefix.to_string(), width);
+                            continue;
+                        }
 
-                    builder.append_with_pending(token.clone(), &mut pending_whitespace);
+                        let line_start = builder.current_width() == builder.prefix_width;
+                        let available = width.saturating_sub(builder.prefix_width);
+                        if line_start && token.width > available {
+                            let split_limit = available.max(1);
+                            let (head, tail_opt) = split_fragment(token, split_limit);
+                            builder.append_with_pending(head, &mut pending_whitespace);
+                            outputs.push(builder.build_line());
+                            builder = LineBuilder::new(continuation_prefix.to_string(), width);
+                            if let Some(tail) = tail_opt {
+                                token = tail;
+                                continue;
+                            } else {
+                                break;
+                            }
+                        }
+
+                        builder.append_with_pending(token, &mut pending_whitespace);
+                        break;
+                    }
                 }
             },
         }
@@ -707,6 +731,79 @@ fn wrap_fragments(
     builder.consume_pending(&mut pending_whitespace);
     outputs.push(builder.build_line());
     outputs
+}
+
+fn split_fragment(fragment: Fragment, limit: usize) -> (Fragment, Option<Fragment>) {
+    if fragment.width <= limit {
+        return (fragment, None);
+    }
+
+    let mut head_text = String::new();
+    let mut head_width = 0usize;
+    let mut split_byte_index = 0usize;
+    let mut chars = fragment.text.chars().peekable();
+
+    while let Some(ch) = chars.peek().copied() {
+        let ch_width = UnicodeWidthChar::width(ch).unwrap_or(0);
+        if head_width + ch_width > limit && head_width > 0 {
+            break;
+        }
+        head_text.push(ch);
+        head_width += ch_width;
+        chars.next();
+        split_byte_index += ch.len_utf8();
+        if head_width >= limit {
+            break;
+        }
+    }
+
+    if head_width == 0 {
+        if let Some(ch) = fragment.text.chars().next() {
+            let ch_width = UnicodeWidthChar::width(ch).unwrap_or(0);
+            head_text.push(ch);
+            head_width += ch_width;
+            split_byte_index = ch.len_utf8();
+        }
+    }
+
+    if head_width >= fragment.width || split_byte_index >= fragment.text.len() {
+        return (fragment, None);
+    }
+
+    let tail_text = fragment.text[split_byte_index..].to_string();
+    let tail_width = fragment.width.saturating_sub(head_width);
+
+    let mut head_events = Vec::new();
+    let mut tail_events = Vec::new();
+    for mut event in fragment.events {
+        if event.offset < head_width {
+            head_events.push(event);
+        } else {
+            event.offset = event.offset.saturating_sub(head_width);
+            tail_events.push(event);
+        }
+    }
+
+    let head_fragment = Fragment {
+        text: head_text,
+        style: fragment.style,
+        kind: fragment.kind,
+        width: head_width,
+        events: head_events,
+    };
+    let tail_fragment = if tail_text.is_empty() && tail_events.is_empty() {
+        None
+    } else {
+        Some(Fragment {
+            text: tail_text,
+            style: fragment.style,
+            kind: fragment.kind,
+            width: tail_width,
+            events: tail_events,
+        })
+    };
+
+    (head_fragment, tail_fragment)
 }
 
 struct LineBuilder {
@@ -948,6 +1045,47 @@ mod tests {
                 .skip(1)
                 .any(|columns| columns.first() == Some(&(0, 0))),
             "expected at least one wrapped line with column 0 start"
+        );
+    }
+
+    #[test]
+    fn cursor_wraps_to_next_line_on_exact_width_boundaries() {
+        let input = "<p>abcdefghij z</p>";
+        let document = parse(Cursor::new(input)).expect("failed to parse document");
+        let mut editor = DocumentEditor::new(document);
+        editor.ensure_cursor_selectable();
+        for _ in 0..10 {
+            assert!(
+                editor.move_right(),
+                "failed to advance cursor to wrap boundary"
+            );
+        }
+        let (doc_with_markers, markers, inserted_cursor) = editor.clone_with_markers(SENTINEL);
+        assert!(
+            inserted_cursor,
+            "cursor sentinel should be inserted at wrap boundary"
+        );
+
+        let rendered = render_document(&doc_with_markers, 10, &markers, SENTINEL);
+        let cursor = rendered.cursor.expect("cursor position missing");
+        let lines = lines_to_strings(&rendered.lines);
+
+        assert_eq!(lines, vec!["abcdefghi", "j z"]);
+        assert_eq!(cursor.line, 1);
+        assert_eq!(cursor.column, 1);
+        assert_eq!(cursor.content_line, 1);
+        assert_eq!(cursor.content_column, 1);
+
+        let boundary_position = rendered
+            .cursor_map
+            .iter()
+            .find(|(pointer, _)| pointer.offset == 10)
+            .map(|(_, position)| position)
+            .expect("missing cursor map entry for wrap boundary");
+        assert_eq!(
+            (boundary_position.line, boundary_position.column),
+            (1, 1),
+            "visual position after wrapping should provide a dedicated cell past the wrapped word"
         );
     }
 }
