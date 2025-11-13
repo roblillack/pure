@@ -1,4 +1,5 @@
 const MARKER_PREFIX: &str = "1337;M";
+use std::mem;
 use tdoc::{Document, InlineStyle, Paragraph, ParagraphType, Span};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -249,6 +250,46 @@ impl DocumentEditor {
 
     pub fn move_to_segment_end(&mut self) {
         self.cursor.offset = self.current_segment_len();
+    }
+
+    pub fn set_paragraph_type(&mut self, target: ParagraphType) -> bool {
+        let current_pointer = self.cursor.clone();
+        let mut replacement_pointer = None;
+
+        if is_list_type(target) {
+            if let Some(list_path) =
+                find_list_ancestor_path(&self.document, &current_pointer.paragraph_path)
+            {
+                if !update_existing_list_type(&mut self.document, &list_path, target) {
+                    return false;
+                }
+            } else {
+                match convert_paragraph_into_list(
+                    &mut self.document,
+                    &current_pointer.paragraph_path,
+                    target,
+                ) {
+                    Some(pointer) => replacement_pointer = Some(pointer),
+                    None => return false,
+                }
+            }
+        } else if !update_paragraph_type(
+            &mut self.document,
+            &current_pointer.paragraph_path,
+            target,
+        ) {
+            return false;
+        }
+
+        self.rebuild_segments();
+
+        let desired = replacement_pointer.unwrap_or(current_pointer);
+
+        if !self.move_to_pointer(&desired) {
+            self.ensure_cursor_selectable();
+        }
+
+        true
     }
 
     pub fn insert_char(&mut self, ch: char) -> bool {
@@ -644,6 +685,220 @@ fn collect_inline_labels(paragraph: &Paragraph, span_path: &SpanPath) -> Option<
     }
 
     Some(labels)
+}
+
+fn is_list_type(kind: ParagraphType) -> bool {
+    matches!(
+        kind,
+        ParagraphType::OrderedList | ParagraphType::UnorderedList | ParagraphType::Checklist
+    )
+}
+
+fn find_list_ancestor_path(document: &Document, path: &ParagraphPath) -> Option<ParagraphPath> {
+    let mut steps = path.steps().to_vec();
+    while !steps.is_empty() {
+        let candidate = ParagraphPath::from_steps(steps.clone());
+        if let Some(paragraph) = paragraph_ref(document, &candidate) {
+            if is_list_type(paragraph.paragraph_type) {
+                return Some(candidate);
+            }
+        }
+        steps.pop();
+    }
+    None
+}
+
+fn update_existing_list_type(
+    document: &mut Document,
+    path: &ParagraphPath,
+    target: ParagraphType,
+) -> bool {
+    let Some(paragraph) = paragraph_mut(document, path) else {
+        return false;
+    };
+
+    paragraph.paragraph_type = target;
+    paragraph.content.clear();
+    paragraph.checklist_item_checked = None;
+
+    match target {
+        ParagraphType::Checklist => ensure_entries_have_checklist_items(&mut paragraph.entries),
+        ParagraphType::OrderedList | ParagraphType::UnorderedList => {
+            normalize_entries_for_standard_list(&mut paragraph.entries)
+        }
+        _ => {}
+    }
+
+    if paragraph.entries.is_empty() {
+        let entry = match target {
+            ParagraphType::Checklist => vec![empty_checklist_item()],
+            ParagraphType::OrderedList | ParagraphType::UnorderedList => {
+                vec![empty_text_paragraph()]
+            }
+            _ => Vec::new(),
+        };
+        if !entry.is_empty() {
+            paragraph.entries.push(entry);
+        }
+    }
+
+    true
+}
+
+fn convert_paragraph_into_list(
+    document: &mut Document,
+    path: &ParagraphPath,
+    target: ParagraphType,
+) -> Option<CursorPointer> {
+    let paragraph = paragraph_mut(document, path)?;
+
+    let mut content = mem::take(&mut paragraph.content);
+    if content.is_empty() {
+        content.push(Span::new_text(""));
+    }
+    let mut entry = Vec::new();
+
+    match target {
+        ParagraphType::Checklist => {
+            let mut head = Paragraph::new_checklist_item(false);
+            head.content = content;
+            if head.content.is_empty() {
+                head.content.push(Span::new_text(""));
+            }
+            entry.push(head);
+        }
+        ParagraphType::OrderedList | ParagraphType::UnorderedList => {
+            let mut head = Paragraph::new_text();
+            head.content = content;
+            if head.content.is_empty() {
+                head.content.push(Span::new_text(""));
+            }
+            entry.push(head);
+        }
+        _ => return None,
+    }
+
+    let children = mem::take(&mut paragraph.children);
+    if !children.is_empty() {
+        entry.extend(children);
+    }
+
+    paragraph.paragraph_type = target;
+    paragraph.entries = vec![entry];
+    paragraph.checklist_item_checked = None;
+
+    let mut steps = path.steps().to_vec();
+    steps.push(PathStep::Entry {
+        entry_index: 0,
+        paragraph_index: 0,
+    });
+    let new_path = ParagraphPath::from_steps(steps);
+    let span_path = SpanPath::new(vec![0]);
+
+    Some(CursorPointer {
+        paragraph_path: new_path,
+        span_path,
+        offset: 0,
+    })
+}
+
+fn update_paragraph_type(
+    document: &mut Document,
+    path: &ParagraphPath,
+    target: ParagraphType,
+) -> bool {
+    let Some(paragraph) = paragraph_mut(document, path) else {
+        return false;
+    };
+
+    paragraph.paragraph_type = target;
+    paragraph.checklist_item_checked = None;
+
+    if target.is_leaf() {
+        paragraph.children.clear();
+        paragraph.entries.clear();
+    } else if target == ParagraphType::Quote {
+        paragraph.entries.clear();
+    }
+
+    if paragraph.content.is_empty() {
+        paragraph.content.push(Span::new_text(""));
+    }
+
+    true
+}
+
+fn ensure_entries_have_checklist_items(entries: &mut Vec<Vec<Paragraph>>) {
+    if entries.is_empty() {
+        entries.push(vec![empty_checklist_item()]);
+        return;
+    }
+
+    for entry in entries.iter_mut() {
+        if entry.is_empty() {
+            entry.push(empty_checklist_item());
+            continue;
+        }
+
+        if entry[0].paragraph_type == ParagraphType::ChecklistItem {
+            let first = &mut entry[0];
+            if first.content.is_empty() {
+                first.content.push(Span::new_text(""));
+            }
+            if first.checklist_item_checked.is_none() {
+                first.checklist_item_checked = Some(false);
+            }
+            first.children.clear();
+            first.entries.clear();
+            continue;
+        }
+
+        let mut head = entry.remove(0);
+        let content = mem::take(&mut head.content);
+        let mut item = Paragraph::new_checklist_item(head.checklist_item_checked.unwrap_or(false));
+        if content.is_empty() {
+            item.content.push(Span::new_text(""));
+        } else {
+            item.content = content;
+        }
+        entry.insert(0, item);
+
+        if !head.children.is_empty() || !head.entries.is_empty() {
+            entry.insert(1, head);
+        }
+    }
+}
+
+fn normalize_entries_for_standard_list(entries: &mut Vec<Vec<Paragraph>>) {
+    if entries.is_empty() {
+        entries.push(vec![empty_text_paragraph()]);
+        return;
+    }
+
+    for entry in entries.iter_mut() {
+        if entry.is_empty() {
+            entry.push(empty_text_paragraph());
+            continue;
+        }
+
+        if entry[0].paragraph_type == ParagraphType::ChecklistItem {
+            let first = &mut entry[0];
+            first.paragraph_type = ParagraphType::Text;
+            first.checklist_item_checked = None;
+        }
+
+        if entry[0].content.is_empty() {
+            entry[0].content.push(Span::new_text(""));
+        }
+    }
+}
+
+fn empty_text_paragraph() -> Paragraph {
+    Paragraph::new_text().with_content(vec![Span::new_text("")])
+}
+
+fn empty_checklist_item() -> Paragraph {
+    Paragraph::new_checklist_item(false).with_content(vec![Span::new_text("")])
 }
 
 fn inline_style_label(style: InlineStyle) -> Option<&'static str> {

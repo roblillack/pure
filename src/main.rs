@@ -13,12 +13,15 @@ use crossterm::{
 use ratatui::{
     Frame, Terminal,
     backend::CrosstermBackend,
-    layout::{Constraint, Direction, Layout, Position},
-    style::Style,
+    layout::{Constraint, Direction, Layout, Position, Rect},
+    style::{Color, Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{Block, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap},
+    widgets::{
+        Block, Borders, Clear, List, ListItem, ListState, Paragraph, Scrollbar,
+        ScrollbarOrientation, ScrollbarState, Wrap,
+    },
 };
-use tdoc::{Document, parse, writer::Writer};
+use tdoc::{Document, ParagraphType, parse, writer::Writer};
 
 mod editor;
 mod render;
@@ -107,6 +110,165 @@ fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut A
     Ok(())
 }
 
+#[derive(Clone, Copy)]
+enum MenuAction {
+    SetParagraphType(ParagraphType),
+}
+
+#[derive(Clone, Copy)]
+struct MenuItem {
+    label: &'static str,
+    action: Option<MenuAction>,
+}
+
+impl MenuItem {
+    const fn enabled(label: &'static str, action: MenuAction) -> Self {
+        Self {
+            label,
+            action: Some(action),
+        }
+    }
+
+    const fn disabled(label: &'static str) -> Self {
+        Self {
+            label,
+            action: None,
+        }
+    }
+
+    fn is_enabled(&self) -> bool {
+        self.action.is_some()
+    }
+}
+
+enum MenuEntry {
+    Section(&'static str),
+    Separator,
+    Item(MenuItem),
+}
+
+struct ContextMenuState {
+    entries: Vec<MenuEntry>,
+    selected_index: usize,
+}
+
+impl ContextMenuState {
+    fn new() -> Self {
+        let entries = build_context_menu_entries();
+        let selected_index = entries
+            .iter()
+            .enumerate()
+            .find(|(_, entry)| matches!(entry, MenuEntry::Item(item) if item.is_enabled()))
+            .map(|(idx, _)| idx)
+            .unwrap_or(0);
+        Self {
+            entries,
+            selected_index,
+        }
+    }
+
+    fn move_selection(&mut self, delta: i32) {
+        if self.entries.is_empty() {
+            return;
+        }
+
+        let len = self.entries.len() as i32;
+        let mut idx = self.selected_index as i32;
+
+        for _ in 0..len {
+            idx = (idx + delta).rem_euclid(len);
+            if matches!(self.entries[idx as usize], MenuEntry::Item(_)) {
+                self.selected_index = idx as usize;
+                break;
+            }
+        }
+    }
+
+    fn current_item(&self) -> Option<&MenuItem> {
+        match self.entries.get(self.selected_index) {
+            Some(MenuEntry::Item(item)) => Some(item),
+            _ => None,
+        }
+    }
+
+    fn current_action(&self) -> Option<MenuAction> {
+        self.current_item().and_then(|item| item.action)
+    }
+
+    fn entries(&self) -> &[MenuEntry] {
+        &self.entries
+    }
+
+    fn selected_index(&self) -> usize {
+        self.selected_index
+    }
+}
+
+fn build_context_menu_entries() -> Vec<MenuEntry> {
+    vec![
+        MenuEntry::Section("Paragraph type"),
+        MenuEntry::Item(MenuItem::enabled(
+            "Text",
+            MenuAction::SetParagraphType(ParagraphType::Text),
+        )),
+        MenuEntry::Item(MenuItem::enabled(
+            "Heading 1",
+            MenuAction::SetParagraphType(ParagraphType::Header1),
+        )),
+        MenuEntry::Item(MenuItem::enabled(
+            "Heading 2",
+            MenuAction::SetParagraphType(ParagraphType::Header2),
+        )),
+        MenuEntry::Item(MenuItem::enabled(
+            "Heading 3",
+            MenuAction::SetParagraphType(ParagraphType::Header3),
+        )),
+        MenuEntry::Item(MenuItem::enabled(
+            "Quote",
+            MenuAction::SetParagraphType(ParagraphType::Quote),
+        )),
+        MenuEntry::Item(MenuItem::enabled(
+            "Code",
+            MenuAction::SetParagraphType(ParagraphType::CodeBlock),
+        )),
+        MenuEntry::Item(MenuItem::enabled(
+            "Numbered List",
+            MenuAction::SetParagraphType(ParagraphType::OrderedList),
+        )),
+        MenuEntry::Item(MenuItem::enabled(
+            "Bullet List",
+            MenuAction::SetParagraphType(ParagraphType::UnorderedList),
+        )),
+        MenuEntry::Item(MenuItem::enabled(
+            "Checklist",
+            MenuAction::SetParagraphType(ParagraphType::Checklist),
+        )),
+        MenuEntry::Separator,
+        MenuEntry::Section("Inline style"),
+        MenuEntry::Item(MenuItem::disabled("Bold")),
+        MenuEntry::Item(MenuItem::disabled("Italic")),
+        MenuEntry::Item(MenuItem::disabled("Underline")),
+        MenuEntry::Item(MenuItem::disabled("Code")),
+        MenuEntry::Item(MenuItem::disabled("Highlight")),
+        MenuEntry::Item(MenuItem::disabled("Strikethrough")),
+        MenuEntry::Item(MenuItem::disabled("Edit Link...")),
+        MenuEntry::Item(MenuItem::disabled("Clear Formatting")),
+        MenuEntry::Separator,
+        MenuEntry::Section("Copy & paste"),
+        MenuEntry::Item(MenuItem::disabled("Cut")),
+        MenuEntry::Item(MenuItem::disabled("Copy")),
+        MenuEntry::Item(MenuItem::disabled("Paste")),
+    ]
+}
+
+fn is_context_menu_shortcut(code: KeyCode, modifiers: KeyModifiers) -> bool {
+    match code {
+        KeyCode::Esc => modifiers.is_empty(),
+        KeyCode::Char(' ') | KeyCode::Char('p') => modifiers.contains(KeyModifiers::CONTROL),
+        _ => false,
+    }
+}
+
 struct App {
     editor: DocumentEditor,
     file_path: PathBuf,
@@ -118,6 +280,7 @@ struct App {
     visual_positions: Vec<CursorDisplay>,
     last_cursor_visual: Option<CursorVisualPosition>,
     preferred_column: Option<u16>,
+    context_menu: Option<ContextMenuState>,
 }
 
 impl App {
@@ -136,6 +299,7 @@ impl App {
             visual_positions: Vec::new(),
             last_cursor_visual: None,
             preferred_column: None,
+            context_menu: None,
         }
     }
 
@@ -208,6 +372,135 @@ impl App {
         let status_widget = Paragraph::new(Line::from(Span::styled(status_text, Style::default())))
             .block(Block::default().borders(Borders::TOP));
         frame.render_widget(status_widget, status_area);
+
+        if self.context_menu.is_some() {
+            self.render_context_menu(frame, area);
+        }
+    }
+
+    fn render_context_menu(&self, frame: &mut Frame, area: Rect) {
+        let Some(menu) = &self.context_menu else {
+            return;
+        };
+
+        if area.width < 3 || area.height < 3 {
+            return;
+        }
+
+        let desired_width = 32;
+        let width = desired_width.min(area.width).max(20.min(area.width));
+        let desired_height = (menu.entries().len() as u16 + 2).min(area.height);
+        let height = desired_height.max(3.min(area.height));
+
+        let popup_area = Rect::new(
+            area.x + (area.width.saturating_sub(width)) / 2,
+            area.y + (area.height.saturating_sub(height)) / 2,
+            width,
+            height,
+        );
+
+        frame.render_widget(Clear, popup_area);
+
+        let separator_width = popup_area.width.saturating_sub(4).max(4) as usize;
+
+        let items: Vec<ListItem> = menu
+            .entries()
+            .iter()
+            .map(|entry| match entry {
+                MenuEntry::Section(title) => ListItem::new(Line::from(Span::styled(
+                    *title,
+                    Style::default().add_modifier(Modifier::BOLD),
+                ))),
+                MenuEntry::Separator => {
+                    let line = "─".repeat(separator_width);
+                    ListItem::new(Line::from(Span::styled(
+                        line,
+                        Style::default().fg(Color::DarkGray),
+                    )))
+                }
+                MenuEntry::Item(item) => {
+                    let style = if item.is_enabled() {
+                        Style::default()
+                    } else {
+                        Style::default().fg(Color::DarkGray)
+                    };
+                    ListItem::new(Line::from(Span::styled(item.label, style)))
+                }
+            })
+            .collect();
+
+        let mut state = ListState::default();
+        state.select(Some(menu.selected_index()));
+
+        let list = List::new(items)
+            .highlight_style(Style::default().add_modifier(Modifier::REVERSED))
+            .block(Block::default().title("Context Menu").borders(Borders::ALL));
+
+        frame.render_stateful_widget(list, popup_area, &mut state);
+    }
+
+    fn open_context_menu(&mut self) {
+        self.context_menu = Some(ContextMenuState::new());
+    }
+
+    fn close_context_menu(&mut self) {
+        self.context_menu = None;
+    }
+
+    fn handle_context_menu_key(&mut self, code: KeyCode, modifiers: KeyModifiers) -> bool {
+        if self.context_menu.is_none() {
+            return false;
+        }
+
+        match code {
+            KeyCode::Esc => {
+                self.close_context_menu();
+                true
+            }
+            KeyCode::Up => {
+                if let Some(menu) = self.context_menu.as_mut() {
+                    menu.move_selection(-1);
+                }
+                true
+            }
+            KeyCode::Down => {
+                if let Some(menu) = self.context_menu.as_mut() {
+                    menu.move_selection(1);
+                }
+                true
+            }
+            KeyCode::Enter => {
+                if let Some(action) = self
+                    .context_menu
+                    .as_ref()
+                    .and_then(|menu| menu.current_action())
+                {
+                    if self.execute_menu_action(action) {
+                        self.close_context_menu();
+                    }
+                }
+                true
+            }
+            KeyCode::Char(' ') | KeyCode::Char('p')
+                if modifiers.contains(KeyModifiers::CONTROL) =>
+            {
+                self.close_context_menu();
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn execute_menu_action(&mut self, action: MenuAction) -> bool {
+        match action {
+            MenuAction::SetParagraphType(kind) => {
+                if self.editor.set_paragraph_type(kind) {
+                    self.mark_dirty();
+                    self.preferred_column = None;
+                }
+                true
+            }
+        }
     }
 
     fn status_line(&mut self, total_lines: usize) -> String {
@@ -466,6 +759,23 @@ impl App {
             ..
         }) = event
         {
+            if self.handle_context_menu_key(code, modifiers) {
+                return Ok(());
+            }
+
+            if self.context_menu.is_some() {
+                return Ok(());
+            }
+
+            if is_context_menu_shortcut(code, modifiers) {
+                if self.context_menu.is_some() {
+                    self.close_context_menu();
+                } else {
+                    self.open_context_menu();
+                }
+                return Ok(());
+            }
+
             match (code, modifiers) {
                 (KeyCode::Char('q'), m) if m.contains(KeyModifiers::CONTROL) => {
                     self.should_quit = true;
