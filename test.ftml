@@ -5,6 +5,9 @@
 <ul>
   <li><input type="checkbox" /> Jumping by word</li>
   <li>
+    <input type="checkbox" /> Delete by word (Ctrl-Backspace, Ctrl-Delete, Ctrl-W)
+  </li>
+  <li>
     <input type="checkbox" checked /> Fix changing paragraph types for list paragraphs (to ensure we're not
     creating a Text paragraph inside a List one, but to split the list, change
     one item, etc.)
@@ -57,6 +60,10 @@
     this happen with a direct inline view: Paragraph styles on their own line,
     but indented correctly; inline styles directly in line with the rest of the
     content, but with colorful `[Bold>`tags with user-friendly names`&lt;Bold]`
+  </li>
+  <li><input type="checkbox" /> Implement mouse scrolling</li>
+  <li>
+    <input type="checkbox" /> Implement drag-to-select, double-click, triple-click
   </li>
 </ul>
 
