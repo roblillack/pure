@@ -1,4 +1,154 @@
-<h1>This is an example FTML document</h1>
+<h1>This is an example FTML document to be edited with Pure</h1>
+
+<h2>Todos</h2>
+
+<ul>
+  <li><input type="checkbox" /> Jumping by word</li>
+  <li>
+    <input type="checkbox" /> Text selection to make inline styles even possible
+  </li>
+  <li>
+    <input type="checkbox" /> Find a way to navigate nested paragraphs as well as nesting and unnesting
+    paragraphs using Ctrl-[ anc Ctrl-]
+  </li>
+  <li>
+    <input type="checkbox" /> Find a way to add adjacent paragraphs on the same level (follow-up
+    paragraph)
+  </li>
+  <li>
+    <input type="checkbox" /> Keyboard shortcut and context menu entry to toggle checklist items
+  </li>
+  <li>
+    <input type="checkbox" /> Wire keyboard shortcuts for basic inline styling where possible (Ctrl-B,
+    Ctrl-I, Ctrl-U, Ctrl-K)
+  </li>
+  <li>
+    <input type="checkbox" /> Make sure that changing the paragraph style "does the right thing"-ie.
+    we're not nesting paragraphs just because we change the paragraph style of
+    the Text inside a Quote.
+  </li>
+  <li>
+    <input type="checkbox" /> Adapt rendering to be more in line with tdoc: Horizontal padding, max
+    screen width, marging between heading paragraphs, what else?
+  </li>
+  <li>
+    <input type="checkbox" /> Style scrollbar like in tdoc, fix calculation
+  </li>
+  <li><input type="checkbox" /> Style statusbar like in Elma</li>
+  <li><input type="checkbox" /> Add menu/shortcut bar like in Elma?</li>
+  <li><input type="checkbox" /> Fix page up/down to feel more natural</li>
+</ul>
+
+<h2>FTML improvements</h2>
+
+<p>Introduce three different paragraph types:</p>
+
+<ul>
+  <li>
+    <p>Pure: Only allows for text content</p>
+  </li>
+</ul>
+
+<ul>
+  <li>
+    <p>Leaf: Allows for text content with inline styling</p>
+  </li>
+</ul>
+
+<ul>
+  <li>
+    <p>Container: Allows list of children which can be any paragraph type</p>
+  </li>
+</ul>
+
+<p>
+  Based on this the action to modify a paragraph type should be the following:
+</p>
+
+<ul>
+  <li>
+    <p>
+      If the current paragraph is at the top level: Change the type to the
+      requested one.
+    </p>
+  </li>
+</ul>
+
+<ul>
+  <li>
+    <p>
+      If the current paragraph is the sole child of it's parent container:
+      Change the parent container's type.
+    </p>
+  </li>
+</ul>
+
+<ul>
+  <li>
+    <p>
+      If other siblings to the current paragraph exist: Only change this
+      paragraphs type.
+    </p>
+  </li>
+</ul>
+
+<p>These are our currently supported paragraph types:</p>
+
+<ul>
+  <li>
+    <p>Text - Leaf</p>
+  </li>
+</ul>
+
+<ul>
+  <li>
+    <p>Heading 1 - Pure</p>
+  </li>
+</ul>
+
+<ul>
+  <li>
+    <p>Heading 2 - Pure</p>
+  </li>
+</ul>
+
+<ul>
+  <li>
+    <p>Heading 3 - Pure</p>
+  </li>
+</ul>
+
+<ul>
+  <li>
+    <p>Quote - Container</p>
+  </li>
+</ul>
+
+<ul>
+  <li>
+    <p>Code - Pure</p>
+  </li>
+</ul>
+
+<ul>
+  <li>
+    <p>Numbered List - Container</p>
+  </li>
+</ul>
+
+<ul>
+  <li>
+    <p>Bullet List - Container</p>
+  </li>
+</ul>
+
+<ul>
+  <li>
+    <p>Checklist - Leaf</p>
+  </li>
+</ul>
+
+<h2>Balbalbalb</h2>
 
 <p>The purpose of this document is to demonstrate the following use-cases:</p>
 
@@ -15,6 +165,15 @@
 </ul>
 
 <h2>Supported features</h2>
+
+<ul>
+</ul>
+
+<ul>
+</ul>
+
+<ol>
+</ol>
 
 <h3>Inline styles</h3>
 
@@ -137,7 +296,7 @@
       <blockquote>
         <p>
           You can never have enough nesting of paragraphs.<br />
-        &emsp14;&emsp14;&emsp14;—<a href="https://roblillack.net">Robert Lillack</a>
+          &emsp14;&emsp14;&emsp14;—<a href="https://roblillack.net">Robert Lillack</a>
         </p>
       </blockquote>
     </li>

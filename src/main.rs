@@ -116,23 +116,65 @@ enum MenuAction {
 }
 
 #[derive(Clone, Copy)]
-struct MenuItem {
-    label: &'static str,
-    action: Option<MenuAction>,
+struct MenuShortcut {
+    key: char,
+    requires_shift: bool,
 }
 
-impl MenuItem {
-    const fn enabled(label: &'static str, action: MenuAction) -> Self {
+impl MenuShortcut {
+    const fn new(key: char) -> Self {
         Self {
-            label,
-            action: Some(action),
+            key,
+            requires_shift: false,
         }
     }
 
-    const fn disabled(label: &'static str) -> Self {
+    const fn with_shift(key: char) -> Self {
+        Self {
+            key,
+            requires_shift: true,
+        }
+    }
+
+    fn matches(&self, code: KeyCode, modifiers: KeyModifiers) -> bool {
+        match code {
+            KeyCode::Char(ch) if ch == self.key => {
+                if self.requires_shift {
+                    modifiers == KeyModifiers::SHIFT
+                } else {
+                    modifiers.is_empty()
+                }
+            }
+            _ => false,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct MenuItem {
+    label: &'static str,
+    action: Option<MenuAction>,
+    shortcut: Option<MenuShortcut>,
+}
+
+impl MenuItem {
+    const fn enabled_with_shortcut(
+        label: &'static str,
+        action: MenuAction,
+        shortcut: MenuShortcut,
+    ) -> Self {
+        Self {
+            label,
+            action: Some(action),
+            shortcut: Some(shortcut),
+        }
+    }
+
+    const fn disabled_with_shortcut(label: &'static str, shortcut: MenuShortcut) -> Self {
         Self {
             label,
             action: None,
+            shortcut: Some(shortcut),
         }
     }
 
@@ -202,62 +244,122 @@ impl ContextMenuState {
     fn selected_index(&self) -> usize {
         self.selected_index
     }
+
+    fn shortcut_action(
+        &mut self,
+        code: KeyCode,
+        modifiers: KeyModifiers,
+    ) -> (bool, Option<MenuAction>) {
+        for (idx, entry) in self.entries.iter().enumerate() {
+            if let MenuEntry::Item(item) = entry {
+                if let Some(shortcut) = item.shortcut {
+                    if shortcut.matches(code, modifiers) {
+                        self.selected_index = idx;
+                        return (true, item.action);
+                    }
+                }
+            }
+        }
+        (false, None)
+    }
 }
 
 fn build_context_menu_entries() -> Vec<MenuEntry> {
     vec![
         MenuEntry::Section("Paragraph type"),
-        MenuEntry::Item(MenuItem::enabled(
+        MenuEntry::Item(MenuItem::enabled_with_shortcut(
             "Text",
             MenuAction::SetParagraphType(ParagraphType::Text),
+            MenuShortcut::new('0'),
         )),
-        MenuEntry::Item(MenuItem::enabled(
+        MenuEntry::Item(MenuItem::enabled_with_shortcut(
             "Heading 1",
             MenuAction::SetParagraphType(ParagraphType::Header1),
+            MenuShortcut::new('1'),
         )),
-        MenuEntry::Item(MenuItem::enabled(
+        MenuEntry::Item(MenuItem::enabled_with_shortcut(
             "Heading 2",
             MenuAction::SetParagraphType(ParagraphType::Header2),
+            MenuShortcut::new('2'),
         )),
-        MenuEntry::Item(MenuItem::enabled(
+        MenuEntry::Item(MenuItem::enabled_with_shortcut(
             "Heading 3",
             MenuAction::SetParagraphType(ParagraphType::Header3),
+            MenuShortcut::new('3'),
         )),
-        MenuEntry::Item(MenuItem::enabled(
+        MenuEntry::Item(MenuItem::enabled_with_shortcut(
             "Quote",
             MenuAction::SetParagraphType(ParagraphType::Quote),
+            MenuShortcut::new('5'),
         )),
-        MenuEntry::Item(MenuItem::enabled(
+        MenuEntry::Item(MenuItem::enabled_with_shortcut(
             "Code",
             MenuAction::SetParagraphType(ParagraphType::CodeBlock),
+            MenuShortcut::new('6'),
         )),
-        MenuEntry::Item(MenuItem::enabled(
+        MenuEntry::Item(MenuItem::enabled_with_shortcut(
             "Numbered List",
             MenuAction::SetParagraphType(ParagraphType::OrderedList),
+            MenuShortcut::new('7'),
         )),
-        MenuEntry::Item(MenuItem::enabled(
+        MenuEntry::Item(MenuItem::enabled_with_shortcut(
             "Bullet List",
             MenuAction::SetParagraphType(ParagraphType::UnorderedList),
+            MenuShortcut::new('8'),
         )),
-        MenuEntry::Item(MenuItem::enabled(
+        MenuEntry::Item(MenuItem::enabled_with_shortcut(
             "Checklist",
             MenuAction::SetParagraphType(ParagraphType::Checklist),
+            MenuShortcut::new('9'),
         )),
         MenuEntry::Separator,
         MenuEntry::Section("Inline style"),
-        MenuEntry::Item(MenuItem::disabled("Bold")),
-        MenuEntry::Item(MenuItem::disabled("Italic")),
-        MenuEntry::Item(MenuItem::disabled("Underline")),
-        MenuEntry::Item(MenuItem::disabled("Code")),
-        MenuEntry::Item(MenuItem::disabled("Highlight")),
-        MenuEntry::Item(MenuItem::disabled("Strikethrough")),
-        MenuEntry::Item(MenuItem::disabled("Edit Link...")),
-        MenuEntry::Item(MenuItem::disabled("Clear Formatting")),
+        MenuEntry::Item(MenuItem::disabled_with_shortcut(
+            "Bold",
+            MenuShortcut::new('b'),
+        )),
+        MenuEntry::Item(MenuItem::disabled_with_shortcut(
+            "Italic",
+            MenuShortcut::new('i'),
+        )),
+        MenuEntry::Item(MenuItem::disabled_with_shortcut(
+            "Underline",
+            MenuShortcut::new('u'),
+        )),
+        MenuEntry::Item(MenuItem::disabled_with_shortcut(
+            "Code",
+            MenuShortcut::with_shift('C'),
+        )),
+        MenuEntry::Item(MenuItem::disabled_with_shortcut(
+            "Highlight",
+            MenuShortcut::with_shift('H'),
+        )),
+        MenuEntry::Item(MenuItem::disabled_with_shortcut(
+            "Strikethrough",
+            MenuShortcut::with_shift('X'),
+        )),
+        MenuEntry::Item(MenuItem::disabled_with_shortcut(
+            "Edit Link...",
+            MenuShortcut::new('k'),
+        )),
+        MenuEntry::Item(MenuItem::disabled_with_shortcut(
+            "Clear Formatting",
+            MenuShortcut::new('\\'),
+        )),
         MenuEntry::Separator,
         MenuEntry::Section("Copy & paste"),
-        MenuEntry::Item(MenuItem::disabled("Cut")),
-        MenuEntry::Item(MenuItem::disabled("Copy")),
-        MenuEntry::Item(MenuItem::disabled("Paste")),
+        MenuEntry::Item(MenuItem::disabled_with_shortcut(
+            "Cut",
+            MenuShortcut::new('x'),
+        )),
+        MenuEntry::Item(MenuItem::disabled_with_shortcut(
+            "Copy",
+            MenuShortcut::new('c'),
+        )),
+        MenuEntry::Item(MenuItem::disabled_with_shortcut(
+            "Paste",
+            MenuShortcut::new('v'),
+        )),
     ]
 }
 
@@ -387,8 +489,42 @@ impl App {
             return;
         }
 
-        let desired_width = 32;
-        let width = desired_width.min(area.width).max(20.min(area.width));
+        let mut max_label_width = 0usize;
+        let mut max_section_width = 0usize;
+        let mut has_shortcuts = false;
+        let mut max_shortcut_width = 0usize;
+
+        for entry in menu.entries() {
+            match entry {
+                MenuEntry::Item(item) => {
+                    max_label_width = max_label_width.max(item.label.chars().count());
+                    if let Some(shortcut) = item.shortcut {
+                        has_shortcuts = true;
+                        max_shortcut_width = max_shortcut_width.max(shortcut.key.len_utf8());
+                    }
+                }
+                MenuEntry::Section(title) => {
+                    max_section_width = max_section_width.max(title.chars().count());
+                }
+                MenuEntry::Separator => {}
+            }
+        }
+
+        let gap_width = if has_shortcuts { 2 } else { 0 };
+        let shortcut_width = if has_shortcuts {
+            max_shortcut_width.max(1)
+        } else {
+            0
+        };
+        let item_width = if has_shortcuts {
+            max_label_width + gap_width + shortcut_width
+        } else {
+            max_label_width
+        };
+        let base_content_width = item_width.max(max_section_width);
+        let content_width = base_content_width as u16;
+        let min_width = 10.min(area.width);
+        let width = (content_width + 4).min(area.width).max(min_width);
         let desired_height = (menu.entries().len() as u16 + 2).min(area.height);
         let height = desired_height.max(3.min(area.height));
 
@@ -402,39 +538,72 @@ impl App {
         frame.render_widget(Clear, popup_area);
 
         let separator_width = popup_area.width.saturating_sub(4).max(4) as usize;
+        let popup_style = Style::default().bg(Color::Black).fg(Color::White);
 
-        let items: Vec<ListItem> = menu
-            .entries()
-            .iter()
-            .map(|entry| match entry {
-                MenuEntry::Section(title) => ListItem::new(Line::from(Span::styled(
-                    *title,
-                    Style::default().add_modifier(Modifier::BOLD),
-                ))),
+        let mut items = Vec::new();
+        let gap = if has_shortcuts { "  " } else { "" };
+        for entry in menu.entries() {
+            match entry {
+                MenuEntry::Section(title) => {
+                    items.push(ListItem::new(Line::from(Span::styled(
+                        *title,
+                        popup_style.add_modifier(Modifier::BOLD),
+                    ))));
+                }
                 MenuEntry::Separator => {
                     let line = "─".repeat(separator_width);
-                    ListItem::new(Line::from(Span::styled(
+                    items.push(ListItem::new(Line::from(Span::styled(
                         line,
                         Style::default().fg(Color::DarkGray),
-                    )))
+                    ))));
                 }
                 MenuEntry::Item(item) => {
+                    let content = if has_shortcuts {
+                        if let Some(shortcut) = item.shortcut {
+                            format!(
+                                "{label:<label_width$}{gap}{shortcut:>shortcut_width$}",
+                                label = item.label,
+                                label_width = max_label_width,
+                                gap = gap,
+                                shortcut = shortcut.key,
+                                shortcut_width = shortcut_width,
+                            )
+                        } else {
+                            format!(
+                                "{label:<label_width$}{gap}{empty:>shortcut_width$}",
+                                label = item.label,
+                                label_width = max_label_width,
+                                gap = gap,
+                                empty = "",
+                                shortcut_width = shortcut_width,
+                            )
+                        }
+                    } else {
+                        item.label.to_string()
+                    };
                     let style = if item.is_enabled() {
                         Style::default()
                     } else {
                         Style::default().fg(Color::DarkGray)
                     };
-                    ListItem::new(Line::from(Span::styled(item.label, style)))
+                    items.push(ListItem::new(Line::from(Span::styled(content, style))));
                 }
-            })
-            .collect();
+            }
+        }
 
         let mut state = ListState::default();
         state.select(Some(menu.selected_index()));
 
         let list = List::new(items)
-            .highlight_style(Style::default().add_modifier(Modifier::REVERSED))
-            .block(Block::default().title("Context Menu").borders(Borders::ALL));
+            .highlight_style(Style::default().bg(Color::White).fg(Color::Black))
+            .style(popup_style)
+            .block(
+                Block::default()
+                    .title("Context Menu")
+                    .borders(Borders::ALL)
+                    .style(popup_style)
+                    .border_style(Style::default().fg(Color::Gray)),
+            );
 
         frame.render_stateful_widget(list, popup_area, &mut state);
     }
@@ -486,6 +655,20 @@ impl App {
             {
                 self.close_context_menu();
                 true
+            }
+            KeyCode::Char(_) => {
+                if let Some(menu) = self.context_menu.as_mut() {
+                    let (handled, action) = menu.shortcut_action(code, modifiers);
+                    if handled {
+                        if let Some(action) = action {
+                            if self.execute_menu_action(action) {
+                                self.close_context_menu();
+                            }
+                        }
+                        return true;
+                    }
+                }
+                false
             }
             _ => false,
         }
