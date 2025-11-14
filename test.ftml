@@ -70,6 +70,20 @@
   <li>
     <input type="checkbox" checked /> Keep position when toggling Reveal Codes mode
   </li>
+  <li>
+    <input type="checkbox" /> Clarify shown paragraph type in interface by only showing "Text" if this is
+    a toplevel text paragraph. In all other cases, we should show the
+    "effective paragraph type" which structurally makes way more sense to think
+    about
+  </li>
+  <li>
+    <input type="checkbox" /> Implement Reveal Codes for paragraph types, too
+  </li>
+  <li>
+    <input type="checkbox" /> Add theming support, improve currently used color palette. At least, let
+    users change: Background color, foreground color, reveal code fg/bg,
+    statusline fg/bg, selection fg,bg
+  </li>
 </ul>
 
 <h2>Scratch</h2>
@@ -88,12 +102,17 @@
   <li>
     <p>asdfsadf</p>
     <p>sdafsadf</p>
+    <p>sakdfjhsakdjfh</p>
+    <p>skjdhksdjhf</p>
   </li>
-</ul>
 
-<ul>
+  <li>
+    <p>sdfsdf</p>
+  </li>
+
   <li>
     <p>This is a test</p>
+    <p>sdfsdfsdf</p>
   </li>
 
   <li>

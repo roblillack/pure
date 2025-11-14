@@ -2184,18 +2184,29 @@ fn collect_paragraph_labels<'a>(
     let mut current: Option<&'a Paragraph> = None;
 
     for step in path.steps() {
-        let paragraph = match *step {
-            PathStep::Root(idx) => document.paragraphs.get(idx)?,
-            PathStep::Child(idx) => current?.children.get(idx)?,
+        let (paragraph, container_len) = match *step {
+            PathStep::Root(idx) => (
+                document.paragraphs.get(idx)?,
+                document.paragraphs.len(),
+            ),
+            PathStep::Child(idx) => {
+                let parent = current?;
+                (parent.children.get(idx)?, parent.children.len())
+            }
             PathStep::Entry {
                 entry_index,
                 paragraph_index,
             } => {
-                let entry = current?.entries.get(entry_index)?;
-                entry.get(paragraph_index)?
+                let parent = current?;
+                let entry = parent.entries.get(entry_index)?;
+                (entry.get(paragraph_index)?, entry.len())
             }
         };
-        labels.push(paragraph.paragraph_type.to_string());
+        let has_parent = current.is_some();
+        let has_siblings = has_parent && container_len > 1;
+        if paragraph.paragraph_type != ParagraphType::Text || !has_parent || has_siblings {
+            labels.push(paragraph.paragraph_type.to_string());
+        }
         current = Some(paragraph);
     }
 
@@ -4032,8 +4043,6 @@ fn span_is_empty(span: &Span) -> bool {
 mod tests {
     use tdoc::ftml;
 
-    use crate::editor;
-
     use super::*;
 
     fn pointer_to_root_span(root_index: usize) -> CursorPointer {
@@ -4152,6 +4161,45 @@ mod tests {
         ]);
         let checklist = Paragraph::new_checklist().with_entries(vec![vec![item]]);
         Document::new().with_paragraphs(vec![checklist])
+    }
+
+    #[test]
+    fn breadcrumbs_include_text_for_top_level_paragraphs() {
+        let document = Document::new().with_paragraphs(vec![text_paragraph("Top level")]);
+        let pointer = pointer_to_root_span(0);
+        let breadcrumbs = breadcrumbs_for_pointer(&document, &pointer).unwrap();
+        assert_eq!(breadcrumbs, vec!["Text".to_string()]);
+    }
+
+    #[test]
+    fn breadcrumbs_skip_text_for_quote_children() {
+        let quote = Paragraph::new_quote().with_children(vec![text_paragraph("Nested")]);
+        let document = Document::new().with_paragraphs(vec![quote]);
+        let pointer = pointer_to_child_span(0, 0);
+        let breadcrumbs = breadcrumbs_for_pointer(&document, &pointer).unwrap();
+        assert_eq!(breadcrumbs, vec!["Quote".to_string()]);
+    }
+
+    #[test]
+    fn breadcrumbs_skip_text_for_list_items() {
+        let document = Document::new().with_paragraphs(vec![unordered_list(&["Item"])]);
+        let pointer = pointer_to_entry_span(0, 0, 0);
+        let breadcrumbs = breadcrumbs_for_pointer(&document, &pointer).unwrap();
+        assert_eq!(breadcrumbs, vec!["Unordered List".to_string()]);
+    }
+
+    #[test]
+    fn breadcrumbs_include_text_when_list_entry_has_siblings() {
+        let entry = vec![
+            text_paragraph("First"),
+            Paragraph::new_quote().with_children(vec![text_paragraph("Nested")]),
+        ];
+        let document = Document::new().with_paragraphs(vec![
+            Paragraph::new_unordered_list().with_entries(vec![entry]),
+        ]);
+        let pointer = pointer_to_entry_span(0, 0, 0);
+        let breadcrumbs = breadcrumbs_for_pointer(&document, &pointer).unwrap();
+        assert_eq!(breadcrumbs, vec!["Unordered List".to_string(), "Text".to_string()]);
     }
 
     fn insert_text(editor: &mut DocumentEditor, text: &str) {
