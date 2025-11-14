@@ -273,9 +273,13 @@ impl DocumentEditor {
         if let (Some(ctx), IndentTargetKind::ListEntry { entry_index }) =
             (extract_entry_context(&pointer.paragraph_path), target.kind)
         {
-            if let Some(new_pointer) =
+            let handled = if entry_has_multiple_paragraphs(&self.document, &ctx) {
+                indent_paragraph_within_entry(&mut self.document, &pointer, &ctx)
+            } else {
                 indent_list_entry_into_entry(&mut self.document, &pointer, &ctx, entry_index)
-            {
+            };
+
+            if let Some(new_pointer) = handled {
                 self.rebuild_segments();
                 if !self.move_to_pointer(&new_pointer) {
                     if !self.fallback_move_to_text(&new_pointer, false) {
@@ -807,7 +811,9 @@ impl DocumentEditor {
         };
 
         if !self.move_to_pointer(&desired) {
-            self.ensure_cursor_selectable();
+            if !self.fallback_move_to_text(&desired, false) {
+                self.ensure_cursor_selectable();
+            }
         }
 
         true
@@ -1154,6 +1160,44 @@ impl DocumentEditor {
         }
 
         if let Some((index, segment)) = descendant_match {
+            self.cursor_segment = index;
+            self.cursor = CursorPointer {
+                paragraph_path: segment.paragraph_path.clone(),
+                span_path: segment.span_path.clone(),
+                offset: pointer.offset.min(segment.len),
+                segment_kind: SegmentKind::Text,
+            };
+            self.clamp_cursor_offset();
+            return true;
+        }
+
+        let mut nested_paragraph_match: Option<(usize, SegmentRef)> = None;
+        for (index, segment) in self.segments.iter().enumerate() {
+            if segment.kind != SegmentKind::Text {
+                continue;
+            }
+            if segment.paragraph_path == pointer.paragraph_path {
+                continue;
+            }
+            if !paragraph_path_is_prefix(&pointer.paragraph_path, &segment.paragraph_path) {
+                continue;
+            }
+            nested_paragraph_match = match nested_paragraph_match {
+                None => Some((index, segment.clone())),
+                Some((current_index, current_segment)) => {
+                    if prefer_trailing {
+                        Some((index, segment.clone()))
+                    } else {
+                        Some((current_index, current_segment))
+                    }
+                }
+            };
+            if !prefer_trailing {
+                break;
+            }
+        }
+
+        if let Some((index, segment)) = nested_paragraph_match {
             self.cursor_segment = index;
             self.cursor = CursorPointer {
                 paragraph_path: segment.paragraph_path.clone(),
@@ -2084,6 +2128,12 @@ fn ensure_document_initialized(document: &mut Document) {
 
 fn span_path_is_prefix(prefix: &[usize], target: &[usize]) -> bool {
     prefix.len() <= target.len() && target.starts_with(prefix)
+}
+
+fn paragraph_path_is_prefix(prefix: &ParagraphPath, target: &ParagraphPath) -> bool {
+    let prefix_steps = prefix.steps();
+    let target_steps = target.steps();
+    prefix_steps.len() <= target_steps.len() && target_steps.starts_with(prefix_steps)
 }
 
 fn select_text_in_paragraph(
@@ -3431,6 +3481,13 @@ fn append_paragraph_to_entry(
     Some(ParagraphPath::from_steps(steps))
 }
 
+fn entry_has_multiple_paragraphs(document: &Document, ctx: &EntryContext) -> bool {
+    paragraph_ref(document, &ctx.list_path)
+        .and_then(|list| list.entries.get(ctx.entry_index))
+        .map(|entry| entry.len() > 1)
+        .unwrap_or(false)
+}
+
 fn ensure_nested_list(entry: &mut Vec<Paragraph>, list_type: ParagraphType) -> usize {
     if let Some(idx) = entry.iter().position(|p| p.paragraph_type == list_type) {
         idx
@@ -3438,6 +3495,64 @@ fn ensure_nested_list(entry: &mut Vec<Paragraph>, list_type: ParagraphType) -> u
         entry.push(Paragraph::new(list_type));
         entry.len() - 1
     }
+}
+
+fn indent_paragraph_within_entry(
+    document: &mut Document,
+    pointer: &CursorPointer,
+    ctx: &EntryContext,
+) -> Option<CursorPointer> {
+    let list_type = paragraph_ref(document, &ctx.list_path)
+        .map(|p| p.paragraph_type)
+        .filter(|kind| is_list_type(*kind))?;
+
+    let paragraph = {
+        let list = paragraph_mut(document, &ctx.list_path)?;
+        if ctx.entry_index >= list.entries.len() {
+            return None;
+        }
+        let entry = &mut list.entries[ctx.entry_index];
+        if ctx.paragraph_index >= entry.len() || entry.len() <= 1 {
+            return None;
+        }
+        entry.remove(ctx.paragraph_index)
+    };
+
+    let mut nested_list = Paragraph::new(list_type);
+    nested_list.content.clear();
+    nested_list.checklist_item_checked = None;
+
+    let (nested_entry, nested_paragraph_index) = match list_type {
+        ParagraphType::Checklist => convert_paragraph_to_checklist_entry(paragraph),
+        ParagraphType::OrderedList | ParagraphType::UnorderedList => (vec![paragraph], 0),
+        _ => return None,
+    };
+
+    nested_list.entries.push(nested_entry);
+
+    {
+        let list = paragraph_mut(document, &ctx.list_path)?;
+        let entry = list.entries.get_mut(ctx.entry_index)?;
+        entry.insert(ctx.paragraph_index, nested_list);
+    }
+
+    let mut steps = ctx.list_path.steps().to_vec();
+    steps.push(PathStep::Entry {
+        entry_index: ctx.entry_index,
+        paragraph_index: ctx.paragraph_index,
+    });
+    steps.push(PathStep::Entry {
+        entry_index: 0,
+        paragraph_index: nested_paragraph_index,
+    });
+    steps.extend(ctx.tail_steps.iter().cloned());
+
+    Some(CursorPointer {
+        paragraph_path: ParagraphPath::from_steps(steps),
+        span_path: pointer.span_path.clone(),
+        offset: pointer.offset,
+        segment_kind: pointer.segment_kind,
+    })
 }
 
 fn indent_list_entry_into_entry(
@@ -4415,6 +4530,68 @@ mod tests {
                     li { p {"Item 1" } }
                     li {
                         quote { p {"Item 2, paragraph 1" } }
+                        p {"Item 2, paragraph 2" }
+                    }
+                    li { p {"Item 3" } }
+                }
+            }
+        );
+
+        assert!(editor.set_paragraph_type(ParagraphType::Text));
+        assert_eq!(
+            editor.document().clone(),
+            ftml! {
+                ul {
+                    li { p {"Item 1" } }
+                    li {
+                        p {"Item 2, paragraph 1" }
+                        p {"Item 2, paragraph 2" }
+                    }
+                    li { p {"Item 3" } }
+                }
+            }
+        );
+    }
+
+    #[test]
+    fn convert_paragraph_to_nested_list_in_middle_of_list() {
+        let initial_doc = ftml! {
+            ul {
+                li { p {"Item 1" } }
+                li {
+                    p {"Item 2, paragraph 1" }
+                    p {"Item 2, paragraph 2" }
+                }
+                li { p {"Item 3" } }
+            }
+        };
+        let mut editor = DocumentEditor::new(initial_doc.clone());
+        assert!(editor.move_down());
+        assert!(editor.indent_current_paragraph());
+        assert_eq!(
+            editor.document().clone(),
+            ftml! {
+                ul {
+                    li { p {"Item 1" } }
+                    li {
+                        ul {
+                            li { p {"Item 2, paragraph 1" } }
+                        }
+                        p {"Item 2, paragraph 2" }
+                    }
+                    li { p {"Item 3" } }
+                }
+            }
+        );
+
+        assert!(editor.unindent_current_paragraph());
+        assert_eq!(
+            editor.document().clone(),
+            ftml! {
+                ul {
+                    li { p {"Item 1" } }
+                    li {
+                        p {"Item 2, paragraph 1" }
                         p {"Item 2, paragraph 2" }
                     }
                     li { p {"Item 3" } }
