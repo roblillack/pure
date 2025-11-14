@@ -84,12 +84,13 @@ fn reveal_pointer_hints(pointer: &CursorPointer) -> Option<(usize, usize)> {
 
 pub fn render_document(
     document: &Document,
-    width: usize,
+    wrap_width: usize,
+    left_padding: usize,
     markers: &[MarkerRef],
     reveal_tags: &[RevealTagRef],
     sentinels: RenderSentinels,
 ) -> RenderResult {
-    let mut renderer = Renderer::new(width.max(1), sentinels, markers, reveal_tags);
+    let mut renderer = Renderer::new(wrap_width.max(1), left_padding, sentinels, markers, reveal_tags);
     renderer.render_document(document);
     renderer.finish()
 }
@@ -97,6 +98,8 @@ pub fn render_document(
 struct Renderer<'a> {
     wrap_width: usize,
     wrap_limit: usize,
+    left_padding: usize,
+    padding: Option<String>,
     sentinels: RenderSentinels,
     line_metrics: Vec<LineMetric>,
     marker_pending: HashMap<usize, PendingPosition>,
@@ -111,11 +114,17 @@ struct Renderer<'a> {
 impl<'a> Renderer<'a> {
     fn new(
         wrap_width: usize,
+        left_padding: usize,
         sentinels: RenderSentinels,
         markers: &'a [MarkerRef],
         reveal_tags: &[RevealTagRef],
     ) -> Self {
         let wrap_limit = if wrap_width > 1 { wrap_width - 1 } else { 1 };
+        let padding = if left_padding > 0 {
+            Some(" ".repeat(left_padding))
+        } else {
+            None
+        };
         let marker_map = markers
             .iter()
             .map(|marker| (marker.id, marker.pointer.clone()))
@@ -127,6 +136,8 @@ impl<'a> Renderer<'a> {
         Self {
             wrap_width,
             wrap_limit,
+            left_padding,
+            padding,
             sentinels,
             line_metrics: Vec::new(),
             marker_pending: HashMap::new(),
@@ -227,7 +238,8 @@ impl<'a> Renderer<'a> {
                 HeaderLevel::Three => '-',
                 HeaderLevel::One => '=',
             };
-            let underline = underline_string(width, underline_char);
+            let underline_width = width.saturating_sub(self.left_padding);
+            let underline = underline_string(underline_width, underline_char);
             self.push_plain_line(&underline, false);
         }
     }
@@ -365,9 +377,31 @@ impl<'a> Renderer<'a> {
         }
     }
 
+    fn prepend_padding(&self, spans: Vec<Span<'static>>) -> Vec<Span<'static>> {
+        if spans.is_empty() {
+            return spans;
+        }
+        let has_content = spans.iter().any(|span| !span.content.is_empty());
+        if !has_content {
+            return spans;
+        }
+        if let Some(padding) = &self.padding {
+            let mut with_padding = Vec::with_capacity(spans.len() + 1);
+            with_padding.push(Span::raw(padding.clone()).to_owned());
+            with_padding.extend(spans);
+            with_padding
+        } else {
+            spans
+        }
+    }
+
     fn push_plain_line(&mut self, content: &str, counts_as_content: bool) {
-        let span = Span::raw(content.to_string()).to_owned();
-        let line = Line::from(vec![span]);
+        let mut spans = Vec::new();
+        if !content.is_empty() {
+            spans.push(Span::raw(content.to_string()).to_owned());
+        }
+        let spans = self.prepend_padding(spans);
+        let line = Line::from(spans);
         self.lines.push(line);
         self.line_metrics.push(LineMetric { counts_as_content });
         self.current_line_index += 1;
@@ -381,11 +415,13 @@ impl<'a> Renderer<'a> {
     }
 
     fn consume_lines(&mut self, outputs: Vec<LineOutput>) {
+        let padding = self.left_padding.min(u16::MAX as usize) as u16;
         for output in outputs {
             let mut spans: Vec<Span<'static>> = Vec::with_capacity(output.spans.len());
             for segment in output.spans {
                 spans.push(Span::styled(segment.text.clone(), segment.style).to_owned());
             }
+            let spans = self.prepend_padding(spans);
             let line = Line::from(spans);
             self.line_metrics.push(LineMetric {
                 counts_as_content: output.has_word,
@@ -393,7 +429,7 @@ impl<'a> Renderer<'a> {
             for event in output.events {
                 let pending = PendingPosition {
                     line: self.current_line_index,
-                    column: event.column,
+                    column: event.column.saturating_add(padding),
                     content_column: event.content_column,
                 };
                 match event.kind {
@@ -1377,7 +1413,7 @@ mod tests {
 
     fn render_input(input: &str) -> RenderResult {
         let document = parse(Cursor::new(input)).expect("failed to parse document");
-        render_document(&document, 120, &[], &[], SENTINELS)
+        render_document(&document, 120, 0, &[], &[], SENTINELS)
     }
 
     fn lines_to_strings(lines: &[Line<'_>]) -> Vec<String> {
@@ -1450,7 +1486,7 @@ mod tests {
             SENTINELS.selection_start,
             SENTINELS.selection_end,
         );
-        let rendered = render_document(&doc_with_markers, 120, &markers, &reveal_tags, SENTINELS);
+        let rendered = render_document(&doc_with_markers, 120, 0, &markers, &reveal_tags, SENTINELS);
         let lines = lines_to_strings(&rendered.lines);
         assert_eq!(lines, vec!["• Alpha ", "", "  Beta"]);
     }
@@ -1512,7 +1548,7 @@ mod tests {
             SENTINELS.selection_start,
             SENTINELS.selection_end,
         );
-        let rendered = render_document(&doc_with_markers, 12, &markers, &reveal_tags, SENTINELS);
+        let rendered = render_document(&doc_with_markers, 12, 0, &markers, &reveal_tags, SENTINELS);
 
         let mut columns_per_line: Vec<Vec<(u16, u16)>> = Vec::new();
         for (_, position) in rendered.cursor_map {
@@ -1559,7 +1595,7 @@ mod tests {
             "cursor sentinel should be inserted at wrap boundary"
         );
 
-        let rendered = render_document(&doc_with_markers, 10, &markers, &reveal_tags, SENTINELS);
+        let rendered = render_document(&doc_with_markers, 10, 0, &markers, &reveal_tags, SENTINELS);
         let cursor = rendered.cursor.expect("cursor position missing");
         let lines = lines_to_strings(&rendered.lines);
 
@@ -1595,7 +1631,7 @@ mod tests {
             SENTINELS.selection_start,
             SENTINELS.selection_end,
         );
-        let rendered = render_document(&doc_with_markers, 120, &markers, &reveal_tags, SENTINELS);
+        let rendered = render_document(&doc_with_markers, 120, 0, &markers, &reveal_tags, SENTINELS);
         let lines = lines_to_strings(&rendered.lines);
         assert_eq!(lines, vec!["Hello [Bold>World<Bold]!"]);
 

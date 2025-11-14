@@ -69,6 +69,32 @@ fn column_distance(a: u16, b: u16) -> u16 {
     if a >= b { a - b } else { b - a }
 }
 
+fn editor_wrap_configuration(width: usize) -> (usize, usize) {
+    if width == 0 {
+        return (1, 0);
+    }
+    if width < 60 {
+        let wrap_width = width.saturating_sub(1).max(1);
+        return (wrap_width, 0);
+    }
+    if width < 100 {
+        let padding = 2.min(width / 2);
+        let wrap_width = width
+            .saturating_sub(padding.saturating_mul(2))
+            .max(1);
+        return (wrap_width, padding);
+    }
+    let mut left_padding = width.saturating_sub(100) / 2 + 4;
+    let max_padding = width.saturating_sub(1) / 2;
+    if left_padding > max_padding {
+        left_padding = max_padding;
+    }
+    let wrap_width = width
+        .saturating_sub(left_padding.saturating_mul(2))
+        .max(1);
+    (wrap_width, left_padding)
+}
+
 fn run() -> Result<()> {
     let mut args = env::args().skip(1);
     let Some(path_arg) = args.next() else {
@@ -1369,6 +1395,7 @@ impl App {
     }
 
     fn render_document(&mut self, width: usize) -> RenderResult {
+        let (wrap_width, left_padding) = editor_wrap_configuration(width);
         let selection = self.current_selection();
         let (clone, markers, reveal_tags, _) = self.editor.clone_with_markers(
             CURSOR_SENTINEL,
@@ -1378,7 +1405,8 @@ impl App {
         );
         render_document(
             &clone,
-            width,
+            wrap_width,
+            left_padding,
             &markers,
             &reveal_tags,
             RenderSentinels {
