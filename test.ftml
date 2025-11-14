@@ -69,7 +69,9 @@
 
 <h2>Scratch</h2>
 
-<p>Hello World!</p>
+<p>Hello <b>World</b>!</p>
+
+<p>dsfgjklhsdfkgjhdsfg This is another highlighted word.</p>
 
 <h3>Width/Padding calculation:</h3>
 

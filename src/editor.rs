@@ -260,6 +260,36 @@ impl DocumentEditor {
         self.cursor.clone()
     }
 
+    pub fn word_boundaries_at(
+        &self,
+        pointer: &CursorPointer,
+    ) -> Option<(CursorPointer, CursorPointer)> {
+        let segment = self
+            .segments
+            .iter()
+            .find(|segment| segment.matches_pointer(pointer))?;
+        if segment.kind != SegmentKind::Text {
+            return None;
+        }
+        let text = self.span_text_for_pointer(pointer)?;
+        if text.is_empty() {
+            return None;
+        }
+        let len = text.chars().count();
+        let offset = pointer.offset.min(len);
+        let mut start = pointer.clone();
+        start.offset = previous_word_boundary(text, offset);
+        let mut end = pointer.clone();
+        end.offset = next_word_boundary(text, offset);
+        Some((start, end))
+    }
+
+    fn span_text_for_pointer<'a>(&'a self, pointer: &CursorPointer) -> Option<&'a str> {
+        let paragraph = paragraph_ref(&self.document, &pointer.paragraph_path)?;
+        let span = span_ref(paragraph, &pointer.span_path)?;
+        Some(span.text.as_str())
+    }
+
     pub fn reveal_codes(&self) -> bool {
         self.reveal_codes
     }
@@ -864,11 +894,9 @@ impl DocumentEditor {
             return true;
         }
 
-        if let Some((index, segment)) = select_text_in_paragraph(
-            &self.segments,
-            &pointer.paragraph_path,
-            prefer_trailing,
-        ) {
+        if let Some((index, segment)) =
+            select_text_in_paragraph(&self.segments, &pointer.paragraph_path, prefer_trailing)
+        {
             self.cursor_segment = index;
             self.cursor = CursorPointer {
                 paragraph_path: segment.paragraph_path.clone(),

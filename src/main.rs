@@ -7,7 +7,10 @@ use std::{
 
 use anyhow::{Context, Result};
 use crossterm::{
-    event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
+    event::{
+        self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind,
+        KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+    },
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
@@ -34,6 +37,8 @@ const CURSOR_SENTINEL: char = '\u{F8FF}';
 const SELECTION_START_SENTINEL: char = '\u{F8FE}';
 const SELECTION_END_SENTINEL: char = '\u{F8FD}';
 const STATUS_TIMEOUT: Duration = Duration::from_secs(4);
+const DOUBLE_CLICK_TIMEOUT: Duration = Duration::from_millis(400);
+const MOUSE_SCROLL_LINES: usize = 3;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum DocumentFormat {
@@ -77,7 +82,8 @@ fn run() -> Result<()> {
 
     enable_raw_mode().context("failed to enable raw mode")?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen).context("failed to enter alternate screen")?;
+    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)
+        .context("failed to initialize terminal")?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend).context("failed to create terminal backend")?;
     terminal.clear().ok();
@@ -85,7 +91,12 @@ fn run() -> Result<()> {
     let res = run_app(&mut terminal, &mut app).context("application error");
 
     disable_raw_mode().ok();
-    execute!(terminal.backend_mut(), LeaveAlternateScreen).ok();
+    execute!(
+        terminal.backend_mut(),
+        LeaveAlternateScreen,
+        DisableMouseCapture
+    )
+    .ok();
     terminal.show_cursor().ok();
 
     res
@@ -474,6 +485,7 @@ struct App {
     document_format: DocumentFormat,
     scroll_top: usize,
     last_view_height: usize,
+    last_total_lines: usize,
     should_quit: bool,
     dirty: bool,
     status_message: Option<(String, Instant)>,
@@ -482,6 +494,13 @@ struct App {
     preferred_column: Option<u16>,
     selection_anchor: Option<CursorPointer>,
     context_menu: Option<ContextMenuState>,
+    last_text_area: Rect,
+    last_click_instant: Option<Instant>,
+    last_click_position: Option<(u16, u16)>,
+    last_click_button: Option<MouseButton>,
+    mouse_click_count: u8,
+    mouse_drag_anchor: Option<CursorPointer>,
+    cursor_following: bool,
 }
 
 impl App {
@@ -500,6 +519,7 @@ impl App {
             document_format: format,
             scroll_top: 0,
             last_view_height: 1,
+            last_total_lines: 0,
             should_quit: false,
             dirty: false,
             status_message: initial_status.map(|msg| (msg, Instant::now())),
@@ -508,6 +528,13 @@ impl App {
             preferred_column: None,
             selection_anchor: None,
             context_menu: None,
+            last_text_area: Rect::default(),
+            last_click_instant: None,
+            last_click_position: None,
+            last_click_button: None,
+            mouse_click_count: 0,
+            mouse_drag_anchor: None,
+            cursor_following: true,
         }
     }
 
@@ -582,6 +609,8 @@ impl App {
         let scrollbar_area = horizontal[1];
 
         let render = self.render_document(text_area.width.max(1) as usize);
+        self.last_text_area = text_area;
+        self.last_total_lines = render.total_lines;
 
         self.visual_positions = render
             .cursor_map
@@ -887,16 +916,18 @@ impl App {
         if self.scroll_top > max_scroll {
             self.scroll_top = max_scroll;
         }
-        if let Some(cursor) = &render.cursor {
-            if cursor.line < self.scroll_top {
-                self.scroll_top = cursor.line;
-            } else if cursor.line >= self.scroll_top + viewport_height {
-                let target = cursor.line.saturating_add(1);
-                self.scroll_top = target.saturating_sub(viewport);
+        if self.cursor_following {
+            if let Some(cursor) = &render.cursor {
+                if cursor.line < self.scroll_top {
+                    self.scroll_top = cursor.line;
+                } else if cursor.line >= self.scroll_top + viewport_height {
+                    let target = cursor.line.saturating_add(1);
+                    self.scroll_top = target.saturating_sub(viewport);
+                }
             }
-        }
-        if self.scroll_top > max_scroll {
-            self.scroll_top = max_scroll;
+            if self.scroll_top > max_scroll {
+                self.scroll_top = max_scroll;
+            }
         }
     }
 
@@ -1092,8 +1123,249 @@ impl App {
         None
     }
 
+    fn closest_pointer_near_line(&self, line: usize, column: u16) -> Option<CursorDisplay> {
+        if self.visual_positions.is_empty() {
+            return None;
+        }
+        if let Some(hit) = self.closest_pointer_on_line(line, column) {
+            return Some(hit);
+        }
+        let max_line = self
+            .visual_positions
+            .iter()
+            .map(|entry| entry.position.line)
+            .max()
+            .unwrap_or(0);
+        let mut distance = 1usize;
+        while line.checked_sub(distance).is_some() || line + distance <= max_line {
+            if let Some(prev) = line.checked_sub(distance) {
+                if let Some(hit) = self.closest_pointer_on_line(prev, column) {
+                    return Some(hit);
+                }
+            }
+            let next = line + distance;
+            if next <= max_line {
+                if let Some(hit) = self.closest_pointer_on_line(next, column) {
+                    return Some(hit);
+                }
+            } else if line.checked_sub(distance).is_none() {
+                break;
+            }
+            distance += 1;
+        }
+        None
+    }
+
+    fn pointer_from_mouse(&self, column: u16, row: u16) -> Option<CursorDisplay> {
+        if self.visual_positions.is_empty() {
+            return None;
+        }
+        let area = self.last_text_area;
+        if area.width == 0 || area.height == 0 {
+            return None;
+        }
+        let max_x = area.x.saturating_add(area.width);
+        let max_y = area.y.saturating_add(area.height);
+        if column < area.x || column >= max_x || row < area.y || row >= max_y {
+            return None;
+        }
+        let line = self.scroll_top.saturating_add((row - area.y) as usize);
+        let relative_column = column.saturating_sub(area.x);
+        self.closest_pointer_near_line(line, relative_column)
+    }
+
+    fn visual_line_boundaries(&self, line: usize) -> Option<(CursorDisplay, CursorDisplay)> {
+        let mut entries: Vec<_> = self
+            .visual_positions
+            .iter()
+            .filter(|entry| entry.position.line == line)
+            .cloned()
+            .collect();
+        if entries.is_empty() {
+            return None;
+        }
+        entries.sort_by_key(|entry| {
+            (
+                entry.position.content_column as usize,
+                entry.position.column as usize,
+                entry.pointer.offset,
+            )
+        });
+        let start = entries.first()?.clone();
+        let end = entries.last()?.clone();
+        Some((start, end))
+    }
+
+    fn focus_display(&mut self, display: &CursorDisplay) {
+        if self.editor.move_to_pointer(&display.pointer) {
+            self.last_cursor_visual = Some(display.position);
+            self.preferred_column = Some(display.position.column);
+            self.cursor_following = true;
+        }
+    }
+
+    fn focus_pointer(&mut self, pointer: &CursorPointer) {
+        if self.editor.move_to_pointer(pointer) {
+            if let Some(display) = self
+                .visual_positions
+                .iter()
+                .find(|entry| &entry.pointer == pointer)
+                .cloned()
+            {
+                self.last_cursor_visual = Some(display.position);
+                self.preferred_column = Some(display.position.column);
+            } else {
+                self.last_cursor_visual = None;
+                self.preferred_column = None;
+            }
+            self.cursor_following = true;
+        }
+    }
+
     fn insert_paragraph_break(&mut self) -> bool {
         self.editor.insert_paragraph_break()
+    }
+
+    fn register_click(&mut self, button: MouseButton, column: u16, row: u16) -> u8 {
+        let now = Instant::now();
+        if self.last_click_button == Some(button) {
+            if let Some(last_time) = self.last_click_instant {
+                if now.duration_since(last_time) <= DOUBLE_CLICK_TIMEOUT
+                    && self.last_click_position == Some((column, row))
+                {
+                    self.mouse_click_count = (self.mouse_click_count + 1).min(3);
+                } else {
+                    self.mouse_click_count = 1;
+                }
+            } else {
+                self.mouse_click_count = 1;
+            }
+        } else {
+            self.mouse_click_count = 1;
+        }
+
+        self.last_click_button = Some(button);
+        self.last_click_instant = Some(now);
+        self.last_click_position = Some((column, row));
+        self.mouse_click_count
+    }
+
+    fn scroll_by_lines(&mut self, delta: isize) {
+        if delta == 0 {
+            return;
+        }
+        self.cursor_following = false;
+        let viewport = self.last_view_height.max(1);
+        let max_scroll = self
+            .last_total_lines
+            .saturating_sub(viewport)
+            .min(self.last_total_lines);
+        let max_scroll = max_scroll as isize;
+        let mut new_scroll = self.scroll_top as isize + delta;
+        if new_scroll < 0 {
+            new_scroll = 0;
+        } else if new_scroll > max_scroll {
+            new_scroll = max_scroll;
+        }
+        self.scroll_top = new_scroll.max(0) as usize;
+    }
+
+    fn detach_cursor_follow(&mut self) {
+        self.cursor_following = false;
+    }
+
+    fn handle_mouse_event(&mut self, event: MouseEvent) {
+        if self.context_menu.is_some() {
+            if matches!(event.kind, MouseEventKind::Down(MouseButton::Left)) {
+                self.close_context_menu();
+            }
+            return;
+        }
+
+        match event.kind {
+            MouseEventKind::ScrollUp => {
+                self.scroll_by_lines(-(MOUSE_SCROLL_LINES as isize));
+            }
+            MouseEventKind::ScrollDown => {
+                self.scroll_by_lines(MOUSE_SCROLL_LINES as isize);
+            }
+            MouseEventKind::Down(MouseButton::Left) => self.handle_mouse_down(event),
+            MouseEventKind::Drag(MouseButton::Left) => self.handle_mouse_drag(event),
+            MouseEventKind::Up(button) => self.handle_mouse_up(button),
+            _ => {}
+        }
+    }
+
+    fn handle_mouse_down(&mut self, event: MouseEvent) {
+        let Some(display) = self.pointer_from_mouse(event.column, event.row) else {
+            if !event.modifiers.contains(KeyModifiers::SHIFT) {
+                self.selection_anchor = None;
+            }
+            self.mouse_drag_anchor = None;
+            return;
+        };
+
+        let clicks = self.register_click(MouseButton::Left, event.column, event.row);
+        match clicks {
+            1 => self.handle_single_click(display, event.modifiers),
+            2 => self.handle_double_click(display),
+            3 => self.handle_triple_click(display),
+            _ => {}
+        }
+    }
+
+    fn handle_single_click(&mut self, display: CursorDisplay, modifiers: KeyModifiers) {
+        if modifiers.contains(KeyModifiers::SHIFT) {
+            if self.selection_anchor.is_none() {
+                self.selection_anchor = Some(self.editor.cursor_pointer());
+            }
+            self.mouse_drag_anchor = None;
+        } else {
+            self.selection_anchor = None;
+            self.mouse_drag_anchor = Some(display.pointer.clone());
+        }
+        self.focus_display(&display);
+    }
+
+    fn handle_double_click(&mut self, display: CursorDisplay) {
+        self.mouse_drag_anchor = None;
+        if let Some((start, end)) = self.editor.word_boundaries_at(&display.pointer) {
+            self.selection_anchor = Some(start.clone());
+            self.focus_pointer(&end);
+        } else {
+            self.selection_anchor = None;
+            self.focus_display(&display);
+        }
+    }
+
+    fn handle_triple_click(&mut self, display: CursorDisplay) {
+        self.mouse_drag_anchor = None;
+        if let Some((line_start, line_end)) = self.visual_line_boundaries(display.position.line) {
+            self.selection_anchor = Some(line_start.pointer.clone());
+            self.focus_display(&line_end);
+        } else {
+            self.selection_anchor = None;
+            self.focus_display(&display);
+        }
+    }
+
+    fn handle_mouse_drag(&mut self, event: MouseEvent) {
+        let Some(anchor) = self.mouse_drag_anchor.clone() else {
+            return;
+        };
+        let Some(display) = self.pointer_from_mouse(event.column, event.row) else {
+            return;
+        };
+        if self.selection_anchor.is_none() {
+            self.selection_anchor = Some(anchor);
+        }
+        self.focus_display(&display);
+    }
+
+    fn handle_mouse_up(&mut self, button: MouseButton) {
+        if button == MouseButton::Left {
+            self.mouse_drag_anchor = None;
+        }
     }
 
     fn render_document(&mut self, width: usize) -> RenderResult {
@@ -1118,243 +1390,263 @@ impl App {
     }
 
     fn handle_event(&mut self, event: Event) -> Result<()> {
-        if let Event::Key(KeyEvent {
-            code,
-            modifiers,
-            kind: KeyEventKind::Press,
-            ..
-        }) = event
-        {
-            if self.handle_context_menu_key(code, modifiers) {
-                return Ok(());
-            }
+        match event {
+            Event::Key(KeyEvent {
+                code,
+                modifiers,
+                kind: KeyEventKind::Press,
+                ..
+            }) => {
+                if self.handle_context_menu_key(code, modifiers) {
+                    return Ok(());
+                }
 
-            if self.context_menu.is_some() {
-                return Ok(());
-            }
-
-            if is_context_menu_shortcut(code, modifiers) {
                 if self.context_menu.is_some() {
-                    self.close_context_menu();
-                } else {
-                    self.open_context_menu();
+                    return Ok(());
                 }
-                return Ok(());
-            }
 
-            match (code, modifiers) {
-                (KeyCode::Char('q'), m) if m.contains(KeyModifiers::CONTROL) => {
-                    self.should_quit = true;
-                }
-                (KeyCode::Char('s'), m) if m.contains(KeyModifiers::CONTROL) => {
-                    self.save()?;
-                }
-                (KeyCode::F(9), _) => {
-                    let enabled = !self.editor.reveal_codes();
-                    self.editor.set_reveal_codes(enabled);
-                    self.preferred_column = None;
-                    let message = if enabled {
-                        "Reveal codes enabled"
+                if is_context_menu_shortcut(code, modifiers) {
+                    if self.context_menu.is_some() {
+                        self.close_context_menu();
                     } else {
-                        "Reveal codes disabled"
-                    };
-                    self.status_message = Some((message.to_string(), Instant::now()));
-                }
-                (KeyCode::Char('c'), m) if m.contains(KeyModifiers::CONTROL) => {
-                    self.should_quit = true;
-                }
-                (KeyCode::Left, m) if m.contains(KeyModifiers::SHIFT | KeyModifiers::CONTROL) => {
-                    self.prepare_selection(true);
-                    if self.editor.move_word_left() {
-                        self.preferred_column = None;
+                        self.open_context_menu();
                     }
+                    return Ok(());
                 }
-                (KeyCode::Right, m) if m.contains(KeyModifiers::SHIFT | KeyModifiers::CONTROL) => {
-                    self.prepare_selection(true);
-                    if self.editor.move_word_right() {
-                        self.preferred_column = None;
+
+                let previous_cursor = self.editor.cursor_pointer();
+
+                match (code, modifiers) {
+                    (KeyCode::Char('q'), m) if m.contains(KeyModifiers::CONTROL) => {
+                        self.should_quit = true;
                     }
-                }
-                (KeyCode::Left, m) if m.contains(KeyModifiers::SHIFT) => {
-                    self.prepare_selection(true);
-                    if self.editor.move_left() {
-                        self.preferred_column = None;
+                    (KeyCode::Char('s'), m) if m.contains(KeyModifiers::CONTROL) => {
+                        self.save()?;
                     }
-                }
-                (KeyCode::Right, m) if m.contains(KeyModifiers::SHIFT) => {
-                    self.prepare_selection(true);
-                    if self.editor.move_right() {
+                    (KeyCode::F(9), _) => {
+                        let enabled = !self.editor.reveal_codes();
+                        self.editor.set_reveal_codes(enabled);
                         self.preferred_column = None;
+                        let message = if enabled {
+                            "Reveal codes enabled"
+                        } else {
+                            "Reveal codes disabled"
+                        };
+                        self.status_message = Some((message.to_string(), Instant::now()));
                     }
-                }
-                (KeyCode::Left, m) if m.contains(KeyModifiers::CONTROL) => {
-                    self.prepare_selection(false);
-                    if self.editor.move_word_left() {
-                        self.preferred_column = None;
+                    (KeyCode::Char('c'), m) if m.contains(KeyModifiers::CONTROL) => {
+                        self.should_quit = true;
                     }
-                }
-                (KeyCode::Right, m) if m.contains(KeyModifiers::CONTROL) => {
-                    self.prepare_selection(false);
-                    if self.editor.move_word_right() {
-                        self.preferred_column = None;
+                    (KeyCode::Left, m)
+                        if m.contains(KeyModifiers::SHIFT | KeyModifiers::CONTROL) =>
+                    {
+                        self.prepare_selection(true);
+                        if self.editor.move_word_left() {
+                            self.preferred_column = None;
+                        }
                     }
-                }
-                (KeyCode::Left, _) => {
-                    self.prepare_selection(false);
-                    if self.editor.move_left() {
-                        self.preferred_column = None;
+                    (KeyCode::Right, m)
+                        if m.contains(KeyModifiers::SHIFT | KeyModifiers::CONTROL) =>
+                    {
+                        self.prepare_selection(true);
+                        if self.editor.move_word_right() {
+                            self.preferred_column = None;
+                        }
                     }
-                }
-                (KeyCode::Right, _) => {
-                    self.prepare_selection(false);
-                    if self.editor.move_right() {
-                        self.preferred_column = None;
+                    (KeyCode::Left, m) if m.contains(KeyModifiers::SHIFT) => {
+                        self.prepare_selection(true);
+                        if self.editor.move_left() {
+                            self.preferred_column = None;
+                        }
                     }
-                }
-                (KeyCode::Home, m) if m.contains(KeyModifiers::SHIFT) => {
-                    self.prepare_selection(true);
-                    self.move_to_visual_line_start();
-                }
-                (KeyCode::End, m) if m.contains(KeyModifiers::SHIFT) => {
-                    self.prepare_selection(true);
-                    self.move_to_visual_line_end();
-                }
-                (KeyCode::Home, _) => {
-                    self.prepare_selection(false);
-                    self.move_to_visual_line_start();
-                }
-                (KeyCode::End, _) => {
-                    self.prepare_selection(false);
-                    self.move_to_visual_line_end();
-                }
-                (KeyCode::Char('a'), m) if m.contains(KeyModifiers::CONTROL) => {
-                    self.prepare_selection(false);
-                    self.move_to_visual_line_start();
-                }
-                (KeyCode::Char('j'), m) if m.contains(KeyModifiers::CONTROL) => {
-                    if self.editor.insert_char('\n') {
-                        self.mark_dirty();
-                        self.preferred_column = None;
+                    (KeyCode::Right, m) if m.contains(KeyModifiers::SHIFT) => {
+                        self.prepare_selection(true);
+                        if self.editor.move_right() {
+                            self.preferred_column = None;
+                        }
                     }
-                }
-                (KeyCode::Char('p'), m) if m.contains(KeyModifiers::CONTROL) => {
-                    self.prepare_selection(false);
-                    if self.editor.insert_paragraph_break_as_sibling() {
-                        self.mark_dirty();
-                        self.preferred_column = None;
+                    (KeyCode::Left, m) if m.contains(KeyModifiers::CONTROL) => {
+                        self.prepare_selection(false);
+                        if self.editor.move_word_left() {
+                            self.preferred_column = None;
+                        }
                     }
-                }
-                (KeyCode::Char('e'), m) if m.contains(KeyModifiers::CONTROL) => {
-                    self.prepare_selection(false);
-                    self.move_to_visual_line_end();
-                }
-                (KeyCode::Char('w'), m) if m.contains(KeyModifiers::CONTROL) => {
-                    if self.editor.delete_word_backward() {
-                        self.mark_dirty();
-                        self.preferred_column = None;
+                    (KeyCode::Right, m) if m.contains(KeyModifiers::CONTROL) => {
+                        self.prepare_selection(false);
+                        if self.editor.move_word_right() {
+                            self.preferred_column = None;
+                        }
                     }
-                }
-                (KeyCode::Backspace, m)
-                    if m.contains(KeyModifiers::CONTROL) || m.contains(KeyModifiers::ALT) =>
-                {
-                    if self.editor.delete_word_backward() {
-                        self.mark_dirty();
-                        self.preferred_column = None;
+                    (KeyCode::Left, _) => {
+                        self.prepare_selection(false);
+                        if self.editor.move_left() {
+                            self.preferred_column = None;
+                        }
                     }
-                }
-                (KeyCode::Backspace, _) => {
-                    if self.editor.backspace() {
-                        self.mark_dirty();
-                        self.preferred_column = None;
+                    (KeyCode::Right, _) => {
+                        self.prepare_selection(false);
+                        if self.editor.move_right() {
+                            self.preferred_column = None;
+                        }
                     }
-                }
-                (KeyCode::Delete, m)
-                    if m.contains(KeyModifiers::CONTROL) || m.contains(KeyModifiers::ALT) =>
-                {
-                    if self.editor.delete_word_forward() {
-                        self.mark_dirty();
-                        self.preferred_column = None;
+                    (KeyCode::Home, m) if m.contains(KeyModifiers::SHIFT) => {
+                        self.prepare_selection(true);
+                        self.move_to_visual_line_start();
                     }
-                }
-                (KeyCode::Delete, _) => {
-                    if self.editor.delete() {
-                        self.mark_dirty();
-                        self.preferred_column = None;
+                    (KeyCode::End, m) if m.contains(KeyModifiers::SHIFT) => {
+                        self.prepare_selection(true);
+                        self.move_to_visual_line_end();
                     }
-                }
-                (KeyCode::Enter, m) => {
-                    if m.contains(KeyModifiers::SHIFT) || m.contains(KeyModifiers::CONTROL) {
+                    (KeyCode::Home, _) => {
+                        self.prepare_selection(false);
+                        self.move_to_visual_line_start();
+                    }
+                    (KeyCode::End, _) => {
+                        self.prepare_selection(false);
+                        self.move_to_visual_line_end();
+                    }
+                    (KeyCode::Char('a'), m) if m.contains(KeyModifiers::CONTROL) => {
+                        self.prepare_selection(false);
+                        self.move_to_visual_line_start();
+                    }
+                    (KeyCode::Char('j'), m) if m.contains(KeyModifiers::CONTROL) => {
                         if self.editor.insert_char('\n') {
                             self.mark_dirty();
                             self.preferred_column = None;
                         }
-                    } else {
-                        if self.insert_paragraph_break() {
+                    }
+                    (KeyCode::Char('p'), m) if m.contains(KeyModifiers::CONTROL) => {
+                        self.prepare_selection(false);
+                        if self.editor.insert_paragraph_break_as_sibling() {
                             self.mark_dirty();
                             self.preferred_column = None;
                         }
                     }
-                }
-                (KeyCode::Tab, _) => {
-                    if self.editor.insert_char('\t') {
-                        self.mark_dirty();
-                        self.preferred_column = None;
+                    (KeyCode::Char('e'), m) if m.contains(KeyModifiers::CONTROL) => {
+                        self.prepare_selection(false);
+                        self.move_to_visual_line_end();
                     }
-                }
-                (KeyCode::Char(ch), m)
-                    if !m.contains(KeyModifiers::CONTROL) && !m.contains(KeyModifiers::ALT) =>
-                {
-                    if self.editor.insert_char(ch) {
-                        self.mark_dirty();
-                        self.preferred_column = None;
+                    (KeyCode::Char('w'), m) if m.contains(KeyModifiers::CONTROL) => {
+                        if self.editor.delete_word_backward() {
+                            self.mark_dirty();
+                            self.preferred_column = None;
+                        }
                     }
+                    (KeyCode::Backspace, m)
+                        if m.contains(KeyModifiers::CONTROL) || m.contains(KeyModifiers::ALT) =>
+                    {
+                        if self.editor.delete_word_backward() {
+                            self.mark_dirty();
+                            self.preferred_column = None;
+                        }
+                    }
+                    (KeyCode::Backspace, _) => {
+                        if self.editor.backspace() {
+                            self.mark_dirty();
+                            self.preferred_column = None;
+                        }
+                    }
+                    (KeyCode::Delete, m)
+                        if m.contains(KeyModifiers::CONTROL) || m.contains(KeyModifiers::ALT) =>
+                    {
+                        if self.editor.delete_word_forward() {
+                            self.mark_dirty();
+                            self.preferred_column = None;
+                        }
+                    }
+                    (KeyCode::Delete, _) => {
+                        if self.editor.delete() {
+                            self.mark_dirty();
+                            self.preferred_column = None;
+                        }
+                    }
+                    (KeyCode::Enter, m) => {
+                        if m.contains(KeyModifiers::SHIFT) || m.contains(KeyModifiers::CONTROL) {
+                            if self.editor.insert_char('\n') {
+                                self.mark_dirty();
+                                self.preferred_column = None;
+                            }
+                        } else {
+                            if self.insert_paragraph_break() {
+                                self.mark_dirty();
+                                self.preferred_column = None;
+                            }
+                        }
+                    }
+                    (KeyCode::Tab, _) => {
+                        if self.editor.insert_char('\t') {
+                            self.mark_dirty();
+                            self.preferred_column = None;
+                        }
+                    }
+                    (KeyCode::Char(ch), m)
+                        if !m.contains(KeyModifiers::CONTROL) && !m.contains(KeyModifiers::ALT) =>
+                    {
+                        if self.editor.insert_char(ch) {
+                            self.mark_dirty();
+                            self.preferred_column = None;
+                        }
+                    }
+                    (KeyCode::Up, m) if m.contains(KeyModifiers::SHIFT) => {
+                        self.prepare_selection(true);
+                        self.move_cursor_vertical(-1);
+                    }
+                    (KeyCode::Up, m) if m.contains(KeyModifiers::CONTROL) => {
+                        self.prepare_selection(false);
+                        self.scroll_top = self.scroll_top.saturating_sub(self.last_view_height);
+                        self.detach_cursor_follow();
+                    }
+                    (KeyCode::Up, _) => {
+                        self.prepare_selection(false);
+                        self.move_cursor_vertical(-1);
+                    }
+                    (KeyCode::Down, m) if m.contains(KeyModifiers::SHIFT) => {
+                        self.prepare_selection(true);
+                        self.move_cursor_vertical(1);
+                    }
+                    (KeyCode::Down, m) if m.contains(KeyModifiers::CONTROL) => {
+                        self.prepare_selection(false);
+                        self.scroll_top += self.last_view_height;
+                        self.detach_cursor_follow();
+                    }
+                    (KeyCode::Down, _) => {
+                        self.prepare_selection(false);
+                        self.move_cursor_vertical(1);
+                    }
+                    (KeyCode::PageUp, m) if m.contains(KeyModifiers::SHIFT) => {
+                        self.prepare_selection(true);
+                        let jump = self.last_view_height.max(1);
+                        self.move_cursor_vertical(-(jump as i32));
+                        self.scroll_top = self.scroll_top.saturating_sub(jump);
+                    }
+                    (KeyCode::PageDown, m) if m.contains(KeyModifiers::SHIFT) => {
+                        self.prepare_selection(true);
+                        let jump = self.last_view_height.max(1);
+                        self.move_cursor_vertical(jump as i32);
+                        self.scroll_top += jump;
+                    }
+                    (KeyCode::PageUp, _) => {
+                        self.prepare_selection(false);
+                        self.scroll_top =
+                            self.scroll_top.saturating_sub(self.last_view_height.max(1));
+                        self.detach_cursor_follow();
+                    }
+                    (KeyCode::PageDown, _) => {
+                        self.prepare_selection(false);
+                        self.scroll_top += self.last_view_height.max(1);
+                        self.detach_cursor_follow();
+                    }
+                    _ => {}
                 }
-                (KeyCode::Up, m) if m.contains(KeyModifiers::SHIFT) => {
-                    self.prepare_selection(true);
-                    self.move_cursor_vertical(-1);
+
+                if self.editor.cursor_pointer() != previous_cursor {
+                    self.cursor_following = true;
                 }
-                (KeyCode::Up, m) if m.contains(KeyModifiers::CONTROL) => {
-                    self.prepare_selection(false);
-                    self.scroll_top = self.scroll_top.saturating_sub(self.last_view_height);
-                }
-                (KeyCode::Up, _) => {
-                    self.prepare_selection(false);
-                    self.move_cursor_vertical(-1);
-                }
-                (KeyCode::Down, m) if m.contains(KeyModifiers::SHIFT) => {
-                    self.prepare_selection(true);
-                    self.move_cursor_vertical(1);
-                }
-                (KeyCode::Down, m) if m.contains(KeyModifiers::CONTROL) => {
-                    self.prepare_selection(false);
-                    self.scroll_top += self.last_view_height;
-                }
-                (KeyCode::Down, _) => {
-                    self.prepare_selection(false);
-                    self.move_cursor_vertical(1);
-                }
-                (KeyCode::PageUp, m) if m.contains(KeyModifiers::SHIFT) => {
-                    self.prepare_selection(true);
-                    let jump = self.last_view_height.max(1);
-                    self.move_cursor_vertical(-(jump as i32));
-                    self.scroll_top = self.scroll_top.saturating_sub(jump);
-                }
-                (KeyCode::PageDown, m) if m.contains(KeyModifiers::SHIFT) => {
-                    self.prepare_selection(true);
-                    let jump = self.last_view_height.max(1);
-                    self.move_cursor_vertical(jump as i32);
-                    self.scroll_top += jump;
-                }
-                (KeyCode::PageUp, _) => {
-                    self.prepare_selection(false);
-                    self.scroll_top = self.scroll_top.saturating_sub(self.last_view_height.max(1));
-                }
-                (KeyCode::PageDown, _) => {
-                    self.prepare_selection(false);
-                    self.scroll_top += self.last_view_height.max(1);
-                }
-                _ => {}
             }
+            Event::Mouse(mouse_event) => {
+                self.handle_mouse_event(mouse_event);
+            }
+            _ => {}
         }
         Ok(())
     }
