@@ -68,7 +68,7 @@
   </li>
   <li><input type="checkbox" checked /> Add support for Markdown files</li>
   <li>
-    <input type="checkbox" /> Keep position when toggling Reveal Codes mode
+    <input type="checkbox" checked /> Keep position when toggling Reveal Codes mode
   </li>
 </ul>
 
@@ -81,6 +81,7 @@
 <h3>Width/Padding calculation:</h3>
 
 <pre>
+
 if width &lt; 60 {
     wrap_width = width - 1; // leave space for cursor at the end of the line
     left_padding = 0;

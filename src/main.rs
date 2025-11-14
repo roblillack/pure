@@ -523,6 +523,7 @@ struct App {
     mouse_click_count: u8,
     mouse_drag_anchor: Option<CursorPointer>,
     cursor_following: bool,
+    pending_scroll_restore: Option<ScrollRestore>,
 }
 
 impl App {
@@ -557,6 +558,7 @@ impl App {
             mouse_click_count: 0,
             mouse_drag_anchor: None,
             cursor_following: true,
+            pending_scroll_restore: None,
         }
     }
 
@@ -608,6 +610,58 @@ impl App {
         }
     }
 
+    fn capture_reveal_toggle_snapshot(&self) -> RevealToggleSnapshot {
+        let viewport = self.last_view_height.max(1);
+        let max_scroll = self
+            .last_total_lines
+            .saturating_sub(viewport)
+            .min(self.last_total_lines);
+        let clamped_scroll = self.scroll_top.min(max_scroll);
+        let ratio = if max_scroll == 0 {
+            0.0
+        } else {
+            clamped_scroll as f64 / max_scroll as f64
+        };
+        RevealToggleSnapshot {
+            scroll_ratio: ratio,
+            cursor_pointer: self.editor.cursor_stable_pointer(),
+        }
+    }
+
+    fn restore_view_after_reveal_toggle(&mut self, snapshot: RevealToggleSnapshot) {
+        let _ = self.editor.move_to_pointer(&snapshot.cursor_pointer);
+        self.pending_scroll_restore = Some(ScrollRestore {
+            ratio: snapshot.scroll_ratio,
+            ensure_cursor_visible: true,
+        });
+    }
+
+    fn apply_pending_scroll_restore(&mut self, render: &RenderResult, viewport_height: usize) {
+        let Some(restore) = self.pending_scroll_restore.take() else {
+            return;
+        };
+        let viewport = viewport_height.max(1);
+        let max_scroll = render
+            .total_lines
+            .saturating_sub(viewport)
+            .min(render.total_lines);
+        let mut target = if max_scroll == 0 {
+            0
+        } else {
+            (restore.ratio * max_scroll as f64).round() as usize
+        };
+        if target > max_scroll {
+            target = max_scroll;
+        }
+        self.scroll_top = target;
+        if restore.ensure_cursor_visible {
+            if let Some(cursor) = &render.cursor {
+                self.scroll_top =
+                    self.scroll_top_for_cursor(cursor.line, viewport, max_scroll);
+            }
+        }
+    }
+
     fn draw(&mut self, frame: &mut Frame) {
         let area = frame.area();
         if area.height == 0 || area.width == 0 {
@@ -648,6 +702,7 @@ impl App {
 
         let viewport_height = text_area.height as usize;
         self.last_view_height = viewport_height.max(1);
+        self.apply_pending_scroll_restore(&render, viewport_height);
         self.adjust_scroll(&render, viewport_height);
 
         let paragraph = Paragraph::new(Text::from(render.lines.clone()))
@@ -1490,8 +1545,10 @@ impl App {
                         self.save()?;
                     }
                     (KeyCode::F(9), _) => {
+                        let snapshot = self.capture_reveal_toggle_snapshot();
                         let enabled = !self.editor.reveal_codes();
                         self.editor.set_reveal_codes(enabled);
+                        self.restore_view_after_reveal_toggle(snapshot);
                         self.preferred_column = None;
                         let message = if enabled {
                             "Reveal codes enabled"
@@ -1758,4 +1815,14 @@ impl App {
 struct CursorDisplay {
     pointer: CursorPointer,
     position: CursorVisualPosition,
+}
+
+struct ScrollRestore {
+    ratio: f64,
+    ensure_cursor_visible: bool,
+}
+
+struct RevealToggleSnapshot {
+    scroll_ratio: f64,
+    cursor_pointer: CursorPointer,
 }

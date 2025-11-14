@@ -260,6 +260,18 @@ impl DocumentEditor {
         self.cursor.clone()
     }
 
+    pub fn cursor_stable_pointer(&self) -> CursorPointer {
+        self.stable_pointer(&self.cursor)
+    }
+
+    pub fn stable_pointer(&self, pointer: &CursorPointer) -> CursorPointer {
+        if self.segments.is_empty() || pointer.segment_kind == SegmentKind::Text {
+            return pointer.clone();
+        }
+        self.nearest_text_pointer_for(pointer)
+            .unwrap_or_else(|| pointer.clone())
+    }
+
     pub fn word_boundaries_at(
         &self,
         pointer: &CursorPointer,
@@ -1640,6 +1652,62 @@ impl DocumentEditor {
         if self.cursor.offset > len {
             self.cursor.offset = len;
         }
+    }
+
+    fn nearest_text_pointer_for(&self, pointer: &CursorPointer) -> Option<CursorPointer> {
+        let index = self
+            .segments
+            .iter()
+            .position(|segment| segment.matches_pointer(pointer))?;
+        match pointer.segment_kind {
+            SegmentKind::RevealStart(_) => self
+                .find_text_pointer_forward(index + 1)
+                .or_else(|| self.find_text_pointer_backward(index)),
+            SegmentKind::RevealEnd(_) => self
+                .find_text_pointer_backward(index)
+                .or_else(|| self.find_text_pointer_forward(index + 1)),
+            SegmentKind::Text => None,
+        }
+    }
+
+    fn find_text_pointer_forward(&self, start_index: usize) -> Option<CursorPointer> {
+        if start_index >= self.segments.len() {
+            return None;
+        }
+        let mut idx = start_index;
+        while idx < self.segments.len() {
+            let segment = &self.segments[idx];
+            if matches!(segment.kind, SegmentKind::Text) {
+                return Some(CursorPointer {
+                    paragraph_path: segment.paragraph_path.clone(),
+                    span_path: segment.span_path.clone(),
+                    offset: 0,
+                    segment_kind: SegmentKind::Text,
+                });
+            }
+            idx += 1;
+        }
+        None
+    }
+
+    fn find_text_pointer_backward(&self, start_index: usize) -> Option<CursorPointer> {
+        if self.segments.is_empty() {
+            return None;
+        }
+        let mut idx = start_index.min(self.segments.len());
+        while idx > 0 {
+            idx -= 1;
+            let segment = &self.segments[idx];
+            if matches!(segment.kind, SegmentKind::Text) {
+                return Some(CursorPointer {
+                    paragraph_path: segment.paragraph_path.clone(),
+                    span_path: segment.span_path.clone(),
+                    offset: segment.len,
+                    segment_kind: SegmentKind::Text,
+                });
+            }
+        }
+        None
     }
 
     fn current_paragraph_is_empty(&self) -> bool {
