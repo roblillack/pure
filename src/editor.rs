@@ -256,6 +256,154 @@ impl DocumentEditor {
         }
     }
 
+    pub fn can_indent_more(&self) -> bool {
+        find_indent_target(&self.document, &self.cursor.paragraph_path).is_some()
+    }
+
+    pub fn can_indent_less(&self) -> bool {
+        self.cursor.paragraph_path.steps().len() > 1
+    }
+
+    pub fn indent_current_paragraph(&mut self) -> bool {
+        let Some(target) = find_indent_target(&self.document, &self.cursor.paragraph_path) else {
+            return false;
+        };
+        let pointer = self.cursor_stable_pointer();
+        let Some(paragraph) = take_paragraph_at(&mut self.document, &pointer.paragraph_path) else {
+            return false;
+        };
+        let new_path = match target.kind {
+            IndentTargetKind::Quote => {
+                append_paragraph_to_quote(&mut self.document, &target.path, paragraph)
+            }
+            IndentTargetKind::List => {
+                let pointer_in_list_entry =
+                    extract_entry_context(&pointer.paragraph_path).is_some();
+                if !pointer_in_list_entry {
+                    if let Some(entry_index) =
+                        list_entry_append_target(&self.document, &target.path)
+                    {
+                        append_paragraph_to_entry(
+                            &mut self.document,
+                            &target.path,
+                            entry_index,
+                            paragraph,
+                        )
+                    } else {
+                        append_paragraph_to_list(&mut self.document, &target.path, paragraph)
+                    }
+                } else {
+                    append_paragraph_to_list(&mut self.document, &target.path, paragraph)
+                }
+            }
+            IndentTargetKind::ListEntry { entry_index } => {
+                append_paragraph_to_entry(&mut self.document, &target.path, entry_index, paragraph)
+            }
+        };
+        let Some(paragraph_path) = new_path else {
+            return false;
+        };
+        let mut new_pointer = pointer;
+        new_pointer.paragraph_path = paragraph_path;
+        self.rebuild_segments();
+        if !self.move_to_pointer(&new_pointer) {
+            if !self.fallback_move_to_text(&new_pointer, false) {
+                self.ensure_cursor_selectable();
+            }
+        }
+        true
+    }
+
+    pub fn unindent_current_paragraph(&mut self) -> bool {
+        if self.cursor.paragraph_path.steps().len() <= 1 {
+            return false;
+        }
+        let pointer = self.cursor_stable_pointer();
+        if matches!(
+            pointer.paragraph_path.steps().last(),
+            Some(PathStep::Entry { .. })
+        ) {
+            return self.unindent_list_entry(&pointer);
+        }
+        let Some(parent_path) = parent_paragraph_path(&pointer.paragraph_path) else {
+            return false;
+        };
+        let Some(paragraph) = take_paragraph_at(&mut self.document, &pointer.paragraph_path) else {
+            return false;
+        };
+        let Some(paragraph_path) =
+            insert_paragraph_after_parent(&mut self.document, &parent_path, paragraph)
+        else {
+            return false;
+        };
+        let mut new_pointer = pointer;
+        new_pointer.paragraph_path = paragraph_path;
+        self.rebuild_segments();
+        if !self.move_to_pointer(&new_pointer) {
+            if !self.fallback_move_to_text(&new_pointer, false) {
+                self.ensure_cursor_selectable();
+            }
+        }
+        true
+    }
+
+    fn unindent_list_entry(&mut self, pointer: &CursorPointer) -> bool {
+        let paragraph_type = paragraph_ref(&self.document, &pointer.paragraph_path)
+            .map(|p| p.paragraph_type)
+            .unwrap_or(ParagraphType::Text);
+        let steps = pointer.paragraph_path.steps();
+        let (last_step, prefix) = match steps.split_last() {
+            Some(value) => value,
+            None => return false,
+        };
+        let PathStep::Entry {
+            entry_index: _,
+            paragraph_index,
+        } = *last_step
+        else {
+            return false;
+        };
+
+        if paragraph_index > 0 {
+            let list_path = ParagraphPath::from_steps(prefix.to_vec());
+            let Some(paragraph) = take_paragraph_at(&mut self.document, &pointer.paragraph_path)
+            else {
+                return false;
+            };
+            let Some(paragraph_path) =
+                insert_paragraph_after_parent(&mut self.document, &list_path, paragraph)
+            else {
+                return false;
+            };
+            let mut new_pointer = pointer.clone();
+            new_pointer.paragraph_path = paragraph_path;
+            new_pointer.offset = pointer.offset;
+            self.rebuild_segments();
+            if !self.move_to_pointer(&new_pointer) {
+                if !self.fallback_move_to_text(&new_pointer, false) {
+                    self.ensure_cursor_selectable();
+                }
+            }
+            true
+        } else {
+            let Some(mut new_pointer) = break_list_entry_for_non_list_target(
+                &mut self.document,
+                &pointer.paragraph_path,
+                paragraph_type,
+            ) else {
+                return false;
+            };
+            new_pointer.offset = pointer.offset;
+            self.rebuild_segments();
+            if !self.move_to_pointer(&new_pointer) {
+                if !self.fallback_move_to_text(&new_pointer, false) {
+                    self.ensure_cursor_selectable();
+                }
+            }
+            true
+        }
+    }
+
     pub fn cursor_pointer(&self) -> CursorPointer {
         self.cursor.clone()
     }
@@ -367,6 +515,100 @@ impl DocumentEditor {
         }
         self.normalize_cursor_after_forward_move();
         true
+    }
+
+    pub fn move_up(&mut self) -> bool {
+        if self.segments.is_empty() {
+            return false;
+        }
+        let preferred_offset = self.cursor.offset;
+        let Some(target_path) = self.previous_paragraph_path() else {
+            return false;
+        };
+        self.move_to_paragraph_path(&target_path, true, preferred_offset)
+    }
+
+    pub fn move_down(&mut self) -> bool {
+        if self.segments.is_empty() {
+            return false;
+        }
+        let preferred_offset = self.cursor.offset;
+        let Some(target_path) = self.next_paragraph_path() else {
+            return false;
+        };
+        self.move_to_paragraph_path(&target_path, false, preferred_offset)
+    }
+
+    fn previous_paragraph_path(&self) -> Option<ParagraphPath> {
+        if self.segments.is_empty() {
+            return None;
+        }
+        let current_path = &self.cursor.paragraph_path;
+        let mut idx = self.cursor_segment;
+        while idx > 0 {
+            idx -= 1;
+            let segment = &self.segments[idx];
+            if segment.paragraph_path != *current_path {
+                return Some(segment.paragraph_path.clone());
+            }
+        }
+        None
+    }
+
+    fn next_paragraph_path(&self) -> Option<ParagraphPath> {
+        if self.segments.is_empty() {
+            return None;
+        }
+        let current_path = &self.cursor.paragraph_path;
+        let mut idx = self.cursor_segment + 1;
+        while idx < self.segments.len() {
+            let segment = &self.segments[idx];
+            if segment.paragraph_path != *current_path {
+                return Some(segment.paragraph_path.clone());
+            }
+            idx += 1;
+        }
+        None
+    }
+
+    fn move_to_paragraph_path(
+        &mut self,
+        paragraph_path: &ParagraphPath,
+        prefer_trailing: bool,
+        preferred_offset: usize,
+    ) -> bool {
+        if let Some((index, segment)) =
+            select_text_in_paragraph(&self.segments, paragraph_path, prefer_trailing)
+        {
+            self.cursor_segment = index;
+            self.cursor = CursorPointer {
+                paragraph_path: segment.paragraph_path.clone(),
+                span_path: segment.span_path.clone(),
+                offset: preferred_offset.min(segment.len),
+                segment_kind: SegmentKind::Text,
+            };
+            self.clamp_cursor_offset();
+            return true;
+        }
+
+        if let Some((index, segment)) = self
+            .segments
+            .iter()
+            .enumerate()
+            .find(|(_, segment)| segment.paragraph_path == *paragraph_path)
+        {
+            self.cursor_segment = index;
+            self.cursor = CursorPointer {
+                paragraph_path: segment.paragraph_path.clone(),
+                span_path: segment.span_path.clone(),
+                offset: preferred_offset.min(segment.len),
+                segment_kind: segment.kind,
+            };
+            self.clamp_cursor_offset();
+            return true;
+        }
+
+        false
     }
 
     pub fn move_word_left(&mut self) -> bool {
@@ -2948,6 +3190,302 @@ fn split_text(text: &str, offset: usize) -> (String, String) {
     (left, right)
 }
 
+fn parent_paragraph_path(path: &ParagraphPath) -> Option<ParagraphPath> {
+    let steps = path.steps();
+    if steps.len() <= 1 {
+        return None;
+    }
+    Some(ParagraphPath::from_steps(steps[..steps.len() - 1].to_vec()))
+}
+
+fn previous_sibling_path(path: &ParagraphPath) -> Option<ParagraphPath> {
+    let steps = path.steps();
+    if steps.is_empty() {
+        return None;
+    }
+    let (last_step, prefix) = steps.split_last()?;
+    match *last_step {
+        PathStep::Root(idx) if prefix.is_empty() && idx > 0 => {
+            Some(ParagraphPath::from_steps(vec![PathStep::Root(idx - 1)]))
+        }
+        PathStep::Child(idx) if idx > 0 => {
+            let mut new_steps = prefix.to_vec();
+            new_steps.push(PathStep::Child(idx - 1));
+            Some(ParagraphPath::from_steps(new_steps))
+        }
+        PathStep::Entry {
+            entry_index,
+            paragraph_index,
+        } if paragraph_index > 0 => {
+            let mut new_steps = prefix.to_vec();
+            new_steps.push(PathStep::Entry {
+                entry_index,
+                paragraph_index: paragraph_index - 1,
+            });
+            Some(ParagraphPath::from_steps(new_steps))
+        }
+        PathStep::Entry {
+            entry_index,
+            paragraph_index: 0,
+        } if entry_index > 0 => {
+            let mut new_steps = prefix.to_vec();
+            new_steps.push(PathStep::Entry {
+                entry_index: entry_index - 1,
+                paragraph_index: 0,
+            });
+            Some(ParagraphPath::from_steps(new_steps))
+        }
+        _ => None,
+    }
+}
+
+#[derive(Clone)]
+struct IndentTarget {
+    path: ParagraphPath,
+    kind: IndentTargetKind,
+}
+
+#[derive(Clone, Copy)]
+enum IndentTargetKind {
+    Quote,
+    List,
+    ListEntry { entry_index: usize },
+}
+
+fn find_indent_target(document: &Document, path: &ParagraphPath) -> Option<IndentTarget> {
+    let prev_path = previous_sibling_path(path)?;
+    let target = determine_indent_target(document, &prev_path)?;
+    if let IndentTargetKind::ListEntry { entry_index } = target.kind {
+        if let Some(ctx) = extract_entry_context(path) {
+            if ctx.list_path == target.path && ctx.entry_index == entry_index {
+                return None;
+            }
+        }
+    }
+    Some(target)
+}
+
+fn determine_indent_target(document: &Document, path: &ParagraphPath) -> Option<IndentTarget> {
+    let paragraph = paragraph_ref(document, path)?;
+    if paragraph.paragraph_type == ParagraphType::Quote {
+        return Some(IndentTarget {
+            path: path.clone(),
+            kind: IndentTargetKind::Quote,
+        });
+    }
+    if is_list_type(paragraph.paragraph_type) {
+        return Some(IndentTarget {
+            path: path.clone(),
+            kind: IndentTargetKind::List,
+        });
+    }
+    if let Some(ctx) = extract_entry_context(path) {
+        return Some(IndentTarget {
+            path: ctx.list_path.clone(),
+            kind: IndentTargetKind::ListEntry {
+                entry_index: ctx.entry_index,
+            },
+        });
+    }
+    None
+}
+
+fn append_paragraph_to_quote(
+    document: &mut Document,
+    path: &ParagraphPath,
+    paragraph: Paragraph,
+) -> Option<ParagraphPath> {
+    let quote = paragraph_mut(document, path)?;
+    let child_index = quote.children.len();
+    quote.children.push(paragraph);
+    let mut steps = path.steps().to_vec();
+    steps.push(PathStep::Child(child_index));
+    Some(ParagraphPath::from_steps(steps))
+}
+
+fn append_paragraph_to_list(
+    document: &mut Document,
+    path: &ParagraphPath,
+    paragraph: Paragraph,
+) -> Option<ParagraphPath> {
+    let list = paragraph_mut(document, path)?;
+    let entry_index = list.entries.len();
+    let (entry, paragraph_index) = match list.paragraph_type {
+        ParagraphType::Checklist => convert_paragraph_to_checklist_entry(paragraph),
+        _ => (vec![paragraph], 0),
+    };
+    list.entries.push(entry);
+    let mut steps = path.steps().to_vec();
+    steps.push(PathStep::Entry {
+        entry_index,
+        paragraph_index,
+    });
+    Some(ParagraphPath::from_steps(steps))
+}
+
+fn list_entry_append_target(document: &Document, path: &ParagraphPath) -> Option<usize> {
+    let list = paragraph_ref(document, path)?;
+    if list.entries.is_empty() {
+        return None;
+    }
+    let entry_index = list.entries.len() - 1;
+    let entry = list.entries.get(entry_index)?;
+    let last_paragraph = entry.last()?;
+    if matches!(
+        last_paragraph.paragraph_type,
+        ParagraphType::Quote
+            | ParagraphType::OrderedList
+            | ParagraphType::UnorderedList
+            | ParagraphType::Checklist
+    ) {
+        return None;
+    }
+    Some(entry_index)
+}
+
+fn append_paragraph_to_entry(
+    document: &mut Document,
+    list_path: &ParagraphPath,
+    entry_index: usize,
+    paragraph: Paragraph,
+) -> Option<ParagraphPath> {
+    let list = paragraph_mut(document, list_path)?;
+    if entry_index >= list.entries.len() {
+        return None;
+    }
+    let entry = &mut list.entries[entry_index];
+    entry.push(paragraph);
+    let paragraph_index = entry.len() - 1;
+    let mut steps = list_path.steps().to_vec();
+    steps.push(PathStep::Entry {
+        entry_index,
+        paragraph_index,
+    });
+    Some(ParagraphPath::from_steps(steps))
+}
+
+fn convert_paragraph_to_checklist_entry(paragraph: Paragraph) -> (Vec<Paragraph>, usize) {
+    if paragraph.paragraph_type == ParagraphType::ChecklistItem {
+        let mut item = paragraph;
+        if item.content.is_empty() {
+            item.content.push(Span::new_text(""));
+        }
+        if item.checklist_item_checked.is_none() {
+            item.checklist_item_checked = Some(false);
+        }
+        return (vec![item], 0);
+    }
+
+    let mut paragraph = paragraph;
+    let mut content = mem::take(&mut paragraph.content);
+    if content.is_empty() {
+        content.push(Span::new_text(""));
+    }
+    let mut item = Paragraph::new_checklist_item(paragraph.checklist_item_checked.unwrap_or(false));
+    item.content = content;
+    let mut entry = vec![item];
+    paragraph.checklist_item_checked = None;
+    if !paragraph.children.is_empty() || !paragraph.entries.is_empty() {
+        entry.push(paragraph);
+    }
+    (entry, 0)
+}
+
+fn take_paragraph_at(document: &mut Document, path: &ParagraphPath) -> Option<Paragraph> {
+    let mut steps = path.steps().to_vec();
+    let last = steps.pop()?;
+    match last {
+        PathStep::Root(idx) => {
+            if !steps.is_empty() {
+                return None;
+            }
+            if idx < document.paragraphs.len() {
+                Some(document.paragraphs.remove(idx))
+            } else {
+                None
+            }
+        }
+        PathStep::Child(idx) => {
+            let parent_path = ParagraphPath::from_steps(steps);
+            let parent = paragraph_mut(document, &parent_path)?;
+            if idx < parent.children.len() {
+                Some(parent.children.remove(idx))
+            } else {
+                None
+            }
+        }
+        PathStep::Entry {
+            entry_index,
+            paragraph_index,
+        } => {
+            let parent_path = ParagraphPath::from_steps(steps);
+            let parent = paragraph_mut(document, &parent_path)?;
+            if entry_index >= parent.entries.len() {
+                return None;
+            }
+            let entry = &mut parent.entries[entry_index];
+            if paragraph_index >= entry.len() {
+                return None;
+            }
+            let removed = entry.remove(paragraph_index);
+            if entry.is_empty() {
+                parent.entries.remove(entry_index);
+            }
+            if parent.paragraph_type == ParagraphType::Checklist {
+                ensure_entries_have_checklist_items(&mut parent.entries);
+            } else if is_list_type(parent.paragraph_type) && parent.entries.is_empty() {
+                parent.entries.push(vec![empty_text_paragraph()]);
+            }
+            Some(removed)
+        }
+    }
+}
+
+fn insert_paragraph_after_parent(
+    document: &mut Document,
+    parent_path: &ParagraphPath,
+    paragraph: Paragraph,
+) -> Option<ParagraphPath> {
+    let steps = parent_path.steps();
+    let (last_step, prefix) = steps.split_last()?;
+    match *last_step {
+        PathStep::Root(idx) if prefix.is_empty() => {
+            let insert_idx = (idx + 1).min(document.paragraphs.len());
+            document.paragraphs.insert(insert_idx, paragraph);
+            Some(ParagraphPath::from_steps(vec![PathStep::Root(insert_idx)]))
+        }
+        PathStep::Child(child_idx) => {
+            let host_path = ParagraphPath::from_steps(prefix.to_vec());
+            let host = paragraph_mut(document, &host_path)?;
+            let insert_idx = (child_idx + 1).min(host.children.len());
+            host.children.insert(insert_idx, paragraph);
+            let mut new_steps = prefix.to_vec();
+            new_steps.push(PathStep::Child(insert_idx));
+            Some(ParagraphPath::from_steps(new_steps))
+        }
+        PathStep::Entry {
+            entry_index,
+            paragraph_index,
+        } => {
+            let host_path = ParagraphPath::from_steps(prefix.to_vec());
+            let host = paragraph_mut(document, &host_path)?;
+            if entry_index >= host.entries.len() {
+                return None;
+            }
+            let entry = &mut host.entries[entry_index];
+            let insert_idx = (paragraph_index + 1).min(entry.len());
+            entry.insert(insert_idx, paragraph);
+            let mut new_steps = prefix.to_vec();
+            new_steps.push(PathStep::Entry {
+                entry_index,
+                paragraph_index: insert_idx,
+            });
+            Some(ParagraphPath::from_steps(new_steps))
+        }
+        _ => None,
+    }
+}
+
 fn remove_paragraph_by_path(document: &mut Document, path: &ParagraphPath) -> bool {
     let mut steps = path.steps().to_vec();
     let last = match steps.pop() {
@@ -3220,6 +3758,10 @@ fn span_is_empty(span: &Span) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use tdoc::ftml;
+
+    use crate::editor;
+
     use super::*;
 
     fn pointer_to_root_span(root_index: usize) -> CursorPointer {
@@ -3390,6 +3932,251 @@ mod tests {
             checklist.entries[1][0].paragraph_type,
             ParagraphType::ChecklistItem
         );
+    }
+
+    #[test]
+    fn indent_text_paragraph_following_list() {
+        let initial_doc = ftml! {
+            ul {
+                li { p {"Item 1" }}
+                li { p {"Item 2" } }
+            }
+            p { "Following paragraph" }
+        };
+        let mut editor = DocumentEditor::new(initial_doc.clone());
+        assert!(editor.move_down());
+        assert!(editor.move_down());
+        assert!(editor.can_indent_more());
+        assert!(editor.indent_current_paragraph());
+        assert_eq!(
+            editor.document().clone(),
+            ftml! {
+                ul {
+                    li { p { "Item 1"  } }
+                    li {
+                        p { "Item 2"  }
+                        p { "Following paragraph" }
+                    }
+                }
+            }
+        );
+
+        assert!(editor.can_indent_less());
+        assert!(editor.unindent_current_paragraph());
+        assert_eq!(editor.document().clone(), initial_doc);
+    }
+
+    #[test]
+    fn unindent_text_paragraph_from_beginning_of_list() {
+        let initial_doc = ftml! {
+            ul {
+                li { p {"Item 1" } }
+                li { p {"Item 2" } }
+                li { p {"Item 3" } }
+            }
+        };
+        let mut editor = DocumentEditor::new(initial_doc.clone());
+        assert!(editor.can_indent_less());
+        assert!(editor.unindent_current_paragraph());
+        assert_eq!(
+            editor.document().clone(),
+            ftml! {
+                p { "Item 1"  }
+                ul {
+                    li { p { "Item 2" } }
+                    li { p { "Item 3" } }
+                }
+            }
+        );
+    }
+
+    #[test]
+    fn unindent_text_paragraph_from_middle_of_list() {
+        let initial_doc = ftml! {
+            ul {
+                li { p {"Item 1" } }
+                li { p {"Item 2" } }
+                li { p {"Item 3" } }
+            }
+        };
+        let mut editor = DocumentEditor::new(initial_doc.clone());
+        assert!(editor.move_down());
+        assert!(editor.can_indent_less());
+        assert!(editor.unindent_current_paragraph());
+        assert_eq!(
+            editor.document().clone(),
+            ftml! {
+                ul {
+                    li { p { "Item 1" } }
+                }
+                p { "Item 2"  }
+                ul {
+                    li { p { "Item 3" } }
+                }
+            }
+        );
+    }
+
+    #[test]
+    fn unindent_text_paragraph_from_end_of_list() {
+        let initial_doc = ftml! {
+            ul {
+                li { p {"Item 1" } }
+                li { p {"Item 2" } }
+                li { p {"Item 3" } }
+            }
+        };
+        let mut editor = DocumentEditor::new(initial_doc.clone());
+        assert!(editor.move_down());
+        assert!(editor.move_down());
+        assert!(editor.can_indent_less());
+        assert!(editor.unindent_current_paragraph());
+        assert_eq!(
+            editor.document().clone(),
+            ftml! {
+                ul {
+                    li { p {"Item 1" } }
+                    li { p { "Item 2" } }
+                }
+                p { "Item 3"  }
+            }
+        );
+    }
+
+    #[test]
+    fn indent_list_item() {
+        let initial_doc = ftml! {
+            quote {
+                p { "Paragraph in quote" }
+                ul {
+                    li { p {"Item 1" } }
+                    li { p {"Item 2" } }
+                    li {
+                        ol {
+                            li { p { "Subitem 1" }  }
+                            li {
+                                p { "Subitem 2" }
+                                p { "Subitem 2, paragraph 2" }
+                            }
+
+                        }
+                    }
+                }
+            }
+            p { "Following paragraph" }
+        };
+        let mut editor = DocumentEditor::new(initial_doc.clone());
+        for _ in 0..6 {
+            assert!(editor.move_down());
+        }
+
+        // Indent the following paragraph into the quote
+        assert!(editor.can_indent_more());
+        assert!(editor.indent_current_paragraph());
+        assert_eq!(
+            editor.document().clone(),
+            ftml! {
+                quote {
+                    p { "Paragraph in quote" }
+                    ul {
+                        li { p {"Item 1" } }
+                        li { p {"Item 2" } }
+                        li {
+                            ol {
+                                li { p { "Subitem 1" }  }
+                                li {
+                                    p { "Subitem 2" }
+                                    p { "Subitem 2, paragraph 2" }
+                                }
+
+                            }
+                        }
+                    }
+                    p { "Following paragraph" }
+                }
+            }
+        );
+
+        // Indent further, into the unordered list this time
+        assert!(editor.can_indent_more());
+        assert!(editor.indent_current_paragraph());
+        assert_eq!(
+            editor.document().clone(),
+            ftml! {
+                quote {
+                    p { "Paragraph in quote" }
+                    ul {
+                        li { p {"Item 1" } }
+                        li { p {"Item 2" } }
+                        li {
+                            ol {
+                                li { p { "Subitem 1" }  }
+                                li {
+                                    p { "Subitem 2" }
+                                    p { "Subitem 2, paragraph 2" }
+                                }
+
+                            }
+                        }
+                        li { p { "Following paragraph" } }
+                    }
+                }
+            }
+        );
+
+        // Indent further, into the ordered list this time
+        assert!(editor.can_indent_more());
+        assert!(editor.indent_current_paragraph());
+        assert_eq!(
+            editor.document().clone(),
+            ftml! {
+                quote {
+                    p { "Paragraph in quote" }
+                    ul {
+                        li { p {"Item 1" } }
+                        li { p {"Item 2" } }
+                        li {
+                            ol {
+                                li { p { "Subitem 1" }  }
+                                li {
+                                    p { "Subitem 2" }
+                                    p { "Subitem 2, paragraph 2" }
+                                }
+                                li { p { "Following paragraph" } }
+                            }
+                        }
+                    }
+                }
+            }
+        );
+
+        // Indent further, into the second list item this time
+        assert!(editor.can_indent_more());
+        assert!(editor.indent_current_paragraph());
+        assert_eq!(
+            editor.document().clone(),
+            ftml! {
+                quote {
+                    p { "Paragraph in quote" }
+                    ul {
+                        li { p {"Item 1" } }
+                        li { p {"Item 2" } }
+                        li {
+                            ol {
+                                li { p { "Subitem 1" }  }
+                                li {
+                                    p { "Subitem 2" }
+                                    p { "Subitem 2, paragraph 2" }
+                                    p { "Following paragraph" }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        );
+
+        assert!(!editor.can_indent_more());
     }
 
     #[test]
@@ -3659,6 +4446,40 @@ mod tests {
         assert_eq!(spans[1].style, InlineStyle::Underline);
         assert_eq!(spans[2].text, "rld");
         assert_eq!(spans[2].style, InlineStyle::None);
+    }
+
+    #[test]
+    fn move_down_advances_to_next_paragraph() {
+        let document = Document::new().with_paragraphs(vec![
+            Paragraph::new_text().with_content(vec![Span::new_text("One")]),
+            Paragraph::new_text().with_content(vec![Span::new_text("Two")]),
+        ]);
+        let mut editor = DocumentEditor::new(document);
+        assert!(editor.move_down());
+        let pointer = editor.cursor_pointer();
+        assert_eq!(
+            pointer.paragraph_path.steps(),
+            pointer_to_root_span(1).paragraph_path.steps()
+        );
+        assert!(!editor.move_down());
+    }
+
+    #[test]
+    fn move_up_moves_to_previous_paragraph() {
+        let document = Document::new().with_paragraphs(vec![
+            Paragraph::new_text().with_content(vec![Span::new_text("Alpha")]),
+            Paragraph::new_text().with_content(vec![Span::new_text("Beta")]),
+        ]);
+        let mut editor = DocumentEditor::new(document);
+        assert!(editor.move_down());
+        assert!(editor.move_up());
+        let pointer = editor.cursor_pointer();
+        assert_eq!(
+            pointer.paragraph_path.steps(),
+            pointer_to_root_span(0).paragraph_path.steps()
+        );
+        assert_eq!(pointer.offset, 0);
+        assert!(!editor.move_up());
     }
 
     #[test]

@@ -178,6 +178,8 @@ enum MenuAction {
     SetParagraphType(ParagraphType),
     SetChecklistItemChecked(bool),
     ApplyInlineStyle(InlineStyle),
+    IndentMore,
+    IndentLess,
 }
 
 #[derive(Clone, Copy)]
@@ -339,6 +341,8 @@ impl ContextMenuState {
 fn build_context_menu_entries(
     checklist_state: Option<bool>,
     has_selection: bool,
+    can_indent_more: bool,
+    can_indent_less: bool,
 ) -> Vec<MenuEntry> {
     let mut entries = Vec::new();
 
@@ -352,6 +356,25 @@ fn build_context_menu_entries(
             label,
             MenuAction::SetChecklistItemChecked(!is_checked),
         )));
+        entries.push(MenuEntry::Separator);
+    }
+
+    if can_indent_more || can_indent_less {
+        entries.push(MenuEntry::Section("Structure"));
+        if can_indent_more {
+            entries.push(MenuEntry::Item(MenuItem::enabled_with_shortcut(
+                "Indent more",
+                MenuAction::IndentMore,
+                MenuShortcut::new(']'),
+            )));
+        }
+        if can_indent_less {
+            entries.push(MenuEntry::Item(MenuItem::enabled_with_shortcut(
+                "Indent less",
+                MenuAction::IndentLess,
+                MenuShortcut::new('['),
+            )));
+        }
         entries.push(MenuEntry::Separator);
     }
 
@@ -656,8 +679,7 @@ impl App {
         self.scroll_top = target;
         if restore.ensure_cursor_visible {
             if let Some(cursor) = &render.cursor {
-                self.scroll_top =
-                    self.scroll_top_for_cursor(cursor.line, viewport, max_scroll);
+                self.scroll_top = self.scroll_top_for_cursor(cursor.line, viewport, max_scroll);
             }
         }
     }
@@ -866,8 +888,12 @@ impl App {
 
     fn open_context_menu(&mut self) {
         let has_selection = self.current_selection().is_some();
-        let entries =
-            build_context_menu_entries(self.editor.current_checklist_item_state(), has_selection);
+        let entries = build_context_menu_entries(
+            self.editor.current_checklist_item_state(),
+            has_selection,
+            self.editor.can_indent_more(),
+            self.editor.can_indent_less(),
+        );
         self.context_menu = Some(ContextMenuState::new(entries));
     }
 
@@ -948,6 +974,22 @@ impl App {
             }
             MenuAction::ApplyInlineStyle(style) => {
                 self.apply_inline_style_action(style);
+                true
+            }
+            MenuAction::IndentMore => {
+                if self.editor.indent_current_paragraph() {
+                    self.selection_anchor = None;
+                    self.mark_dirty();
+                    self.preferred_column = None;
+                }
+                true
+            }
+            MenuAction::IndentLess => {
+                if self.editor.unindent_current_paragraph() {
+                    self.selection_anchor = None;
+                    self.mark_dirty();
+                    self.preferred_column = None;
+                }
                 true
             }
         }
@@ -1559,6 +1601,22 @@ impl App {
                     }
                     (KeyCode::Char('c'), m) if m.contains(KeyModifiers::CONTROL) => {
                         self.should_quit = true;
+                    }
+                    (KeyCode::Char(']'), m) if m.contains(KeyModifiers::CONTROL) => {
+                        self.prepare_selection(false);
+                        if self.editor.indent_current_paragraph() {
+                            self.selection_anchor = None;
+                            self.mark_dirty();
+                            self.preferred_column = None;
+                        }
+                    }
+                    (KeyCode::Char('['), m) if m.contains(KeyModifiers::CONTROL) => {
+                        self.prepare_selection(false);
+                        if self.editor.unindent_current_paragraph() {
+                            self.selection_anchor = None;
+                            self.mark_dirty();
+                            self.preferred_column = None;
+                        }
                     }
                     (KeyCode::Left, m)
                         if m.contains(KeyModifiers::SHIFT | KeyModifiers::CONTROL) =>

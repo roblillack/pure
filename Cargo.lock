@@ -1499,7 +1499,7 @@ dependencies = [
 
 [[package]]
 name = "tdoc"
-version = "0.7.2"
+version = "0.7.3"
 dependencies = [
  "atty",
  "clap",

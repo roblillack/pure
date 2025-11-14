@@ -17,7 +17,7 @@
   </li>
   <li>
     <input type="checkbox" /> Find a way to navigate nested paragraphs as well as nesting and unnesting
-    paragraphs using Ctrl-[ anc Ctrl-]
+    paragraphs using Ctrl-[ and Ctrl-]
   </li>
   <li>
     <input type="checkbox" checked /> Find a way to add adjacent paragraphs on the same level (follow-up
@@ -76,12 +76,38 @@
 
 <p>Hello <b>World</b>!</p>
 
-<p>dsfgjklhsdfkgjhdsfg This is another highlighted word.</p>
+<p>
+  dsfgjklhsdfkgjhdsfg This is another highlighted word. skajdh aslk;dhf
+  ;ksajhdf ;jkash d;kjh as;djfh ;sajdh f;'jksah f;kjhsadkjhf ksajdhfl;kjshd
+  fkjhsdkjfhsdkj hfksjdh fkjsdh kfjhsk djhksdj hfksjdhfkjsdhfkj sdhkfj sdhkfj
+  hskdjh fkjsdh kjsdh kfjh sdkjhf ksdjh fkjhsd kjfh skdjhf kjsdh fkjhsd
+  kjfhskdjhf.
+</p>
+
+<ul>
+  <li>
+    <p>asdfsadf</p>
+    <p>sdafsadf</p>
+  </li>
+</ul>
+
+<ul>
+  <li>
+    <p>This is a test</p>
+  </li>
+
+  <li>
+    <p>This is another test.</p>
+    <p>We have a second paragraph here.</p>
+    <ul>
+      <p>Und hier kommt dann noch ein Test.</p>
+    </ul>
+  </li>
+</ul>
 
 <h3>Width/Padding calculation:</h3>
 
 <pre>
-
 if width &lt; 60 {
     wrap_width = width - 1; // leave space for cursor at the end of the line
     left_padding = 0;
