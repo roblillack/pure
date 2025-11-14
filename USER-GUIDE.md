@@ -913,6 +913,32 @@ Pure always operates in Insert mode. There is no Typeover mode where new text re
 
 ---
 
+### Indent and Unindent Paragraphs
+
+**Purpose:** Restructure paragraphs by nesting them under container blocks or lifting them back to the surrounding level.
+
+#### To indent a paragraph:
+
+1. Position the cursor in the paragraph you want to nest.
+2. Ensure the paragraph directly above is a container (quote, numbered list, bullet list, or checklist). When this is possible, the context menu shows **Indent more - ]**.
+3. Press **Esc** followed by **]**, or use the direct shortcut **Ctrl+]**.
+
+The paragraph is moved under the preceding container. Quotes receive the paragraph as an additional child, and lists receive it as a new list item appended to the existing list.
+
+#### To unindent a paragraph:
+
+1. Position the cursor anywhere inside the paragraph you want to lift out.
+2. Press **Esc**, then **[**, or use **Ctrl+[**.
+
+The paragraph is taken out of its parent container and inserted as a sibling immediately after that container.
+
+#### Additional Information
+
+- The indent options only appear when the action is structurally valid.
+- Indent and unindent work at any nesting depth, making it easy to reorganize complex hierarchies of quotes and lists without cutting and pasting content.
+
+---
+
 ### Lists, Ordered and Unordered
 
 **Purpose:** Create structured lists of items.

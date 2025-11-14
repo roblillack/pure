@@ -269,6 +269,23 @@ impl DocumentEditor {
             return false;
         };
         let pointer = self.cursor_stable_pointer();
+
+        if let (Some(ctx), IndentTargetKind::ListEntry { entry_index }) =
+            (extract_entry_context(&pointer.paragraph_path), target.kind)
+        {
+            if let Some(new_pointer) =
+                indent_list_entry_into_entry(&mut self.document, &pointer, &ctx, entry_index)
+            {
+                self.rebuild_segments();
+                if !self.move_to_pointer(&new_pointer) {
+                    if !self.fallback_move_to_text(&new_pointer, false) {
+                        self.ensure_cursor_selectable();
+                    }
+                }
+                return true;
+            }
+        }
+
         let Some(paragraph) = take_paragraph_at(&mut self.document, &pointer.paragraph_path) else {
             return false;
         };
@@ -2253,13 +2270,45 @@ fn promote_single_child_into_parent(document: &mut Document, scope: &ParentScope
 }
 
 fn apply_paragraph_type_in_place(paragraph: &mut Paragraph, target: ParagraphType) {
+    if target == ParagraphType::Quote {
+        paragraph.paragraph_type = ParagraphType::Quote;
+        paragraph.checklist_item_checked = None;
+
+        let mut children = Vec::new();
+        if !paragraph.content.is_empty() {
+            let mut text_child = Paragraph::new_text();
+            text_child.content = mem::take(&mut paragraph.content);
+            if text_child.content.is_empty() {
+                text_child.content.push(Span::new_text(""));
+            }
+            children.push(text_child);
+        }
+
+        if !paragraph.children.is_empty() {
+            children.append(&mut paragraph.children);
+        }
+
+        if !paragraph.entries.is_empty() {
+            for entry in paragraph.entries.drain(..) {
+                children.extend(entry);
+            }
+        }
+
+        if children.is_empty() {
+            children.push(empty_text_paragraph());
+        }
+
+        paragraph.children = children;
+        paragraph.entries.clear();
+        paragraph.content.clear();
+        return;
+    }
+
     paragraph.paragraph_type = target;
     paragraph.checklist_item_checked = None;
 
     if target.is_leaf() {
         paragraph.children.clear();
-        paragraph.entries.clear();
-    } else if target == ParagraphType::Quote {
         paragraph.entries.clear();
     }
 
@@ -2296,6 +2345,9 @@ fn break_list_entry_for_non_list_target(
         if entry_index >= list.entries.len() {
             return None;
         }
+        if list.entries[entry_index].len() > 1 {
+            return None;
+        }
         let entries_after = list.entries.split_off(entry_index + 1);
         let selected_entry = list.entries.remove(entry_index);
         if paragraph_index >= selected_entry.len() {
@@ -2307,7 +2359,7 @@ fn break_list_entry_for_non_list_target(
             if idx == paragraph_index {
                 apply_paragraph_type_in_place(&mut paragraph, target);
             }
-            if paragraph.content.is_empty() {
+            if paragraph.paragraph_type.is_leaf() && paragraph.content.is_empty() {
                 paragraph.content.push(Span::new_text(""));
             }
             extracted.push(paragraph);
@@ -3094,17 +3146,32 @@ fn split_paragraph_break(
 
             let insert_idx = (*entry_index + 1).min(parent.entries.len());
 
-            let new_entry = match parent.paragraph_type {
-                ParagraphType::Checklist => {
-                    let mut item = Paragraph::new_checklist_item(false);
-                    item.content = right_spans;
-                    vec![item]
+            let new_entry = {
+                let entry = parent.entries.get_mut(*entry_index)?;
+                if *paragraph_index >= entry.len() {
+                    return None;
                 }
-                _ => {
-                    let mut text_paragraph = Paragraph::new_text();
-                    text_paragraph.content = right_spans;
-                    vec![text_paragraph]
+
+                let mut trailing = entry.split_off(*paragraph_index + 1);
+
+                let mut head = match parent.paragraph_type {
+                    ParagraphType::Checklist => Paragraph::new_checklist_item(false),
+                    _ => Paragraph::new_text(),
+                };
+                head.content = right_spans;
+                if head.content.is_empty() {
+                    head.content.push(Span::new_text(""));
                 }
+
+                if paragraph_is_empty(&entry[*paragraph_index]) && entry.len() > 1 {
+                    entry.remove(*paragraph_index);
+                } else if entry[*paragraph_index].content.is_empty() {
+                    entry[*paragraph_index].content.push(Span::new_text(""));
+                }
+
+                let mut assembled = vec![head];
+                assembled.append(&mut trailing);
+                assembled
             };
 
             parent.entries.insert(insert_idx, new_entry);
@@ -3362,6 +3429,96 @@ fn append_paragraph_to_entry(
         paragraph_index,
     });
     Some(ParagraphPath::from_steps(steps))
+}
+
+fn ensure_nested_list(entry: &mut Vec<Paragraph>, list_type: ParagraphType) -> usize {
+    if let Some(idx) = entry.iter().position(|p| p.paragraph_type == list_type) {
+        idx
+    } else {
+        entry.push(Paragraph::new(list_type));
+        entry.len() - 1
+    }
+}
+
+fn indent_list_entry_into_entry(
+    document: &mut Document,
+    pointer: &CursorPointer,
+    ctx: &EntryContext,
+    target_entry_index: usize,
+) -> Option<CursorPointer> {
+    if target_entry_index >= ctx.entry_index {
+        return None;
+    }
+
+    let list_type = paragraph_ref(document, &ctx.list_path)
+        .map(|p| p.paragraph_type)
+        .filter(|kind| is_list_type(*kind))?;
+
+    let entry = {
+        let list = paragraph_mut(document, &ctx.list_path)?;
+        if ctx.entry_index >= list.entries.len() {
+            return None;
+        }
+        list.entries.remove(ctx.entry_index)
+    };
+
+    if entry.is_empty() {
+        return None;
+    }
+
+    let entry_len = entry.len();
+
+    let paragraph_path = {
+        let list = paragraph_mut(document, &ctx.list_path)?;
+        if target_entry_index >= list.entries.len() {
+            return None;
+        }
+        let target_entry = &mut list.entries[target_entry_index];
+
+        let has_matching_nested_list = target_entry
+            .iter()
+            .any(|paragraph| paragraph.paragraph_type == list_type);
+        let should_use_nested_list = has_matching_nested_list || target_entry.len() == 1;
+
+        if should_use_nested_list {
+            let nested_index = ensure_nested_list(target_entry, list_type);
+            let nested_list = target_entry.get_mut(nested_index)?;
+            nested_list.content.clear();
+            nested_list.checklist_item_checked = None;
+            let new_entry_index = nested_list.entries.len();
+            nested_list.entries.push(entry);
+
+            let mut steps = ctx.list_path.steps().to_vec();
+            steps.push(PathStep::Entry {
+                entry_index: target_entry_index,
+                paragraph_index: nested_index,
+            });
+            steps.push(PathStep::Entry {
+                entry_index: new_entry_index,
+                paragraph_index: ctx.paragraph_index.min(entry_len.saturating_sub(1)),
+            });
+            ParagraphPath::from_steps(steps)
+        } else {
+            let insert_index = target_entry.len();
+            let relative_index = ctx.paragraph_index.min(entry_len.saturating_sub(1));
+            let new_index = insert_index + relative_index;
+            target_entry.extend(entry);
+
+            let mut steps = ctx.list_path.steps().to_vec();
+            steps.push(PathStep::Entry {
+                entry_index: target_entry_index,
+                paragraph_index: new_index,
+            });
+            ParagraphPath::from_steps(steps)
+        }
+    };
+
+    Some(CursorPointer {
+        paragraph_path,
+        span_path: pointer.span_path.clone(),
+        offset: pointer.offset,
+        segment_kind: pointer.segment_kind,
+    })
 }
 
 fn convert_paragraph_to_checklist_entry(paragraph: Paragraph) -> (Vec<Paragraph>, usize) {
@@ -4177,6 +4334,122 @@ mod tests {
         );
 
         assert!(!editor.can_indent_more());
+    }
+
+    #[test]
+    fn indent_more_from_middle_of_list() {
+        let initial_doc = ftml! {
+            ul {
+                li { p {"Item 1" } }
+                li { p {"Item 2" } }
+                li { p {"Item 3" } }
+            }
+        };
+        let mut editor = DocumentEditor::new(initial_doc.clone());
+        assert!(editor.move_down());
+        assert!(editor.can_indent_more());
+        assert!(editor.indent_current_paragraph());
+        assert_eq!(
+            editor.document().clone(),
+            ftml! {
+                ul {
+                    li {
+                        p { "Item 1" }
+                        ul {
+                            li { p { "Item 2"  } }
+                        }
+                    }
+                    li { p { "Item 3" } }
+                }
+            }
+        );
+    }
+
+    #[test]
+    fn convert_paragraph_from_middle_of_list() {
+        let initial_doc = ftml! {
+            ul {
+                li { p {"Item 1" } }
+                li { p {"Item 2" } }
+                li { p {"Item 3" } }
+            }
+        };
+        let mut editor = DocumentEditor::new(initial_doc.clone());
+        assert!(editor.move_down());
+        assert!(editor.set_paragraph_type(ParagraphType::Quote));
+        assert_eq!(
+            editor.document().clone(),
+            ftml! {
+                ul {
+                    li { p { "Item 1" } }
+                }
+                quote {
+                    p { "Item 2"  }
+                }
+                ul {
+                    li { p { "Item 3" } }
+                }
+            }
+        );
+    }
+
+    #[test]
+    fn convert_paragraph_from_list_in_middle_of_list() {
+        let initial_doc = ftml! {
+            ul {
+                li { p {"Item 1" } }
+                li {
+                    p {"Item 2, paragraph 1" }
+                    p {"Item 2, paragraph 2" }
+                }
+                li { p {"Item 3" } }
+            }
+        };
+        let mut editor = DocumentEditor::new(initial_doc.clone());
+        assert!(editor.move_down());
+        assert!(editor.set_paragraph_type(ParagraphType::Quote));
+        assert_eq!(
+            editor.document().clone(),
+            ftml! {
+                ul {
+                    li { p {"Item 1" } }
+                    li {
+                        quote { p {"Item 2, paragraph 1" } }
+                        p {"Item 2, paragraph 2" }
+                    }
+                    li { p {"Item 3" } }
+                }
+            }
+        );
+    }
+
+    #[test]
+    fn split_paragraph_list_in_middle_of_list_item() {
+        let initial_doc = ftml! {
+            ol {
+                li { p {"Item 1" } }
+                li {
+                    p {"Item 2, paragraph 1" }
+                    p {"Item 2, paragraph 2" }
+                }
+                li { p {"Item 3" } }
+            }
+        };
+        let mut editor = DocumentEditor::new(initial_doc.clone());
+        assert!(editor.move_down());
+        assert!(editor.move_down());
+        assert!(editor.insert_paragraph_break());
+        assert_eq!(
+            editor.document().clone(),
+            ftml! {
+                ol {
+                    li { p {"Item 1" } }
+                    li { p {"Item 2, paragraph 1" } }
+                    li { p {"Item 2, paragraph 2" } }
+                    li { p {"Item 3" } }
+                }
+            }
+        );
     }
 
     #[test]
