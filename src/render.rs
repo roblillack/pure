@@ -90,7 +90,13 @@ pub fn render_document(
     reveal_tags: &[RevealTagRef],
     sentinels: RenderSentinels,
 ) -> RenderResult {
-    let mut renderer = Renderer::new(wrap_width.max(1), left_padding, sentinels, markers, reveal_tags);
+    let mut renderer = Renderer::new(
+        wrap_width.max(1),
+        left_padding,
+        sentinels,
+        markers,
+        reveal_tags,
+    );
     renderer.render_document(document);
     renderer.finish()
 }
@@ -1486,7 +1492,8 @@ mod tests {
             SENTINELS.selection_start,
             SENTINELS.selection_end,
         );
-        let rendered = render_document(&doc_with_markers, 120, 0, &markers, &reveal_tags, SENTINELS);
+        let rendered =
+            render_document(&doc_with_markers, 120, 0, &markers, &reveal_tags, SENTINELS);
         let lines = lines_to_strings(&rendered.lines);
         assert_eq!(lines, vec!["• Alpha ", "", "  Beta"]);
     }
@@ -1631,7 +1638,8 @@ mod tests {
             SENTINELS.selection_start,
             SENTINELS.selection_end,
         );
-        let rendered = render_document(&doc_with_markers, 120, 0, &markers, &reveal_tags, SENTINELS);
+        let rendered =
+            render_document(&doc_with_markers, 120, 0, &markers, &reveal_tags, SENTINELS);
         let lines = lines_to_strings(&rendered.lines);
         assert_eq!(lines, vec!["Hello [Bold>World<Bold]!"]);
 

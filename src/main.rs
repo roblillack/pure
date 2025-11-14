@@ -79,9 +79,7 @@ fn editor_wrap_configuration(width: usize) -> (usize, usize) {
     }
     if width < 100 {
         let padding = 2.min(width / 2);
-        let wrap_width = width
-            .saturating_sub(padding.saturating_mul(2))
-            .max(1);
+        let wrap_width = width.saturating_sub(padding.saturating_mul(2)).max(1);
         return (wrap_width, padding);
     }
     let mut left_padding = width.saturating_sub(100) / 2 + 4;
@@ -89,9 +87,7 @@ fn editor_wrap_configuration(width: usize) -> (usize, usize) {
     if left_padding > max_padding {
         left_padding = max_padding;
     }
-    let wrap_width = width
-        .saturating_sub(left_padding.saturating_mul(2))
-        .max(1);
+    let wrap_width = width.saturating_sub(left_padding.saturating_mul(2)).max(1);
     (wrap_width, left_padding)
 }
 
@@ -944,17 +940,45 @@ impl App {
         }
         if self.cursor_following {
             if let Some(cursor) = &render.cursor {
-                if cursor.line < self.scroll_top {
-                    self.scroll_top = cursor.line;
-                } else if cursor.line >= self.scroll_top + viewport_height {
-                    let target = cursor.line.saturating_add(1);
-                    self.scroll_top = target.saturating_sub(viewport);
-                }
+                self.scroll_top = self.scroll_top_for_cursor(cursor.line, viewport, max_scroll);
             }
             if self.scroll_top > max_scroll {
                 self.scroll_top = max_scroll;
             }
         }
+    }
+
+    fn scroll_top_for_cursor(
+        &self,
+        cursor_line: usize,
+        viewport: usize,
+        max_scroll: usize,
+    ) -> usize {
+        let mut scroll = self.scroll_top.min(max_scroll);
+        if viewport == 0 {
+            return scroll;
+        }
+
+        let margin = if viewport >= 3 { 1 } else { 0 };
+        if margin == 0 {
+            if cursor_line < scroll {
+                scroll = cursor_line;
+            } else if cursor_line >= scroll.saturating_add(viewport) {
+                let offset = viewport.saturating_sub(1);
+                scroll = cursor_line.saturating_sub(offset);
+            }
+        } else {
+            let top_limit = scroll.saturating_add(margin);
+            let bottom_offset = viewport.saturating_sub(1).saturating_sub(margin);
+            let bottom_limit = scroll.saturating_add(bottom_offset);
+            if cursor_line < top_limit {
+                scroll = cursor_line.saturating_sub(margin);
+            } else if cursor_line > bottom_limit {
+                scroll = cursor_line.saturating_sub(bottom_offset);
+            }
+        }
+
+        scroll.min(max_scroll)
     }
 
     fn move_cursor_vertical(&mut self, delta: i32) {
@@ -1004,6 +1028,20 @@ impl App {
                 self.last_cursor_visual = Some(dest.position);
             }
         }
+    }
+
+    fn page_jump_distance(&self) -> i32 {
+        let viewport = self.last_view_height.max(1);
+        let approx = ((viewport as f32) * 0.9).round() as usize;
+        approx.max(1) as i32
+    }
+
+    fn move_page(&mut self, direction: i32) {
+        if direction == 0 {
+            return;
+        }
+        let distance = self.page_jump_distance();
+        self.move_cursor_vertical(distance * direction);
     }
 
     fn move_to_visual_line_start(&mut self) {
@@ -1641,28 +1679,15 @@ impl App {
                         self.prepare_selection(false);
                         self.move_cursor_vertical(1);
                     }
-                    (KeyCode::PageUp, m) if m.contains(KeyModifiers::SHIFT) => {
-                        self.prepare_selection(true);
-                        let jump = self.last_view_height.max(1);
-                        self.move_cursor_vertical(-(jump as i32));
-                        self.scroll_top = self.scroll_top.saturating_sub(jump);
+                    (KeyCode::PageUp, modifiers) => {
+                        let extend_selection = modifiers.contains(KeyModifiers::SHIFT);
+                        self.prepare_selection(extend_selection);
+                        self.move_page(-1);
                     }
-                    (KeyCode::PageDown, m) if m.contains(KeyModifiers::SHIFT) => {
-                        self.prepare_selection(true);
-                        let jump = self.last_view_height.max(1);
-                        self.move_cursor_vertical(jump as i32);
-                        self.scroll_top += jump;
-                    }
-                    (KeyCode::PageUp, _) => {
-                        self.prepare_selection(false);
-                        self.scroll_top =
-                            self.scroll_top.saturating_sub(self.last_view_height.max(1));
-                        self.detach_cursor_follow();
-                    }
-                    (KeyCode::PageDown, _) => {
-                        self.prepare_selection(false);
-                        self.scroll_top += self.last_view_height.max(1);
-                        self.detach_cursor_follow();
+                    (KeyCode::PageDown, modifiers) => {
+                        let extend_selection = modifiers.contains(KeyModifiers::SHIFT);
+                        self.prepare_selection(extend_selection);
+                        self.move_page(1);
                     }
                     _ => {}
                 }

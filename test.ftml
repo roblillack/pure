@@ -13,7 +13,7 @@
     one item, etc.)
   </li>
   <li>
-    <input type="checkbox" /> Text selection to make inline styles even possible
+    <input type="checkbox" checked /> Text selection to make inline styles even possible
   </li>
   <li>
     <input type="checkbox" /> Find a way to navigate nested paragraphs as well as nesting and unnesting
@@ -47,24 +47,29 @@
   </li>
   <li><input type="checkbox" /> Style statusbar like in Elma</li>
   <li><input type="checkbox" /> Add menu/shortcut bar like in Elma?</li>
-  <li><input type="checkbox" /> Fix page up/down to feel more natural</li>
+  <li>
+    <input type="checkbox" checked /> Fix page up/down to feel more natural
+  </li>
   <li>
     <input type="checkbox" /> Fix styling of quotes (vertical bar is missing for empty lines introduced
     by child paragraphs like bullet point lists)
   </li>
   <li>
-    <input type="checkbox" /> Introduce mode which shows paragraph and inline style tags (in two
+    <input type="checkbox" checked /> Introduce mode which shows paragraph and inline style tags (in two
     different colors) as part of the editor—much like WordPerfect back in the
     day, where it was called "<b>Reveal Codes</b>" (reachable using the keyboard via Alt-F3 or F11) and based off a
     splitscreen view. I <i>think</i> we can make this happen with a direct inline view: Paragraph styles on
     their own line, but indented correctly; inline styles directly in line with
     the rest of the content, but with colorful <code>[Bold></code>tags with user-friendly names<code>&lt;Bold]</code>...
   </li>
-  <li><input type="checkbox" /> Implement mouse scrolling</li>
+  <li><input type="checkbox" checked /> Implement mouse scrolling</li>
   <li>
-    <input type="checkbox" /> Implement drag-to-select, double-click, triple-click
+    <input type="checkbox" checked /> Implement drag-to-select, double-click, triple-click
   </li>
   <li><input type="checkbox" checked /> Add support for Markdown files</li>
+  <li>
+    <input type="checkbox" /> Keep position when toggling Reveal Codes mode
+  </li>
 </ul>
 
 <h2>Scratch</h2>
