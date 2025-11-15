@@ -709,6 +709,9 @@ impl DocumentEditor {
         let mut pointer_hint = None;
         let mut post_merge_pointer = None;
         let mut handled_directly = false;
+        let treat_as_singular_entry =
+            is_single_paragraph_entry(&self.document, &current_pointer.paragraph_path);
+
 
         if let Some(scope) = determine_parent_scope(&self.document, &operation_path) {
             operation_path = scope.parent_path.clone();
@@ -730,7 +733,7 @@ impl DocumentEditor {
             }
         }
 
-        if !is_list_type(target) {
+        if !is_list_type(target) && treat_as_singular_entry {
             if let Some(pointer) =
                 break_list_entry_for_non_list_target(&mut self.document, &operation_path, target)
             {
@@ -2182,16 +2185,15 @@ fn collect_paragraph_labels<'a>(
 ) -> Option<(Vec<String>, &'a Paragraph)> {
     let mut labels = Vec::new();
     let mut current: Option<&'a Paragraph> = None;
+    let mut traversed = Vec::new();
 
     for step in path.steps() {
-        let (paragraph, container_len) = match *step {
-            PathStep::Root(idx) => (
-                document.paragraphs.get(idx)?,
-                document.paragraphs.len(),
-            ),
+        traversed.push(step.clone());
+        let paragraph = match *step {
+            PathStep::Root(idx) => document.paragraphs.get(idx)?,
             PathStep::Child(idx) => {
                 let parent = current?;
-                (parent.children.get(idx)?, parent.children.len())
+                parent.children.get(idx)?
             }
             PathStep::Entry {
                 entry_index,
@@ -2199,12 +2201,12 @@ fn collect_paragraph_labels<'a>(
             } => {
                 let parent = current?;
                 let entry = parent.entries.get(entry_index)?;
-                (entry.get(paragraph_index)?, entry.len())
+                entry.get(paragraph_index)?
             }
         };
-        let has_parent = current.is_some();
-        let has_siblings = has_parent && container_len > 1;
-        if paragraph.paragraph_type != ParagraphType::Text || !has_parent || has_siblings {
+        let current_path = ParagraphPath::from_steps(traversed.clone());
+        let hide_label = text_effective_relation(document, &current_path).is_some();
+        if !hide_label {
             labels.push(paragraph.paragraph_type.to_string());
         }
         current = Some(paragraph);
@@ -2230,6 +2232,60 @@ fn collect_inline_labels(paragraph: &Paragraph, span_path: &SpanPath) -> Option<
     }
 
     Some(labels)
+}
+
+#[derive(Clone, Copy)]
+enum TextEffectiveRelation {
+    ParentChild,
+    Entry,
+}
+
+fn text_effective_relation(document: &Document, path: &ParagraphPath) -> Option<TextEffectiveRelation> {
+    let paragraph = paragraph_ref(document, path)?;
+    if paragraph.paragraph_type != ParagraphType::Text {
+        return None;
+    }
+    let steps = path.steps();
+    if steps.len() <= 1 {
+        return None;
+    }
+    let (last_step, prefix) = steps.split_last()?;
+    let parent = paragraph_ref(document, &ParagraphPath::from_steps(prefix.to_vec()))?;
+    match *last_step {
+        PathStep::Child(_) => parent
+            .children
+            .len()
+            .eq(&1)
+            .then_some(TextEffectiveRelation::ParentChild),
+        PathStep::Entry {
+            entry_index,
+            ..
+        } => parent
+            .entries
+            .get(entry_index)
+            .and_then(|entry| (entry.len() == 1).then_some(TextEffectiveRelation::Entry)),
+        PathStep::Root(_) => None,
+    }
+}
+
+fn is_single_paragraph_entry(document: &Document, path: &ParagraphPath) -> bool {
+    let steps = path.steps();
+    let (last_step, prefix) = match steps.split_last() {
+        Some(result) => result,
+        None => return false,
+    };
+    let PathStep::Entry { entry_index, .. } = *last_step else {
+        return false;
+    };
+    let parent = match paragraph_ref(document, &ParagraphPath::from_steps(prefix.to_vec())) {
+        Some(paragraph) => paragraph,
+        None => return false,
+    };
+    parent
+        .entries
+        .get(entry_index)
+        .map(|entry| entry.len() == 1)
+        .unwrap_or(false)
 }
 
 #[derive(Clone)]
@@ -4551,6 +4607,32 @@ mod tests {
                 }
                 ul {
                     li { p { "Item 3" } }
+                }
+            }
+        );
+    }
+
+    #[test]
+    fn convert_paragraph_from_list_to_text_extracts_item() {
+        let initial_doc = ftml! {
+            ul {
+                li { p {"Item 1" } }
+                li { p {"Item 2" } }
+                li { p {"Item 3" } }
+            }
+        };
+        let mut editor = DocumentEditor::new(initial_doc.clone());
+        assert!(editor.move_down());
+        assert!(editor.set_paragraph_type(ParagraphType::Text));
+        assert_eq!(
+            editor.document().clone(),
+            ftml! {
+                ul {
+                    li { p {"Item 1" } }
+                }
+                p {"Item 2" }
+                ul {
+                    li { p {"Item 3" } }
                 }
             }
         );
