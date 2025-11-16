@@ -365,7 +365,7 @@ impl DocumentEditor {
 
     fn unindent_list_entry(&mut self, pointer: &CursorPointer) -> bool {
         let paragraph_type = paragraph_ref(&self.document, &pointer.paragraph_path)
-            .map(|p| p.paragraph_type)
+            .map(|p| p.paragraph_type())
             .unwrap_or(ParagraphType::Text);
         let steps = pointer.paragraph_path.steps();
         let (last_step, prefix) = match steps.split_last() {
@@ -1044,7 +1044,7 @@ impl DocumentEditor {
             return false;
         };
         apply_style_to_span_path(
-            &mut paragraph.content,
+            paragraph.content_mut(),
             segment.span_path.indices(),
             start,
             end,
