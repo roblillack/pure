@@ -131,44 +131,6 @@ fn document_with_checklist_nested_bold_span() -> Document {
     Document::new().with_paragraphs(vec![checklist])
 }
 
-#[test]
-fn breadcrumbs_include_text_for_top_level_paragraphs() {
-    let document = Document::new().with_paragraphs(vec![text_paragraph("Top level")]);
-    let pointer = pointer_to_root_span(0);
-    let breadcrumbs = breadcrumbs_for_pointer(&document, &pointer).unwrap();
-    assert_eq!(breadcrumbs, vec!["Text".to_string()]);
-}
-
-#[test]
-fn breadcrumbs_skip_text_for_quote_children() {
-    let quote = Paragraph::new_quote().with_children(vec![text_paragraph("Nested")]);
-    let document = Document::new().with_paragraphs(vec![quote]);
-    let pointer = pointer_to_child_span(0, 0);
-    let breadcrumbs = breadcrumbs_for_pointer(&document, &pointer).unwrap();
-    assert_eq!(breadcrumbs, vec!["Quote".to_string()]);
-}
-
-#[test]
-fn breadcrumbs_skip_text_for_list_items() {
-    let document = Document::new().with_paragraphs(vec![unordered_list(&["Item"])]);
-    let pointer = pointer_to_entry_span(0, 0, 0);
-    let breadcrumbs = breadcrumbs_for_pointer(&document, &pointer).unwrap();
-    assert_eq!(breadcrumbs, vec!["Unordered List".to_string()]);
-}
-
-#[test]
-fn breadcrumbs_include_text_when_list_entry_has_siblings() {
-    let entry = vec![
-        text_paragraph("First"),
-        Paragraph::new_quote().with_children(vec![text_paragraph("Nested")]),
-    ];
-    let document = Document::new().with_paragraphs(vec![
-        Paragraph::new_unordered_list().with_entries(vec![entry]),
-    ]);
-    let pointer = pointer_to_entry_span(0, 0, 0);
-    let breadcrumbs = breadcrumbs_for_pointer(&document, &pointer).unwrap();
-    assert_eq!(breadcrumbs, vec!["Unordered List".to_string(), "Text".to_string()]);
-}
 
 fn insert_text(editor: &mut DocumentEditor, text: &str) {
     for ch in text.chars() {
@@ -665,91 +627,6 @@ fn split_paragraph_list_in_middle_of_list_item() {
             }
         }
     );
-}
-
-#[test]
-fn move_word_left_within_span() {
-    let document = Document::new().with_paragraphs(vec![text_paragraph("hello world")]);
-    let mut editor = DocumentEditor::new(document);
-    let pointer = pointer_to_root_span(0);
-    assert!(editor.move_to_pointer(&pointer));
-    editor.move_to_segment_end();
-
-    assert!(editor.move_word_left());
-    assert_eq!(editor.cursor_pointer().offset, 6);
-
-    assert!(editor.move_word_left());
-    assert_eq!(editor.cursor_pointer().offset, 0);
-}
-
-#[test]
-fn move_word_right_advances_to_next_word() {
-    let document = Document::new().with_paragraphs(vec![text_paragraph("foo bar baz")]);
-    let mut editor = DocumentEditor::new(document);
-    let pointer = pointer_to_root_span(0);
-    assert!(editor.move_to_pointer(&pointer));
-
-    assert!(editor.move_word_right());
-    assert_eq!(editor.cursor_pointer().offset, 4);
-
-    assert!(editor.move_word_right());
-    assert_eq!(editor.cursor_pointer().offset, 8);
-}
-
-#[test]
-fn delete_word_backward_removes_previous_word() {
-    let document = Document::new().with_paragraphs(vec![text_paragraph("foo bar baz")]);
-    let mut editor = DocumentEditor::new(document);
-    let pointer = pointer_to_root_span(0);
-    assert!(editor.move_to_pointer(&pointer));
-
-    assert!(editor.move_word_right());
-    assert!(editor.move_word_right());
-
-    assert!(editor.delete_word_backward());
-
-    let doc = editor.document();
-    assert_eq!(doc.paragraphs[0].content[0].text, "foo baz");
-    assert_eq!(editor.cursor_pointer().offset, 4);
-}
-
-#[test]
-fn delete_word_forward_removes_next_word() {
-    let document = Document::new().with_paragraphs(vec![text_paragraph("foo bar baz")]);
-    let mut editor = DocumentEditor::new(document);
-    let pointer = pointer_to_root_span(0);
-    assert!(editor.move_to_pointer(&pointer));
-
-    assert!(editor.delete_word_forward());
-
-    let doc = editor.document();
-    assert_eq!(doc.paragraphs[0].content[0].text, "bar baz");
-    assert_eq!(editor.cursor_pointer().offset, 0);
-}
-
-#[test]
-fn move_word_navigation_crosses_segments() {
-    let document =
-        Document::new().with_paragraphs(vec![text_paragraph("alpha"), text_paragraph("beta")]);
-    let mut editor = DocumentEditor::new(document);
-
-    let first = pointer_to_root_span(0);
-    assert!(editor.move_to_pointer(&first));
-    editor.move_to_segment_end();
-
-    assert!(editor.move_word_right());
-    let pointer = editor.cursor_pointer();
-    let expected_second = pointer_to_root_span(1);
-    assert_eq!(pointer.paragraph_path, expected_second.paragraph_path);
-    assert_eq!(pointer.span_path, expected_second.span_path);
-    assert_eq!(pointer.offset, 0);
-
-    assert!(editor.move_word_left());
-    let pointer = editor.cursor_pointer();
-    let expected_first = pointer_to_root_span(0);
-    assert_eq!(pointer.paragraph_path, expected_first.paragraph_path);
-    assert_eq!(pointer.span_path, expected_first.span_path);
-    assert_eq!(pointer.offset, 0);
 }
 
 #[test]

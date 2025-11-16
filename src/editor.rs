@@ -3,6 +3,11 @@ const MARKER_REVEAL_PREFIX: &str = "1337;R";
 use std::{cmp::Ordering, mem};
 use tdoc::{ChecklistItem, Document, InlineStyle, Paragraph, ParagraphType, Span};
 
+mod inspect;
+mod cursor;
+
+use inspect::{checklist_item_ref, paragraph_ref};
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ParagraphPath {
     steps: Vec<PathStep>,
@@ -217,24 +222,6 @@ impl DocumentEditor {
         editor
     }
 
-    pub fn ensure_cursor_selectable(&mut self) {
-        if self.segments.is_empty() {
-            self.ensure_placeholder_segment();
-        }
-        if let Some(first) = self.segments.first() {
-            self.cursor = CursorPointer {
-                paragraph_path: first.paragraph_path.clone(),
-                span_path: first.span_path.clone(),
-                offset: self.cursor.offset.min(first.len),
-                segment_kind: first.kind,
-            };
-            self.cursor_segment = 0;
-        } else {
-            self.cursor = CursorPointer::default();
-            self.cursor_segment = 0;
-        }
-    }
-
     pub fn document(&self) -> &Document {
         &self.document
     }
@@ -420,287 +407,6 @@ impl DocumentEditor {
             }
             true
         }
-    }
-
-    pub fn cursor_pointer(&self) -> CursorPointer {
-        self.cursor.clone()
-    }
-
-    pub fn cursor_stable_pointer(&self) -> CursorPointer {
-        self.stable_pointer(&self.cursor)
-    }
-
-    pub fn stable_pointer(&self, pointer: &CursorPointer) -> CursorPointer {
-        if self.segments.is_empty() || pointer.segment_kind == SegmentKind::Text {
-            return pointer.clone();
-        }
-        self.nearest_text_pointer_for(pointer)
-            .unwrap_or_else(|| pointer.clone())
-    }
-
-    pub fn word_boundaries_at(
-        &self,
-        pointer: &CursorPointer,
-    ) -> Option<(CursorPointer, CursorPointer)> {
-        let segment = self
-            .segments
-            .iter()
-            .find(|segment| segment.matches_pointer(pointer))?;
-        if segment.kind != SegmentKind::Text {
-            return None;
-        }
-        let text = self.span_text_for_pointer(pointer)?;
-        if text.is_empty() {
-            return None;
-        }
-        let len = text.chars().count();
-        let offset = pointer.offset.min(len);
-        let mut start = pointer.clone();
-        start.offset = previous_word_boundary(text, offset);
-        let mut end = pointer.clone();
-        end.offset = next_word_boundary(text, offset);
-        Some((start, end))
-    }
-
-    fn span_text_for_pointer<'a>(&'a self, pointer: &CursorPointer) -> Option<&'a str> {
-        if let Some(item) = checklist_item_ref(&self.document, &pointer.paragraph_path) {
-            let span = span_ref_from_item(item, &pointer.span_path)?;
-            return Some(span.text.as_str());
-        }
-
-        let paragraph = paragraph_ref(&self.document, &pointer.paragraph_path)?;
-        let span = span_ref(paragraph, &pointer.span_path)?;
-        Some(span.text.as_str())
-    }
-
-    pub fn reveal_codes(&self) -> bool {
-        self.reveal_codes
-    }
-
-    pub fn set_reveal_codes(&mut self, enabled: bool) {
-        if self.reveal_codes != enabled {
-            self.reveal_codes = enabled;
-            self.rebuild_segments();
-            self.ensure_cursor_selectable();
-        }
-    }
-
-    pub fn cursor_breadcrumbs(&self) -> Option<Vec<String>> {
-        breadcrumbs_for_pointer(&self.document, &self.cursor)
-    }
-
-    pub fn move_to_pointer(&mut self, pointer: &CursorPointer) -> bool {
-        if let Some(index) = self
-            .segments
-            .iter()
-            .position(|segment| segment.matches_pointer(pointer))
-        {
-            let mut new_pointer = pointer.clone();
-            let len = self.segments[index].len;
-            if new_pointer.offset > len {
-                new_pointer.offset = len;
-            }
-            self.cursor = new_pointer;
-            self.cursor_segment = index;
-            true
-        } else {
-            false
-        }
-    }
-
-    pub fn move_left(&mut self) -> bool {
-        if self.segments.is_empty() {
-            return false;
-        }
-        let mut crossed_boundary = false;
-        if self.cursor.offset > 0 {
-            self.cursor.offset -= 1;
-        } else if self.shift_to_previous_segment() {
-            crossed_boundary = true;
-        } else {
-            return false;
-        }
-        self.normalize_cursor_after_backward_move(crossed_boundary);
-        true
-    }
-
-    pub fn move_right(&mut self) -> bool {
-        if self.segments.is_empty() {
-            return false;
-        }
-        if self.cursor.offset < self.current_segment_len() {
-            self.cursor.offset += 1;
-        } else {
-            if !self.shift_to_next_segment() {
-                return false;
-            }
-            self.skip_forward_reveal_segments();
-        }
-        self.normalize_cursor_after_forward_move();
-        true
-    }
-
-    pub fn move_up(&mut self) -> bool {
-        if self.segments.is_empty() {
-            return false;
-        }
-        let preferred_offset = self.cursor.offset;
-        let Some(target_path) = self.previous_paragraph_path() else {
-            return false;
-        };
-        self.move_to_paragraph_path(&target_path, true, preferred_offset)
-    }
-
-    pub fn move_down(&mut self) -> bool {
-        if self.segments.is_empty() {
-            return false;
-        }
-        let preferred_offset = self.cursor.offset;
-        let Some(target_path) = self.next_paragraph_path() else {
-            return false;
-        };
-        self.move_to_paragraph_path(&target_path, false, preferred_offset)
-    }
-
-    fn previous_paragraph_path(&self) -> Option<ParagraphPath> {
-        if self.segments.is_empty() {
-            return None;
-        }
-        let current_path = &self.cursor.paragraph_path;
-        let mut idx = self.cursor_segment;
-        while idx > 0 {
-            idx -= 1;
-            let segment = &self.segments[idx];
-            if segment.paragraph_path != *current_path {
-                return Some(segment.paragraph_path.clone());
-            }
-        }
-        None
-    }
-
-    fn next_paragraph_path(&self) -> Option<ParagraphPath> {
-        if self.segments.is_empty() {
-            return None;
-        }
-        let current_path = &self.cursor.paragraph_path;
-        let mut idx = self.cursor_segment + 1;
-        while idx < self.segments.len() {
-            let segment = &self.segments[idx];
-            if segment.paragraph_path != *current_path {
-                return Some(segment.paragraph_path.clone());
-            }
-            idx += 1;
-        }
-        None
-    }
-
-    fn move_to_paragraph_path(
-        &mut self,
-        paragraph_path: &ParagraphPath,
-        prefer_trailing: bool,
-        preferred_offset: usize,
-    ) -> bool {
-        if let Some((index, segment)) =
-            select_text_in_paragraph(&self.segments, paragraph_path, prefer_trailing)
-        {
-            self.cursor_segment = index;
-            self.cursor = CursorPointer {
-                paragraph_path: segment.paragraph_path.clone(),
-                span_path: segment.span_path.clone(),
-                offset: preferred_offset.min(segment.len),
-                segment_kind: SegmentKind::Text,
-            };
-            self.clamp_cursor_offset();
-            return true;
-        }
-
-        if let Some((index, segment)) = self
-            .segments
-            .iter()
-            .enumerate()
-            .find(|(_, segment)| segment.paragraph_path == *paragraph_path)
-        {
-            self.cursor_segment = index;
-            self.cursor = CursorPointer {
-                paragraph_path: segment.paragraph_path.clone(),
-                span_path: segment.span_path.clone(),
-                offset: preferred_offset.min(segment.len),
-                segment_kind: segment.kind,
-            };
-            self.clamp_cursor_offset();
-            return true;
-        }
-
-        false
-    }
-
-    pub fn move_word_left(&mut self) -> bool {
-        if self.segments.is_empty() {
-            return false;
-        }
-
-        if let Some(text) = self.current_span_text() {
-            let current_offset = self.cursor.offset.min(text.chars().count());
-            let new_offset = previous_word_boundary(text, current_offset);
-            if new_offset < current_offset {
-                self.cursor.offset = new_offset;
-                return true;
-            }
-        }
-
-        while self.shift_to_previous_segment() {
-            let len = self.current_segment_len();
-            self.cursor.offset = len;
-            if len == 0 {
-                continue;
-            }
-            if let Some(text) = self.current_span_text() {
-                let new_offset = previous_word_boundary(text, len);
-                self.cursor.offset = new_offset;
-            }
-            return true;
-        }
-
-        false
-    }
-
-    pub fn move_word_right(&mut self) -> bool {
-        if self.segments.is_empty() {
-            return false;
-        }
-
-        if let Some(text) = self.current_span_text() {
-            let len = text.chars().count();
-            let current_offset = self.cursor.offset.min(len);
-            let new_offset = next_word_boundary(text, current_offset);
-            if new_offset > current_offset {
-                self.cursor.offset = new_offset;
-                return true;
-            }
-        }
-
-        while self.shift_to_next_segment() {
-            let len = self.current_segment_len();
-            self.cursor.offset = 0;
-            if len == 0 {
-                continue;
-            }
-            if let Some(text) = self.current_span_text() {
-                let new_offset = skip_leading_whitespace(text).min(len);
-                self.cursor.offset = new_offset;
-            }
-            return true;
-        }
-
-        false
-    }
-
-    pub fn move_to_segment_start(&mut self) {
-        self.cursor.offset = 0;
-    }
-
-    pub fn move_to_segment_end(&mut self) {
-        self.cursor.offset = self.current_segment_len();
     }
 
     pub fn set_paragraph_type(&mut self, target: ParagraphType) -> bool {
@@ -1095,7 +801,7 @@ impl DocumentEditor {
         removed
     }
 
-    fn remove_reveal_tag_segment(&mut self, segment_index: usize) -> Option<CursorPointer> {
+fn remove_reveal_tag_segment(&mut self, segment_index: usize) -> Option<CursorPointer> {
         let segment = self.segments.get(segment_index)?.clone();
         let style = match segment.kind {
             SegmentKind::RevealStart(style) | SegmentKind::RevealEnd(style) => style,
@@ -1126,913 +832,6 @@ impl DocumentEditor {
             offset,
             segment_kind: SegmentKind::Text,
         })
-    }
-
-    fn fallback_move_to_text(&mut self, pointer: &CursorPointer, prefer_trailing: bool) -> bool {
-        if let Some((index, segment)) = self.segments.iter().enumerate().find(|(_, segment)| {
-            segment.paragraph_path == pointer.paragraph_path
-                && segment.span_path == pointer.span_path
-                && segment.kind == SegmentKind::Text
-        }) {
-            self.cursor_segment = index;
-            self.cursor = CursorPointer {
-                paragraph_path: segment.paragraph_path.clone(),
-                span_path: segment.span_path.clone(),
-                offset: pointer.offset.min(segment.len),
-                segment_kind: SegmentKind::Text,
-            };
-            self.clamp_cursor_offset();
-            return true;
-        }
-
-        let mut descendant_match: Option<(usize, SegmentRef)> = None;
-        for (index, segment) in self.segments.iter().enumerate() {
-            if segment.paragraph_path != pointer.paragraph_path {
-                continue;
-            }
-            if segment.kind != SegmentKind::Text {
-                continue;
-            }
-            if !span_path_is_prefix(pointer.span_path.indices(), segment.span_path.indices()) {
-                continue;
-            }
-            descendant_match = match descendant_match {
-                None => Some((index, segment.clone())),
-                Some((current_index, current_segment)) => {
-                    if prefer_trailing {
-                        Some((index, segment.clone()))
-                    } else {
-                        Some((current_index, current_segment))
-                    }
-                }
-            };
-            if !prefer_trailing {
-                break;
-            }
-        }
-
-        if let Some((index, segment)) = descendant_match {
-            self.cursor_segment = index;
-            self.cursor = CursorPointer {
-                paragraph_path: segment.paragraph_path.clone(),
-                span_path: segment.span_path.clone(),
-                offset: pointer.offset.min(segment.len),
-                segment_kind: SegmentKind::Text,
-            };
-            self.clamp_cursor_offset();
-            return true;
-        }
-
-        let mut nested_paragraph_match: Option<(usize, SegmentRef)> = None;
-        for (index, segment) in self.segments.iter().enumerate() {
-            if segment.kind != SegmentKind::Text {
-                continue;
-            }
-            if segment.paragraph_path == pointer.paragraph_path {
-                continue;
-            }
-            if !paragraph_path_is_prefix(&pointer.paragraph_path, &segment.paragraph_path) {
-                continue;
-            }
-            nested_paragraph_match = match nested_paragraph_match {
-                None => Some((index, segment.clone())),
-                Some((current_index, current_segment)) => {
-                    if prefer_trailing {
-                        Some((index, segment.clone()))
-                    } else {
-                        Some((current_index, current_segment))
-                    }
-                }
-            };
-            if !prefer_trailing {
-                break;
-            }
-        }
-
-        if let Some((index, segment)) = nested_paragraph_match {
-            self.cursor_segment = index;
-            self.cursor = CursorPointer {
-                paragraph_path: segment.paragraph_path.clone(),
-                span_path: segment.span_path.clone(),
-                offset: pointer.offset.min(segment.len),
-                segment_kind: SegmentKind::Text,
-            };
-            self.clamp_cursor_offset();
-            return true;
-        }
-
-        if let Some((index, segment)) =
-            select_text_in_paragraph(&self.segments, &pointer.paragraph_path, prefer_trailing)
-        {
-            self.cursor_segment = index;
-            self.cursor = CursorPointer {
-                paragraph_path: segment.paragraph_path.clone(),
-                span_path: segment.span_path.clone(),
-                offset: pointer.offset.min(segment.len),
-                segment_kind: SegmentKind::Text,
-            };
-            self.clamp_cursor_offset();
-            return true;
-        }
-
-        false
-    }
-
-    fn insert_paragraph_break_internal(&mut self, prefer_entry_sibling: bool) -> bool {
-        let pointer = self.cursor.clone();
-        if !pointer.is_valid() {
-            return false;
-        }
-        let prefer_entry_sibling = if prefer_entry_sibling {
-            // Check if we're in a checklist item by looking at the path
-            let is_checklist_item = pointer.paragraph_path.steps().iter()
-                .any(|step| matches!(step, PathStep::ChecklistItem { .. }));
-            !is_checklist_item
-        } else {
-            false
-        };
-        let Some(new_pointer) =
-            split_paragraph_break(&mut self.document, &pointer, prefer_entry_sibling)
-        else {
-            return false;
-        };
-        self.rebuild_segments();
-        if !self.move_to_pointer(&new_pointer) {
-            self.cursor = new_pointer;
-        }
-        true
-    }
-
-    pub fn insert_paragraph_break(&mut self) -> bool {
-        self.insert_paragraph_break_internal(false)
-    }
-
-    pub fn insert_paragraph_break_as_sibling(&mut self) -> bool {
-        self.insert_paragraph_break_internal(true)
-    }
-
-    pub fn clone_with_markers(
-        &self,
-        cursor_sentinel: char,
-        selection: Option<(CursorPointer, CursorPointer)>,
-        selection_start_sentinel: char,
-        selection_end_sentinel: char,
-    ) -> (Document, Vec<MarkerRef>, Vec<RevealTagRef>, bool) {
-        #[derive(Clone)]
-        struct SpanAssembly {
-            paragraph_path: ParagraphPath,
-            span_path: SpanPath,
-            original_text: String,
-            start: Option<String>,
-            text: Option<String>,
-            end: Option<String>,
-        }
-
-        let mut clone = self.document.clone();
-        let mut markers = Vec::new();
-        let mut reveal_tags = Vec::new();
-        let mut inserted_cursor = false;
-
-        let selection_bounds = selection.and_then(|(start_ptr, end_ptr)| {
-            let start_key = self.pointer_key(&start_ptr)?;
-            let end_key = self.pointer_key(&end_ptr)?;
-            if start_key <= end_key {
-                Some((start_key, end_key))
-            } else {
-                Some((end_key, start_key))
-            }
-        });
-
-        let mut assemblies: Vec<SpanAssembly> = Vec::new();
-
-        for (segment_index, segment) in self.segments.iter().enumerate() {
-            // Get the span text - either from a paragraph or from a checklist item
-            let span_text = if let Some(item) = checklist_item_ref(&self.document, &segment.paragraph_path) {
-                span_ref_from_item(item, &segment.span_path).map(|s| &s.text)
-            } else if let Some(paragraph) = paragraph_ref(&self.document, &segment.paragraph_path) {
-                span_ref(paragraph, &segment.span_path).map(|s| &s.text)
-            } else {
-                None
-            };
-
-            let Some(span_text) = span_text else {
-                continue;
-            };
-
-            let assembly = if let Some(existing) = assemblies.iter_mut().find(|entry| {
-                entry.paragraph_path == segment.paragraph_path
-                    && entry.span_path == segment.span_path
-            }) {
-                existing
-            } else {
-                assemblies.push(SpanAssembly {
-                    paragraph_path: segment.paragraph_path.clone(),
-                    span_path: segment.span_path.clone(),
-                    original_text: span_text.clone(),
-                    start: None,
-                    text: None,
-                    end: None,
-                });
-                assemblies.last_mut().unwrap()
-            };
-
-            match segment.kind {
-                SegmentKind::Text => {
-                    let original_chars: Vec<char> = assembly.original_text.chars().collect();
-                    let len = original_chars.len();
-                    let mut rebuilt = String::new();
-
-                    for offset in 0..=len {
-                        let id = markers.len();
-                        rebuilt.push_str(&format!("\x1b]{}{}\x1b\\", MARKER_POINTER_PREFIX, id));
-                        markers.push(MarkerRef {
-                            id,
-                            pointer: CursorPointer {
-                                paragraph_path: segment.paragraph_path.clone(),
-                                span_path: segment.span_path.clone(),
-                                offset,
-                                segment_kind: SegmentKind::Text,
-                            },
-                        });
-
-                        if let Some((start_key, end_key)) = selection_bounds {
-                            let current_key = PointerKey {
-                                segment_index,
-                                offset,
-                            };
-                            if current_key == start_key {
-                                rebuilt.push(selection_start_sentinel);
-                            }
-                            if current_key == end_key {
-                                rebuilt.push(selection_end_sentinel);
-                            }
-                        }
-
-                        if segment.matches(&self.cursor) && offset == self.cursor.offset {
-                            rebuilt.push(cursor_sentinel);
-                            inserted_cursor = true;
-                        }
-
-                        if offset < len {
-                            rebuilt.push(original_chars[offset]);
-                        }
-                    }
-
-                    assembly.text = Some(rebuilt);
-                }
-                SegmentKind::RevealStart(style) => {
-                    let len = segment.len.max(1);
-                    let mut rebuilt = String::new();
-                    for offset in 0..=len {
-                        let id = markers.len();
-                        rebuilt.push_str(&format!("\x1b]{}{}\x1b\\", MARKER_POINTER_PREFIX, id));
-                        markers.push(MarkerRef {
-                            id,
-                            pointer: CursorPointer {
-                                paragraph_path: segment.paragraph_path.clone(),
-                                span_path: segment.span_path.clone(),
-                                offset,
-                                segment_kind: SegmentKind::RevealStart(style),
-                            },
-                        });
-
-                        if let Some((start_key, end_key)) = selection_bounds {
-                            let current_key = PointerKey {
-                                segment_index,
-                                offset,
-                            };
-                            if current_key == start_key {
-                                rebuilt.push(selection_start_sentinel);
-                            }
-                            if current_key == end_key {
-                                rebuilt.push(selection_end_sentinel);
-                            }
-                        }
-
-                        if segment.matches(&self.cursor) && offset == self.cursor.offset {
-                            rebuilt.push(cursor_sentinel);
-                            inserted_cursor = true;
-                        }
-
-                        if offset < len {
-                            let tag_id = reveal_tags.len();
-                            reveal_tags.push(RevealTagRef {
-                                id: tag_id,
-                                style,
-                                kind: RevealTagKind::Start,
-                            });
-                            rebuilt.push_str(&format!(
-                                "\x1b]{}{}\x1b\\",
-                                MARKER_REVEAL_PREFIX, tag_id
-                            ));
-                        }
-                    }
-                    assembly.start = Some(rebuilt);
-                }
-                SegmentKind::RevealEnd(style) => {
-                    let len = segment.len.max(1);
-                    let mut rebuilt = String::new();
-                    for offset in 0..=len {
-                        let id = markers.len();
-                        rebuilt.push_str(&format!("\x1b]{}{}\x1b\\", MARKER_POINTER_PREFIX, id));
-                        markers.push(MarkerRef {
-                            id,
-                            pointer: CursorPointer {
-                                paragraph_path: segment.paragraph_path.clone(),
-                                span_path: segment.span_path.clone(),
-                                offset,
-                                segment_kind: SegmentKind::RevealEnd(style),
-                            },
-                        });
-
-                        if let Some((start_key, end_key)) = selection_bounds {
-                            let current_key = PointerKey {
-                                segment_index,
-                                offset,
-                            };
-                            if current_key == start_key {
-                                rebuilt.push(selection_start_sentinel);
-                            }
-                            if current_key == end_key {
-                                rebuilt.push(selection_end_sentinel);
-                            }
-                        }
-
-                        if segment.matches(&self.cursor) && offset == self.cursor.offset {
-                            rebuilt.push(cursor_sentinel);
-                            inserted_cursor = true;
-                        }
-
-                        if offset < len {
-                            let tag_id = reveal_tags.len();
-                            reveal_tags.push(RevealTagRef {
-                                id: tag_id,
-                                style,
-                                kind: RevealTagKind::End,
-                            });
-                            rebuilt.push_str(&format!(
-                                "\x1b]{}{}\x1b\\",
-                                MARKER_REVEAL_PREFIX, tag_id
-                            ));
-                        }
-                    }
-                    assembly.end = Some(rebuilt);
-                }
-            }
-        }
-
-        for assembly in assemblies.into_iter() {
-            // Get the span - either from a paragraph or from a checklist item
-            let span_mut_result = if let Some(item) = checklist_item_mut(&mut clone, &assembly.paragraph_path) {
-                span_mut_from_item(item, &assembly.span_path)
-            } else if let Some(paragraph) = paragraph_mut(&mut clone, &assembly.paragraph_path) {
-                span_mut(paragraph, &assembly.span_path)
-            } else {
-                None
-            };
-
-            let Some(span) = span_mut_result else {
-                continue;
-            };
-
-            let mut combined = String::new();
-            if let Some(start) = assembly.start {
-                combined.push_str(&start);
-            }
-            if let Some(text) = assembly.text {
-                combined.push_str(&text);
-            } else {
-                combined.push_str(&assembly.original_text);
-            }
-            if let Some(end) = assembly.end {
-                combined.push_str(&end);
-            }
-            span.text = combined;
-        }
-
-        (clone, markers, reveal_tags, inserted_cursor)
-    }
-
-    pub fn apply_inline_style_to_selection(
-        &mut self,
-        selection: &(CursorPointer, CursorPointer),
-        style: InlineStyle,
-    ) -> bool {
-        if self.segments.is_empty() {
-            return false;
-        }
-
-        let mut start = selection.0.clone();
-        let mut end = selection.1.clone();
-
-        if matches!(self.compare_pointers(&start, &end), Some(Ordering::Greater)) {
-            mem::swap(&mut start, &mut end);
-        }
-
-        let start_key = match self.pointer_key(&start) {
-            Some(key) => key,
-            None => return false,
-        };
-
-        let end_key = match self.pointer_key(&end) {
-            Some(key) => key,
-            None => return false,
-        };
-
-        if start_key > end_key {
-            return false;
-        }
-
-        let segments_snapshot = self.segments.clone();
-        let mut changed = false;
-        let mut touched_paths: Vec<ParagraphPath> = Vec::new();
-
-        for segment_index in (start_key.segment_index..=end_key.segment_index).rev() {
-            let Some(segment) = segments_snapshot.get(segment_index) else {
-                continue;
-            };
-            let len = segment.len;
-            if len == 0 {
-                continue;
-            }
-            if segment.kind != SegmentKind::Text {
-                continue;
-            }
-
-            let seg_start = if segment_index == start_key.segment_index {
-                start_key.offset.min(len)
-            } else {
-                0
-            };
-            let seg_end = if segment_index == end_key.segment_index {
-                end_key.offset.min(len)
-            } else {
-                len
-            };
-
-            if seg_start >= seg_end {
-                continue;
-            }
-
-            if self.apply_inline_style_to_segment(segment, seg_start, seg_end, style) {
-                changed = true;
-                if !touched_paths
-                    .iter()
-                    .any(|path| *path == segment.paragraph_path)
-                {
-                    touched_paths.push(segment.paragraph_path.clone());
-                }
-            }
-        }
-
-        if changed {
-            for path in touched_paths {
-                if let Some(paragraph) = paragraph_mut(&mut self.document, &path) {
-                    prune_and_merge_spans(&mut paragraph.content);
-                }
-            }
-            self.rebuild_segments();
-        }
-
-        changed
-    }
-
-    fn pointer_key(&self, pointer: &CursorPointer) -> Option<PointerKey> {
-        for (index, segment) in self.segments.iter().enumerate() {
-            if segment.matches_pointer(pointer) {
-                let offset = pointer.offset.min(segment.len);
-                return Some(PointerKey {
-                    segment_index: index,
-                    offset,
-                });
-            }
-        }
-        None
-    }
-
-    fn apply_inline_style_to_segment(
-        &mut self,
-        segment: &SegmentRef,
-        start: usize,
-        end: usize,
-        style: InlineStyle,
-    ) -> bool {
-        let Some(paragraph) = paragraph_mut(&mut self.document, &segment.paragraph_path) else {
-            return false;
-        };
-        apply_style_to_span_path(
-            &mut paragraph.content,
-            segment.span_path.indices(),
-            start,
-            end,
-            style,
-        )
-    }
-
-    pub fn compare_pointers(&self, a: &CursorPointer, b: &CursorPointer) -> Option<Ordering> {
-        let key_a = self.pointer_key(a)?;
-        let key_b = self.pointer_key(b)?;
-        Some(key_a.cmp(&key_b))
-    }
-
-    fn shift_to_previous_segment(&mut self) -> bool {
-        if self.cursor_segment == 0 || self.segments.is_empty() {
-            return false;
-        }
-        self.cursor_segment -= 1;
-        if let Some(segment) = self.segments.get(self.cursor_segment).cloned() {
-            self.cursor.update_from_segment(&segment);
-            self.cursor.offset = segment.len;
-            true
-        } else {
-            false
-        }
-    }
-
-    fn shift_to_next_segment(&mut self) -> bool {
-        if self.cursor_segment + 1 >= self.segments.len() {
-            return false;
-        }
-        self.cursor_segment += 1;
-        if let Some(segment) = self.segments.get(self.cursor_segment).cloned() {
-            self.cursor.update_from_segment(&segment);
-            self.cursor.offset = 0;
-            true
-        } else {
-            false
-        }
-    }
-
-    fn skip_forward_reveal_segments(&mut self) {
-        while matches!(
-            self.current_segment_kind(),
-            Some(SegmentKind::RevealStart(_) | SegmentKind::RevealEnd(_))
-        ) {
-            if !self.shift_to_next_segment() {
-                break;
-            }
-        }
-    }
-
-    fn current_segment_len(&self) -> usize {
-        self.segments
-            .get(self.cursor_segment)
-            .map(|segment| segment.len)
-            .unwrap_or(0)
-    }
-
-    fn find_previous_text_segment_in_paragraph(&self, start_idx: usize) -> Option<usize> {
-        if self.segments.is_empty() || start_idx == 0 {
-            return None;
-        }
-        let paragraph_path = self.segments.get(start_idx)?.paragraph_path.clone();
-        let mut idx = start_idx;
-        while idx > 0 {
-            idx -= 1;
-            let segment = &self.segments[idx];
-            if segment.paragraph_path != paragraph_path {
-                continue;
-            }
-            if matches!(segment.kind, SegmentKind::Text) {
-                return Some(idx);
-            }
-        }
-        None
-    }
-
-    fn current_segment_kind(&self) -> Option<SegmentKind> {
-        self.segments
-            .get(self.cursor_segment)
-            .map(|segment| segment.kind)
-    }
-
-    fn next_segment_kind(&self) -> Option<SegmentKind> {
-        self.segments
-            .get(self.cursor_segment + 1)
-            .map(|segment| segment.kind)
-    }
-
-    fn normalize_cursor_after_forward_move(&mut self) {
-        loop {
-            let current_len = self.current_segment_len();
-            if self.cursor.offset < current_len {
-                break;
-            }
-            if matches!(
-                self.current_segment_kind(),
-                Some(SegmentKind::RevealStart(_) | SegmentKind::RevealEnd(_))
-            ) {
-                if !self.shift_to_next_segment() {
-                    break;
-                }
-                continue;
-            }
-            match self.next_segment_kind() {
-                Some(SegmentKind::RevealStart(_) | SegmentKind::RevealEnd(_)) => {
-                    if !self.shift_to_next_segment() {
-                        break;
-                    }
-                }
-                _ => break,
-            }
-        }
-    }
-
-    fn normalize_cursor_after_backward_move(&mut self, crossed_boundary: bool) {
-        let pending_boundary = crossed_boundary;
-        loop {
-            let Some(segment) = self.segments.get(self.cursor_segment) else {
-                return;
-            };
-            match segment.kind {
-                SegmentKind::RevealStart(_) | SegmentKind::RevealEnd(_) => {
-                    if self.cursor.offset > 0 {
-                        self.cursor.offset = 0;
-                    }
-                    return;
-                }
-                SegmentKind::Text => {
-                    if pending_boundary {
-                        if segment.len == 0 {
-                            return;
-                        }
-                        if self.cursor.offset >= segment.len {
-                            self.cursor.offset = segment.len.saturating_sub(1);
-                        }
-                    }
-                    return;
-                }
-            }
-        }
-    }
-
-    fn current_span_text(&self) -> Option<&str> {
-        let segment = self.segments.get(self.cursor_segment)?;
-        if segment.kind != SegmentKind::Text {
-            return None;
-        }
-        let paragraph = paragraph_ref(&self.document, &self.cursor.paragraph_path)?;
-        let span = span_ref(paragraph, &self.cursor.span_path)?;
-        Some(span.text.as_str())
-    }
-
-    fn segment_text(&self, segment: &SegmentRef) -> Option<&str> {
-        if segment.kind != SegmentKind::Text {
-            return None;
-        }
-        let paragraph = paragraph_ref(&self.document, &segment.paragraph_path)?;
-        let span = span_ref(paragraph, &segment.span_path)?;
-        Some(span.text.as_str())
-    }
-
-    fn previous_word_position(&self) -> Option<(usize, CursorPointer)> {
-        if self.segments.is_empty() {
-            return None;
-        }
-
-        if let Some(text) = self.current_span_text() {
-            let len = text.chars().count();
-            let current_offset = self.cursor.offset.min(len);
-            let new_offset = previous_word_boundary(text, current_offset);
-            if new_offset < current_offset {
-                let mut pointer = self.cursor.clone();
-                pointer.offset = new_offset;
-                return Some((self.cursor_segment, pointer));
-            }
-        }
-
-        let mut idx = self.cursor_segment;
-        while idx > 0 {
-            idx -= 1;
-            let segment = &self.segments[idx];
-            let len = segment.len;
-            if len == 0 {
-                continue;
-            }
-            let Some(text) = self.segment_text(segment) else {
-                continue;
-            };
-            let new_offset = previous_word_boundary(text, len);
-            let pointer = CursorPointer {
-                paragraph_path: segment.paragraph_path.clone(),
-                span_path: segment.span_path.clone(),
-                offset: new_offset.min(len),
-                segment_kind: segment.kind,
-            };
-            return Some((idx, pointer));
-        }
-
-        None
-    }
-
-    fn next_word_position(&self) -> Option<(usize, CursorPointer)> {
-        if self.segments.is_empty() {
-            return None;
-        }
-
-        if let Some(text) = self.current_span_text() {
-            let len = text.chars().count();
-            let current_offset = self.cursor.offset.min(len);
-            let new_offset = next_word_boundary(text, current_offset);
-            if new_offset > current_offset {
-                let mut pointer = self.cursor.clone();
-                pointer.offset = new_offset.min(len);
-                return Some((self.cursor_segment, pointer));
-            }
-        }
-
-        let mut idx = self.cursor_segment + 1;
-        while idx < self.segments.len() {
-            let segment = &self.segments[idx];
-            let len = segment.len;
-            if len == 0 {
-                idx += 1;
-                continue;
-            }
-            let Some(text) = self.segment_text(segment) else {
-                idx += 1;
-                continue;
-            };
-            let new_offset = next_word_boundary(text, 0).min(len);
-            let pointer = CursorPointer {
-                paragraph_path: segment.paragraph_path.clone(),
-                span_path: segment.span_path.clone(),
-                offset: new_offset,
-                segment_kind: segment.kind,
-            };
-            return Some((idx, pointer));
-        }
-
-        None
-    }
-
-    fn count_backward_steps(&self, target_segment: usize, target_offset: usize) -> usize {
-        if self.segments.is_empty() {
-            return 0;
-        }
-
-        if self.cursor_segment == target_segment {
-            let len = self.current_segment_len();
-            let clamped_target = target_offset.min(len);
-            return self.cursor.offset.min(len).saturating_sub(clamped_target);
-        }
-
-        if self.cursor_segment < target_segment {
-            return 0;
-        }
-
-        let mut count = self.cursor.offset;
-        let mut idx = self.cursor_segment;
-
-        while idx > target_segment {
-            idx -= 1;
-            let segment = &self.segments[idx];
-            if idx == target_segment {
-                let len = segment.len;
-                let clamped_target = target_offset.min(len);
-                count += len.saturating_sub(clamped_target);
-            } else {
-                count += segment.len;
-            }
-        }
-
-        count
-    }
-
-    fn count_forward_steps(&self, target_segment: usize, target_offset: usize) -> usize {
-        if self.segments.is_empty() {
-            return 0;
-        }
-
-        if self.cursor_segment == target_segment {
-            let len = self.current_segment_len();
-            let clamped_target = target_offset.min(len);
-            return clamped_target.saturating_sub(self.cursor.offset.min(len));
-        }
-
-        if self.cursor_segment > target_segment {
-            return 0;
-        }
-
-        let mut count = {
-            let len = self.current_segment_len();
-            len.saturating_sub(self.cursor.offset.min(len))
-        };
-
-        let mut idx = self.cursor_segment + 1;
-        while idx < target_segment {
-            count += self.segments[idx].len;
-            idx += 1;
-        }
-
-        if let Some(segment) = self.segments.get(target_segment) {
-            count += target_offset.min(segment.len);
-        }
-
-        count
-    }
-
-    fn rebuild_segments(&mut self) {
-        self.segments = collect_segments(&self.document, self.reveal_codes);
-        if self.segments.is_empty() {
-            self.ensure_placeholder_segment();
-            self.segments = collect_segments(&self.document, self.reveal_codes);
-        }
-        if self.segments.is_empty() {
-            self.cursor = CursorPointer::default();
-            self.cursor_segment = 0;
-            return;
-        }
-        self.sync_cursor_segment();
-        self.clamp_cursor_offset();
-    }
-
-    fn ensure_placeholder_segment(&mut self) {
-        if self.document.paragraphs.is_empty() {
-            self.document
-                .paragraphs
-                .push(Paragraph::new_text().with_content(vec![Span::new_text("")]));
-        } else if let Some(first) = self.document.paragraphs.get_mut(0) {
-            if first.content.is_empty() {
-                first.content.push(Span::new_text(""));
-            }
-        }
-    }
-
-    fn sync_cursor_segment(&mut self) {
-        if let Some(index) = self
-            .segments
-            .iter()
-            .position(|segment| segment.matches(&self.cursor))
-        {
-            self.cursor_segment = index;
-        } else if let Some(first) = self.segments.first() {
-            self.cursor_segment = 0;
-            self.cursor.update_from_segment(first);
-        }
-    }
-
-    fn clamp_cursor_offset(&mut self) {
-        let len = self.current_segment_len();
-        if self.cursor.offset > len {
-            self.cursor.offset = len;
-        }
-    }
-
-    fn nearest_text_pointer_for(&self, pointer: &CursorPointer) -> Option<CursorPointer> {
-        let index = self
-            .segments
-            .iter()
-            .position(|segment| segment.matches_pointer(pointer))?;
-        match pointer.segment_kind {
-            SegmentKind::RevealStart(_) => self
-                .find_text_pointer_forward(index + 1)
-                .or_else(|| self.find_text_pointer_backward(index)),
-            SegmentKind::RevealEnd(_) => self
-                .find_text_pointer_backward(index)
-                .or_else(|| self.find_text_pointer_forward(index + 1)),
-            SegmentKind::Text => None,
-        }
-    }
-
-    fn find_text_pointer_forward(&self, start_index: usize) -> Option<CursorPointer> {
-        if start_index >= self.segments.len() {
-            return None;
-        }
-        let mut idx = start_index;
-        while idx < self.segments.len() {
-            let segment = &self.segments[idx];
-            if matches!(segment.kind, SegmentKind::Text) {
-                return Some(CursorPointer {
-                    paragraph_path: segment.paragraph_path.clone(),
-                    span_path: segment.span_path.clone(),
-                    offset: 0,
-                    segment_kind: SegmentKind::Text,
-                });
-            }
-            idx += 1;
-        }
-        None
-    }
-
-    fn find_text_pointer_backward(&self, start_index: usize) -> Option<CursorPointer> {
-        if self.segments.is_empty() {
-            return None;
-        }
-        let mut idx = start_index.min(self.segments.len());
-        while idx > 0 {
-            idx -= 1;
-            let segment = &self.segments[idx];
-            if matches!(segment.kind, SegmentKind::Text) {
-                return Some(CursorPointer {
-                    paragraph_path: segment.paragraph_path.clone(),
-                    span_path: segment.span_path.clone(),
-                    offset: segment.len,
-                    segment_kind: SegmentKind::Text,
-                });
-            }
-        }
-        None
     }
 
     fn current_paragraph_is_empty(&self) -> bool {
@@ -2140,22 +939,121 @@ impl DocumentEditor {
     }
 }
 
+    pub fn apply_inline_style_to_selection(
+        &mut self,
+        selection: &(CursorPointer, CursorPointer),
+        style: InlineStyle,
+    ) -> bool {
+        if self.segments.is_empty() {
+            return false;
+        }
+
+        let mut start = selection.0.clone();
+        let mut end = selection.1.clone();
+
+        if matches!(self.compare_pointers(&start, &end), Some(Ordering::Greater)) {
+            mem::swap(&mut start, &mut end);
+        }
+
+        let start_key = match self.pointer_key(&start) {
+            Some(key) => key,
+            None => return false,
+        };
+
+        let end_key = match self.pointer_key(&end) {
+            Some(key) => key,
+            None => return false,
+        };
+
+        if start_key > end_key {
+            return false;
+        }
+
+        let segments_snapshot = self.segments.clone();
+        let mut changed = false;
+        let mut touched_paths: Vec<ParagraphPath> = Vec::new();
+
+        for segment_index in (start_key.segment_index..=end_key.segment_index).rev() {
+            let Some(segment) = segments_snapshot.get(segment_index) else {
+                continue;
+            };
+            let len = segment.len;
+            if len == 0 {
+                continue;
+            }
+            if segment.kind != SegmentKind::Text {
+                continue;
+            }
+
+            let seg_start = if segment_index == start_key.segment_index {
+                start_key.offset.min(len)
+            } else {
+                0
+            };
+            let seg_end = if segment_index == end_key.segment_index {
+                end_key.offset.min(len)
+            } else {
+                len
+            };
+
+            if seg_start >= seg_end {
+                continue;
+            }
+
+            if self.apply_inline_style_to_segment(segment, seg_start, seg_end, style) {
+                changed = true;
+                if !touched_paths
+                    .iter()
+                    .any(|path| *path == segment.paragraph_path)
+                {
+                    touched_paths.push(segment.paragraph_path.clone());
+                }
+            }
+        }
+
+        if changed {
+            for path in touched_paths {
+                if let Some(paragraph) = paragraph_mut(&mut self.document, &path) {
+                    prune_and_merge_spans(&mut paragraph.content);
+                }
+            }
+            self.rebuild_segments();
+        }
+
+        changed
+    }
+
+    fn apply_inline_style_to_segment(
+        &mut self,
+        segment: &SegmentRef,
+        start: usize,
+        end: usize,
+        style: InlineStyle,
+    ) -> bool {
+        let Some(paragraph) = paragraph_mut(&mut self.document, &segment.paragraph_path) else {
+            return false;
+        };
+        apply_style_to_span_path(
+            &mut paragraph.content,
+            segment.span_path.indices(),
+            start,
+            end,
+            style,
+        )
+    }
+
+    pub fn compare_pointers(&self, a: &CursorPointer, b: &CursorPointer) -> Option<Ordering> {
+        let key_a = self.pointer_key(a)?;
+        let key_b = self.pointer_key(b)?;
+        Some(key_a.cmp(&key_b))
+    }
+
 fn ensure_document_initialized(document: &mut Document) {
     if document.paragraphs.is_empty() {
         document
             .paragraphs
             .push(Paragraph::new_text().with_content(vec![Span::new_text("")]));
     }
-}
-
-fn span_path_is_prefix(prefix: &[usize], target: &[usize]) -> bool {
-    prefix.len() <= target.len() && target.starts_with(prefix)
-}
-
-fn paragraph_path_is_prefix(prefix: &ParagraphPath, target: &ParagraphPath) -> bool {
-    let prefix_steps = prefix.steps();
-    let target_steps = target.steps();
-    prefix_steps.len() <= target_steps.len() && target_steps.starts_with(prefix_steps)
 }
 
 fn select_text_in_paragraph(
@@ -2179,118 +1077,6 @@ fn select_text_in_paragraph(
     result
 }
 
-fn collect_segments(document: &Document, reveal_codes: bool) -> Vec<SegmentRef> {
-    let mut result = Vec::new();
-    for (idx, paragraph) in document.paragraphs.iter().enumerate() {
-        let mut path = ParagraphPath::new_root(idx);
-        collect_paragraph_segments(paragraph, &mut path, reveal_codes, &mut result);
-    }
-    result
-}
-
-fn breadcrumbs_for_pointer(document: &Document, pointer: &CursorPointer) -> Option<Vec<String>> {
-    if pointer.paragraph_path.is_empty() {
-        return None;
-    }
-    let (mut labels, paragraph) = collect_paragraph_labels(document, &pointer.paragraph_path)?;
-    let inline_labels = collect_inline_labels(paragraph, &pointer.span_path)?;
-    labels.extend(inline_labels);
-    Some(labels)
-}
-
-fn collect_paragraph_labels<'a>(
-    document: &'a Document,
-    path: &ParagraphPath,
-) -> Option<(Vec<String>, &'a Paragraph)> {
-    let mut labels = Vec::new();
-    let mut current: Option<&'a Paragraph> = None;
-    let mut traversed = Vec::new();
-
-    for step in path.steps() {
-        traversed.push(step.clone());
-        let paragraph = match *step {
-            PathStep::Root(idx) => document.paragraphs.get(idx)?,
-            PathStep::Child(idx) => {
-                let parent = current?;
-                parent.children.get(idx)?
-            }
-            PathStep::Entry {
-                entry_index,
-                paragraph_index,
-            } => {
-                let parent = current?;
-                let entry = parent.entries.get(entry_index)?;
-                entry.get(paragraph_index)?
-            }
-            PathStep::ChecklistItem { .. } => {
-                // ChecklistItem doesn't have its own paragraph type, skip for label collection
-                continue;
-            }
-        };
-        let current_path = ParagraphPath::from_steps(traversed.clone());
-        let hide_label = text_effective_relation(document, &current_path).is_some();
-        if !hide_label {
-            labels.push(paragraph.paragraph_type.to_string());
-        }
-        current = Some(paragraph);
-    }
-
-    let paragraph = current?;
-    Some((labels, paragraph))
-}
-
-fn collect_inline_labels(paragraph: &Paragraph, span_path: &SpanPath) -> Option<Vec<String>> {
-    let mut labels = Vec::new();
-    if span_path.is_empty() {
-        return Some(labels);
-    }
-
-    let mut spans = &paragraph.content;
-    for &idx in span_path.indices() {
-        let span = spans.get(idx)?;
-        if let Some(label) = inline_style_label(span.style) {
-            labels.push(label.to_string());
-        }
-        spans = &span.children;
-    }
-
-    Some(labels)
-}
-
-#[derive(Clone, Copy)]
-enum TextEffectiveRelation {
-    ParentChild,
-    Entry,
-}
-
-fn text_effective_relation(document: &Document, path: &ParagraphPath) -> Option<TextEffectiveRelation> {
-    let paragraph = paragraph_ref(document, path)?;
-    if paragraph.paragraph_type != ParagraphType::Text {
-        return None;
-    }
-    let steps = path.steps();
-    if steps.len() <= 1 {
-        return None;
-    }
-    let (last_step, prefix) = steps.split_last()?;
-    let parent = paragraph_ref(document, &ParagraphPath::from_steps(prefix.to_vec()))?;
-    match *last_step {
-        PathStep::Child(_) => parent
-            .children
-            .len()
-            .eq(&1)
-            .then_some(TextEffectiveRelation::ParentChild),
-        PathStep::Entry {
-            entry_index,
-            ..
-        } => parent
-            .entries
-            .get(entry_index)
-            .and_then(|entry| (entry.len() == 1).then_some(TextEffectiveRelation::Entry)),
-        PathStep::Root(_) => None,
-        PathStep::ChecklistItem { .. } => None,
-    }
-}
 
 fn is_single_paragraph_entry(document: &Document, path: &ParagraphPath) -> bool {
     let steps = path.steps();
@@ -3081,123 +1867,6 @@ fn inline_style_label(style: InlineStyle) -> Option<&'static str> {
         InlineStyle::Strike => Some("Strikethrough"),
         InlineStyle::Link => Some("Link"),
         InlineStyle::Code => Some("Code"),
-    }
-}
-
-fn collect_paragraph_segments(
-    paragraph: &Paragraph,
-    path: &mut ParagraphPath,
-    reveal_codes: bool,
-    segments: &mut Vec<SegmentRef>,
-) {
-    collect_span_segments(paragraph, path, reveal_codes, segments);
-    for (child_index, child) in paragraph.children.iter().enumerate() {
-        path.push_child(child_index);
-        collect_paragraph_segments(child, path, reveal_codes, segments);
-        path.pop();
-    }
-    for (entry_index, entry) in paragraph.entries.iter().enumerate() {
-        for (child_index, child) in entry.iter().enumerate() {
-            path.push_entry(entry_index, child_index);
-            collect_paragraph_segments(child, path, reveal_codes, segments);
-            path.pop();
-        }
-    }
-    if paragraph.paragraph_type == ParagraphType::Checklist {
-        for (item_index, item) in paragraph.checklist_items.iter().enumerate() {
-            collect_checklist_item_segments(item, path, &[item_index], reveal_codes, segments);
-        }
-    }
-}
-
-fn collect_checklist_item_segments(
-    item: &ChecklistItem,
-    path: &mut ParagraphPath,
-    indices: &[usize],
-    reveal_codes: bool,
-    segments: &mut Vec<SegmentRef>,
-) {
-    path.push_checklist_item(indices.to_vec());
-    collect_span_segments_from_item(item, path, reveal_codes, segments);
-    path.pop();
-
-    for (child_index, child) in item.children.iter().enumerate() {
-        let mut child_indices = indices.to_vec();
-        child_indices.push(child_index);
-        collect_checklist_item_segments(child, path, &child_indices, reveal_codes, segments);
-    }
-}
-
-fn collect_span_segments(
-    paragraph: &Paragraph,
-    path: &ParagraphPath,
-    reveal_codes: bool,
-    segments: &mut Vec<SegmentRef>,
-) {
-    for (index, span) in paragraph.content.iter().enumerate() {
-        let mut span_path = SpanPath::new(vec![index]);
-        collect_span_rec(span, path, &mut span_path, reveal_codes, segments);
-    }
-}
-
-fn collect_span_segments_from_item(
-    item: &ChecklistItem,
-    path: &ParagraphPath,
-    reveal_codes: bool,
-    segments: &mut Vec<SegmentRef>,
-) {
-    for (index, span) in item.content.iter().enumerate() {
-        let mut span_path = SpanPath::new(vec![index]);
-        collect_span_rec(span, path, &mut span_path, reveal_codes, segments);
-    }
-}
-
-fn collect_span_rec(
-    span: &Span,
-    paragraph_path: &ParagraphPath,
-    span_path: &mut SpanPath,
-    reveal_codes: bool,
-    segments: &mut Vec<SegmentRef>,
-) {
-    let len = span.text.chars().count();
-    if reveal_codes && span.style != InlineStyle::None {
-        segments.push(SegmentRef {
-            paragraph_path: paragraph_path.clone(),
-            span_path: span_path.clone(),
-            len: 1,
-            kind: SegmentKind::RevealStart(span.style),
-        });
-    }
-
-    if span.children.is_empty() || !span.text.is_empty() {
-        segments.push(SegmentRef {
-            paragraph_path: paragraph_path.clone(),
-            span_path: span_path.clone(),
-            len,
-            kind: SegmentKind::Text,
-        });
-    } else if len == 0 && span.children.is_empty() {
-        segments.push(SegmentRef {
-            paragraph_path: paragraph_path.clone(),
-            span_path: span_path.clone(),
-            len: 0,
-            kind: SegmentKind::Text,
-        });
-    }
-
-    for (child_index, child) in span.children.iter().enumerate() {
-        span_path.push(child_index);
-        collect_span_rec(child, paragraph_path, span_path, reveal_codes, segments);
-        span_path.pop();
-    }
-
-    if reveal_codes && span.style != InlineStyle::None {
-        segments.push(SegmentRef {
-            paragraph_path: paragraph_path.clone(),
-            span_path: span_path.clone(),
-            len: 1,
-            kind: SegmentKind::RevealEnd(span.style),
-        });
     }
 }
 
@@ -4072,30 +2741,6 @@ fn remove_paragraph_by_path(document: &mut Document, path: &ParagraphPath) -> bo
     }
 }
 
-fn paragraph_ref<'a>(document: &'a Document, path: &ParagraphPath) -> Option<&'a Paragraph> {
-    let mut iter = path.steps().iter();
-    let first = iter.next()?;
-    let mut paragraph = match first {
-        PathStep::Root(idx) => document.paragraphs.get(*idx)?,
-        _ => return None,
-    };
-    for step in iter {
-        paragraph = match step {
-            PathStep::Child(idx) => paragraph.children.get(*idx)?,
-            PathStep::Entry {
-                entry_index,
-                paragraph_index,
-            } => {
-                let entry = paragraph.entries.get(*entry_index)?;
-                entry.get(*paragraph_index)?
-            }
-            PathStep::ChecklistItem { .. } => return None,
-            PathStep::Root(_) => return None,
-        };
-    }
-    Some(paragraph)
-}
-
 fn paragraph_mut<'a>(
     document: &'a mut Document,
     path: &ParagraphPath,
@@ -4123,27 +2768,6 @@ fn paragraph_mut<'a>(
     Some(paragraph)
 }
 
-fn checklist_item_ref<'a>(document: &'a Document, path: &ParagraphPath) -> Option<&'a ChecklistItem> {
-    let steps = path.steps();
-    let (checklist_step_idx, checklist_step) = steps
-        .iter()
-        .enumerate()
-        .find(|(_, s)| matches!(s, PathStep::ChecklistItem { .. }))?;
-
-    let PathStep::ChecklistItem { indices } = checklist_step else {
-        return None;
-    };
-
-    let paragraph_path = ParagraphPath::from_steps(steps[..checklist_step_idx].to_vec());
-    let paragraph = paragraph_ref(document, &paragraph_path)?;
-
-    let mut item: &ChecklistItem = paragraph.checklist_items.get(*indices.first()?)?;
-    for &idx in &indices[1..] {
-        item = item.children.get(idx)?;
-    }
-    Some(item)
-}
-
 fn checklist_item_mut<'a>(document: &'a mut Document, path: &ParagraphPath) -> Option<&'a mut ChecklistItem> {
     let steps = path.steps();
     let (checklist_step_idx, checklist_step) = steps
@@ -4165,32 +2789,12 @@ fn checklist_item_mut<'a>(document: &'a mut Document, path: &ParagraphPath) -> O
     Some(item)
 }
 
-fn span_ref<'a>(paragraph: &'a Paragraph, path: &SpanPath) -> Option<&'a Span> {
-    let mut iter = path.indices().iter();
-    let first = iter.next()?;
-    let mut span = paragraph.content.get(*first)?;
-    for idx in iter {
-        span = span.children.get(*idx)?;
-    }
-    Some(span)
-}
-
 fn span_mut<'a>(paragraph: &'a mut Paragraph, path: &SpanPath) -> Option<&'a mut Span> {
     let mut iter = path.indices().iter();
     let first = iter.next()?;
     let mut span = paragraph.content.get_mut(*first)?;
     for idx in iter {
         span = span.children.get_mut(*idx)?;
-    }
-    Some(span)
-}
-
-fn span_ref_from_item<'a>(item: &'a ChecklistItem, path: &SpanPath) -> Option<&'a Span> {
-    let mut iter = path.indices().iter();
-    let first = iter.next()?;
-    let mut span = item.content.get(*first)?;
-    for idx in iter {
-        span = span.children.get(*idx)?;
     }
     Some(span)
 }
@@ -4382,3 +2986,7 @@ fn span_is_empty(span: &Span) -> bool {
 #[cfg(test)]
 #[path = "editor_tests.rs"]
 mod editor_tests;
+
+#[cfg(test)]
+#[path = "cursor_tests.rs"]
+mod cursor_tests;
