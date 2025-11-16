@@ -54,6 +54,17 @@ fn pointer_to_entry_span(
     }
 }
 
+fn pointer_to_checklist_item_span(root_index: usize, item_index: usize) -> CursorPointer {
+    let mut path = ParagraphPath::new_root(root_index);
+    path.push_checklist_item(vec![item_index]);
+    CursorPointer {
+        paragraph_path: path,
+        span_path: SpanPath::new(vec![0]),
+        offset: 0,
+        segment_kind: SegmentKind::Text,
+    }
+}
+
 fn text_paragraph(text: &str) -> Paragraph {
     Paragraph::new_text().with_content(vec![Span::new_text(text)])
 }
@@ -75,13 +86,13 @@ fn ordered_list(items: &[&str]) -> Paragraph {
 }
 
 fn checklist(items: &[&str]) -> Paragraph {
-    let entries = items
+    let checklist_items = items
         .iter()
         .map(|text| {
-            vec![Paragraph::new_checklist_item(false).with_content(vec![Span::new_text(*text)])]
+            ChecklistItem::new(false).with_content(vec![Span::new_text(*text)])
         })
         .collect::<Vec<_>>();
-    Paragraph::new_checklist().with_entries(entries)
+    Paragraph::new_checklist().with_checklist_items(checklist_items)
 }
 
 fn document_with_bold_span() -> Document {
@@ -98,12 +109,12 @@ fn document_with_bold_span() -> Document {
 fn document_with_checklist_bold_span() -> Document {
     let mut bold = Span::new_text("World");
     bold.style = InlineStyle::Bold;
-    let item = Paragraph::new_checklist_item(false).with_content(vec![
+    let item = ChecklistItem::new(false).with_content(vec![
         Span::new_text("Hello "),
         bold,
         Span::new_text("!"),
     ]);
-    let checklist = Paragraph::new_checklist().with_entries(vec![vec![item]]);
+    let checklist = Paragraph::new_checklist().with_checklist_items(vec![item]);
     Document::new().with_paragraphs(vec![checklist])
 }
 
@@ -111,12 +122,12 @@ fn document_with_checklist_nested_bold_span() -> Document {
     let mut bold = Span::new_text("");
     bold.style = InlineStyle::Bold;
     bold.children = vec![Span::new_text("World")];
-    let item = Paragraph::new_checklist_item(false).with_content(vec![
+    let item = ChecklistItem::new(false).with_content(vec![
         Span::new_text("Hello "),
         bold,
         Span::new_text("!"),
     ]);
-    let checklist = Paragraph::new_checklist().with_entries(vec![vec![item]]);
+    let checklist = Paragraph::new_checklist().with_checklist_items(vec![item]);
     Document::new().with_paragraphs(vec![checklist])
 }
 
@@ -193,7 +204,7 @@ fn ctrl_p_in_checklist_behaves_like_enter() {
     let document = Document::new().with_paragraphs(vec![checklist]);
     let mut editor = DocumentEditor::new(document);
 
-    let mut pointer = pointer_to_entry_span(0, 0, 0);
+    let mut pointer = pointer_to_checklist_item_span(0, 0);
     pointer.offset = 4;
     assert!(editor.move_to_pointer(&pointer));
 
@@ -202,13 +213,9 @@ fn ctrl_p_in_checklist_behaves_like_enter() {
     let doc = editor.document();
     assert_eq!(doc.paragraphs.len(), 1);
     let checklist = &doc.paragraphs[0];
-    assert_eq!(checklist.entries.len(), 2);
-    assert_eq!(checklist.entries[0].len(), 1);
-    assert_eq!(checklist.entries[0][0].content[0].text, "Task");
-    assert_eq!(
-        checklist.entries[1][0].paragraph_type,
-        ParagraphType::ChecklistItem
-    );
+    assert_eq!(checklist.checklist_items.len(), 2);
+    assert_eq!(checklist.checklist_items[0].content[0].text, "Task");
+    assert_eq!(checklist.checklist_items[1].checked, false);
 }
 
 #[test]
@@ -846,9 +853,9 @@ fn insert_char_before_reveal_end_marker_in_checklist_appends_to_span() {
 
     let doc = editor.document();
     let checklist = &doc.paragraphs[0];
-    assert_eq!(checklist.entries[0][0].content[0].text, "Hello ");
+    assert_eq!(checklist.checklist_items[0].content[0].text, "Hello ");
     assert_eq!(
-        checklist.entries[0][0].content[1].text,
+        checklist.checklist_items[0].content[1].text,
         "World class people"
     );
 }
@@ -874,7 +881,7 @@ fn insert_char_on_reveal_end_marker_in_checklist_appends_to_span() {
 
     let doc = editor.document();
     let checklist = &doc.paragraphs[0];
-    let item = &checklist.entries[0][0];
+    let item = &checklist.checklist_items[0];
     assert_eq!(item.content[0].text, "Hello ");
     assert_eq!(item.content[1].text, "World dear");
 }
@@ -896,7 +903,7 @@ fn insert_char_on_reveal_end_marker_in_checklist_with_nested_bold_span_appends_t
 
     let doc = editor.document();
     let checklist = &doc.paragraphs[0];
-    let item = &checklist.entries[0][0];
+    let item = &checklist.checklist_items[0];
     assert_eq!(item.content[0].text, "Hello ");
     assert_eq!(item.content[1].children[0].text, "World dear");
 }
@@ -1041,12 +1048,12 @@ fn changing_child_with_siblings_only_updates_that_child() {
 
 #[test]
 fn checklist_item_to_text_promotes_parent_list_when_single_item() {
-    let item = Paragraph::new_checklist_item(false).with_content(vec![Span::new_text("Task")]);
-    let checklist = Paragraph::new_checklist().with_entries(vec![vec![item]]);
+    let item = ChecklistItem::new(false).with_content(vec![Span::new_text("Task")]);
+    let checklist = Paragraph::new_checklist().with_checklist_items(vec![item]);
     let document = Document::new().with_paragraphs(vec![checklist]);
 
     let mut editor = DocumentEditor::new(document);
-    let pointer = pointer_to_entry_span(0, 0, 0);
+    let pointer = pointer_to_checklist_item_span(0, 0);
     assert!(editor.move_to_pointer(&pointer));
     assert!(editor.set_paragraph_type(ParagraphType::Text));
 
@@ -1054,23 +1061,20 @@ fn checklist_item_to_text_promotes_parent_list_when_single_item() {
     assert_eq!(doc.paragraphs.len(), 1);
     let paragraph = &doc.paragraphs[0];
     assert_eq!(paragraph.paragraph_type, ParagraphType::Text);
-    assert!(paragraph.entries.is_empty());
+    assert!(paragraph.checklist_items.is_empty());
     assert_eq!(paragraph.content.len(), 1);
     assert_eq!(paragraph.content[0].text, "Task");
 }
 
 #[test]
 fn checklist_item_with_siblings_only_changes_item() {
-    let first =
-        Paragraph::new_checklist_item(false).with_content(vec![Span::new_text("First")]);
-    let second =
-        Paragraph::new_checklist_item(false).with_content(vec![Span::new_text("Second")]);
-    let checklist =
-        Paragraph::new_checklist().with_entries(vec![vec![first], vec![second.clone()]]);
+    let first = ChecklistItem::new(false).with_content(vec![Span::new_text("First")]);
+    let second = ChecklistItem::new(false).with_content(vec![Span::new_text("Second")]);
+    let checklist = Paragraph::new_checklist().with_checklist_items(vec![first, second.clone()]);
     let document = Document::new().with_paragraphs(vec![checklist]);
 
     let mut editor = DocumentEditor::new(document);
-    let pointer = pointer_to_entry_span(0, 0, 0);
+    let pointer = pointer_to_checklist_item_span(0, 0);
     assert!(editor.move_to_pointer(&pointer));
     assert!(editor.set_paragraph_type(ParagraphType::Header1));
 
@@ -1081,18 +1085,18 @@ fn checklist_item_with_siblings_only_changes_item() {
 
     let checklist = &doc.paragraphs[1];
     assert_eq!(checklist.paragraph_type, ParagraphType::Checklist);
-    assert_eq!(checklist.entries.len(), 1);
-    assert_eq!(checklist.entries[0][0].content[0].text, "Second");
+    assert_eq!(checklist.checklist_items.len(), 1);
+    assert_eq!(checklist.checklist_items[0].content[0].text, "Second");
 }
 
 #[test]
 fn checklist_item_state_updates_through_editor() {
-    let item = Paragraph::new_checklist_item(false).with_content(vec![Span::new_text("Task")]);
-    let checklist = Paragraph::new_checklist().with_entries(vec![vec![item]]);
+    let item = ChecklistItem::new(false).with_content(vec![Span::new_text("Task")]);
+    let checklist = Paragraph::new_checklist().with_checklist_items(vec![item]);
     let document = Document::new().with_paragraphs(vec![checklist]);
 
     let mut editor = DocumentEditor::new(document);
-    let pointer = pointer_to_entry_span(0, 0, 0);
+    let pointer = pointer_to_checklist_item_span(0, 0);
     assert!(editor.move_to_pointer(&pointer));
     assert_eq!(editor.current_checklist_item_state(), Some(false));
 
@@ -1222,7 +1226,7 @@ fn converting_to_checklist_merges_with_previous_only() {
     assert_eq!(doc.paragraphs.len(), 1);
     let list = &doc.paragraphs[0];
     assert_eq!(list.paragraph_type, ParagraphType::Checklist);
-    assert_eq!(list.entries.len(), 2);
-    assert_eq!(list.entries[0][0].content[0].text, "Item 1");
-    assert_eq!(list.entries[1][0].content[0].text, "Item 2");
+    assert_eq!(list.checklist_items.len(), 2);
+    assert_eq!(list.checklist_items[0].content[0].text, "Item 1");
+    assert_eq!(list.checklist_items[1].content[0].text, "Item 2");
 }

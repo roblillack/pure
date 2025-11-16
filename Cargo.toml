@@ -7,6 +7,6 @@ edition = "2024"
 anyhow = "1.0"
 crossterm = "0.29.0"
 ratatui = "0.29"
-#tdoc = { path = "../tdoc" }
-tdoc = "0.7.3"
+tdoc = { path = "../tdoc" }
+#tdoc = "0.7.3"
 unicode-width = "0.2.0"

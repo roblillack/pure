@@ -176,7 +176,6 @@ impl<'a> Renderer<'a> {
             ParagraphType::UnorderedList => self.render_unordered_list(paragraph, prefix),
             ParagraphType::OrderedList => self.render_ordered_list(paragraph, prefix),
             ParagraphType::Checklist => self.render_checklist(paragraph, prefix),
-            ParagraphType::ChecklistItem => self.render_checklist_item(paragraph, prefix),
         }
     }
 
@@ -313,39 +312,51 @@ impl<'a> Renderer<'a> {
     }
 
     fn render_checklist(&mut self, paragraph: &Paragraph, prefix: &str) {
-        for (idx, entry) in paragraph.entries.iter().enumerate() {
+        for (idx, item) in paragraph.checklist_items.iter().enumerate() {
             if idx > 0 {
                 self.push_plain_line("", false);
             }
-            if let Some(item) = entry
-                .iter()
-                .find(|p| p.paragraph_type == ParagraphType::ChecklistItem)
-            {
-                self.render_checklist_item(item, prefix);
-                for rest in entry
-                    .iter()
-                    .filter(|p| p.paragraph_type != ParagraphType::ChecklistItem)
-                {
-                    self.render_paragraph(rest, prefix);
-                }
-            } else if let Some(first) = entry.first() {
-                self.render_text_paragraph(first, prefix, prefix);
-                for rest in entry.iter().skip(1) {
-                    self.render_paragraph(rest, prefix);
-                }
-            }
+            self.render_checklist_item_struct(item, prefix);
         }
     }
 
-    fn render_checklist_item(&mut self, paragraph: &Paragraph, prefix: &str) {
-        let marker = if paragraph.checklist_item_checked.unwrap_or(false) {
-            "[✓] "
-        } else {
-            "[ ] "
-        };
+    fn render_checklist_item_struct(&mut self, item: &tdoc::ChecklistItem, prefix: &str) {
+        let marker = if item.checked { "[✓] " } else { "[ ] " };
         let first_prefix = format!("{}{}", prefix, marker);
         let continuation_prefix = format!("{}{}", prefix, " ".repeat(marker.chars().count()));
-        self.render_text_paragraph(paragraph, &first_prefix, &continuation_prefix);
+
+        let mut fragments = Vec::new();
+        let ctx = FragmentContext {
+            sentinels: self.sentinels,
+            marker_map: &self.marker_map,
+            reveal_tags: &self.reveal_tags,
+        };
+        for span in &item.content {
+            collect_fragments(span, Style::default(), &ctx, &mut fragments);
+        }
+        let fragments = trim_layout_fragments(fragments);
+        let lines = wrap_fragments(
+            &fragments,
+            &first_prefix,
+            &continuation_prefix,
+            self.wrap_limit,
+        );
+        self.consume_lines(lines);
+
+        // Render nested checklist items
+        for child in &item.children {
+            let child_prefix = format!("{}    ", prefix);
+            self.render_checklist_item_struct(child, &child_prefix);
+        }
+    }
+
+    // Deprecated: render_checklist_item for old Paragraph-based checklist API
+    // This function is no longer used since checklists now use ChecklistItem structs
+    #[allow(dead_code)]
+    fn render_checklist_item(&mut self, paragraph: &Paragraph, prefix: &str) {
+        // This is a deprecated function kept for compatibility
+        // Checklists now use render_checklist_item_struct
+        self.render_text_paragraph(paragraph, prefix, prefix);
     }
 
     fn render_list_entry(
@@ -364,9 +375,6 @@ impl<'a> Renderer<'a> {
             match first.paragraph_type {
                 ParagraphType::Text => {
                     self.render_text_paragraph(first, first_prefix, continuation_prefix);
-                }
-                ParagraphType::ChecklistItem => {
-                    self.render_checklist_item(first, first_prefix);
                 }
                 _ => {
                     self.push_plain_line(first_prefix, false);
