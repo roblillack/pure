@@ -19,6 +19,42 @@ fn insert_text(editor: &mut DocumentEditor, text: &str) {
     }
 }
 
+fn document_with_bold_span() -> Document {
+    let mut bold = Span::new_text("World");
+    bold.style = InlineStyle::Bold;
+    let paragraph = Paragraph::new_text().with_content(vec![
+        Span::new_text("Hello "),
+        bold,
+        Span::new_text("!"),
+    ]);
+    Document::new().with_paragraphs(vec![paragraph])
+}
+
+fn document_with_checklist_bold_span() -> Document {
+    let mut bold = Span::new_text("World");
+    bold.style = InlineStyle::Bold;
+    let item = ChecklistItem::new(false).with_content(vec![
+        Span::new_text("Hello "),
+        bold,
+        Span::new_text("!"),
+    ]);
+    let checklist = Paragraph::new_checklist().with_checklist_items(vec![item]);
+    Document::new().with_paragraphs(vec![checklist])
+}
+
+fn document_with_checklist_nested_bold_span() -> Document {
+    let mut bold = Span::new_text("");
+    bold.style = InlineStyle::Bold;
+    bold.children = vec![Span::new_text("World")];
+    let item = ChecklistItem::new(false).with_content(vec![
+        Span::new_text("Hello "),
+        bold,
+        Span::new_text("!"),
+    ]);
+    let checklist = Paragraph::new_checklist().with_checklist_items(vec![item]);
+    Document::new().with_paragraphs(vec![checklist])
+}
+
 #[test]
 fn delete_word_backward_removes_previous_word() {
     let document = Document::new().with_paragraphs(vec![text_paragraph("foo bar baz")]);
