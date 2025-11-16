@@ -1067,6 +1067,10 @@ fn ensure_document_initialized(document: &mut Document) {
     }
 }
 
+fn paragraph_from_checklist_item(item: ChecklistItem) -> Paragraph {
+    Paragraph::new_text().with_content(item.content)
+}
+
 fn select_text_in_paragraph(
     segments: &[SegmentRef],
     paragraph_path: &ParagraphPath,
@@ -1102,11 +1106,15 @@ fn is_single_paragraph_entry(document: &Document, path: &ParagraphPath) -> bool 
                 Some(paragraph) => paragraph,
                 None => return false,
             };
-            parent
-                .entries
-                .get(*entry_index)
-                .map(|entry| entry.len() == 1)
-                .unwrap_or(false)
+            match parent {
+                Paragraph::OrderedList { entries } | Paragraph::UnorderedList { entries } => {
+                    entries
+                        .get(*entry_index)
+                        .map(|entry| entry.len() == 1)
+                        .unwrap_or(false)
+                }
+                _ => false,
+            }
         }
         PathStep::ChecklistItem { .. } => {
             // Checklist items are always treated as single entries
@@ -1142,49 +1150,50 @@ fn determine_parent_scope(document: &Document, path: &ParagraphPath) -> Option<P
     let parent = paragraph_ref(document, &parent_path)?;
 
     match last {
-        PathStep::Child(idx) => {
-            if parent.children.len() == 1 && idx < &parent.children.len() {
+        PathStep::Child(idx) => match parent {
+            Paragraph::Quote { children } if children.len() == 1 && *idx < children.len() => {
                 Some(ParentScope {
                     parent_path,
                     relation: ParentRelation::Child(*idx),
                 })
-            } else {
-                None
             }
-        }
+            _ => None,
+        },
         PathStep::Entry {
             entry_index,
             paragraph_index,
-        } => {
-            if *entry_index >= parent.entries.len() {
-                return None;
+        } => match parent {
+            Paragraph::OrderedList { entries } | Paragraph::UnorderedList { entries }
+                if *entry_index < entries.len() =>
+            {
+                let entry = entries.get(*entry_index)?;
+                if entries.len() == 1 && entry.len() == 1 && *paragraph_index < entry.len() {
+                    Some(ParentScope {
+                        parent_path,
+                        relation: ParentRelation::Entry {
+                            entry_index: *entry_index,
+                            paragraph_index: *paragraph_index,
+                        },
+                    })
+                } else {
+                    None
+                }
             }
-            let entry = parent.entries.get(*entry_index)?;
-            if parent.entries.len() == 1 && entry.len() == 1 && *paragraph_index < entry.len() {
-                Some(ParentScope {
-                    parent_path,
-                    relation: ParentRelation::Entry {
-                        entry_index: *entry_index,
-                        paragraph_index: *paragraph_index,
-                    },
-                })
-            } else {
-                None
-            }
-        }
+            _ => None,
+        },
         PathStep::ChecklistItem { indices } => {
-            // For checklists with a single item, allow promoting that item
             let item_index = *indices.first()?;
-            if parent.checklist_items.len() == 1 && item_index < parent.checklist_items.len() {
-                Some(ParentScope {
-                    parent_path,
-                    relation: ParentRelation::Entry {
-                        entry_index: item_index,
-                        paragraph_index: 0,
-                    },
-                })
-            } else {
-                None
+            match parent {
+                Paragraph::Checklist { items } if items.len() == 1 && item_index < items.len() => {
+                    Some(ParentScope {
+                        parent_path,
+                        relation: ParentRelation::Entry {
+                            entry_index: item_index,
+                            paragraph_index: 0,
+                        },
+                    })
+                }
+                _ => None,
             }
         }
         PathStep::Root(_) => None,
@@ -1199,47 +1208,51 @@ fn promote_single_child_into_parent(document: &mut Document, scope: &ParentScope
     let is_checklist = parent.paragraph_type == ParagraphType::Checklist;
 
     let child = match scope.relation {
-        ParentRelation::Child(idx) => {
-            if idx >= parent.children.len() {
-                return false;
+        ParentRelation::Child(idx) => match parent {
+            Paragraph::Quote { children } => {
+                if idx >= children.len() {
+                    return false;
+                }
+                children.remove(idx)
             }
-            parent.children.remove(idx)
-        }
+            _ => return false,
+        },
         ParentRelation::Entry {
             entry_index,
             paragraph_index,
         } => {
             if is_checklist {
-                // For checklists, extract the item and convert it to a paragraph
-                if entry_index >= parent.checklist_items.len() {
+                let Paragraph::Checklist { items } = parent else {
+                    return false;
+                };
+                if entry_index >= items.len() {
                     return false;
                 }
-                let item = parent.checklist_items.remove(entry_index);
-                // Create a new paragraph from the checklist item's content
-                let mut para = Paragraph::new_text();
-                para.content = item.content;
-                para
+                let item = items.remove(entry_index);
+                paragraph_from_checklist_item(item)
             } else {
-                if entry_index >= parent.entries.len() {
-                    return false;
+                match parent {
+                    Paragraph::OrderedList { entries } | Paragraph::UnorderedList { entries } => {
+                        if entry_index >= entries.len() {
+                            return false;
+                        }
+                        let mut entry = entries.remove(entry_index);
+                        if paragraph_index >= entry.len() {
+                            return false;
+                        }
+                        let extracted = entry.remove(paragraph_index);
+                        if !entry.is_empty() {
+                            entries.insert(entry_index, entry);
+                        }
+                        extracted
+                    }
+                    _ => return false,
                 }
-                let mut entry = parent.entries.remove(entry_index);
-                if paragraph_index >= entry.len() {
-                    return false;
-                }
-                let child = entry.remove(paragraph_index);
-                if !entry.is_empty() {
-                    parent.entries.insert(entry_index, entry);
-                }
-                child
             }
         }
     };
 
-    parent.content = child.content;
-    parent.children = child.children;
-    parent.entries = child.entries;
-    parent.checklist_items = child.checklist_items;
+    *parent = child;
     true
 }
 
