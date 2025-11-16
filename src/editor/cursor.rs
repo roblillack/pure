@@ -1,3 +1,8 @@
+use super::content::{
+    next_word_boundary,
+    previous_word_boundary,
+    skip_leading_whitespace,
+};
 use super::inspect::{
     breadcrumbs_for_pointer,
     checklist_item_ref,
@@ -9,9 +14,6 @@ use super::inspect::{
     span_ref_from_item,
 };
 use super::{
-    next_word_boundary,
-    previous_word_boundary,
-    skip_leading_whitespace,
     select_text_in_paragraph,
     CursorPointer,
     DocumentEditor,

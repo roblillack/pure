@@ -3,8 +3,19 @@ const MARKER_REVEAL_PREFIX: &str = "1337;R";
 use std::{cmp::Ordering, mem};
 use tdoc::{ChecklistItem, Document, InlineStyle, Paragraph, ParagraphType, Span};
 
+use content::{
+    apply_style_to_span_path,
+    checklist_item_is_empty,
+    insert_char_at,
+    prune_and_merge_spans,
+    remove_char_at,
+    span_is_empty as content_span_is_empty,
+    split_spans,
+};
+
 mod inspect;
 mod cursor;
+mod content;
 
 use inspect::{checklist_item_ref, paragraph_ref};
 
@@ -801,7 +812,7 @@ impl DocumentEditor {
         removed
     }
 
-fn remove_reveal_tag_segment(&mut self, segment_index: usize) -> Option<CursorPointer> {
+    fn remove_reveal_tag_segment(&mut self, segment_index: usize) -> Option<CursorPointer> {
         let segment = self.segments.get(segment_index)?.clone();
         let style = match segment.kind {
             SegmentKind::RevealStart(style) | SegmentKind::RevealEnd(style) => style,
@@ -820,7 +831,7 @@ fn remove_reveal_tag_segment(&mut self, segment_index: usize) -> Option<CursorPo
         span.style = InlineStyle::None;
         span.link_target = None;
         let span_len = span.text.chars().count();
-        prune_and_merge_spans(&mut paragraph.content);
+        prune_and_merge_spans(paragraph.content_mut());
         let offset = match segment.kind {
             SegmentKind::RevealStart(_) => 0,
             SegmentKind::RevealEnd(_) => span_len,
@@ -937,7 +948,6 @@ fn remove_reveal_tag_segment(&mut self, segment_index: usize) -> Option<CursorPo
 
         true
     }
-}
 
     pub fn apply_inline_style_to_selection(
         &mut self,
@@ -1014,7 +1024,7 @@ fn remove_reveal_tag_segment(&mut self, segment_index: usize) -> Option<CursorPo
         if changed {
             for path in touched_paths {
                 if let Some(paragraph) = paragraph_mut(&mut self.document, &path) {
-                    prune_and_merge_spans(&mut paragraph.content);
+                    prune_and_merge_spans(paragraph.content_mut());
                 }
             }
             self.rebuild_segments();
@@ -1047,6 +1057,7 @@ fn remove_reveal_tag_segment(&mut self, segment_index: usize) -> Option<CursorPo
         let key_b = self.pointer_key(b)?;
         Some(key_a.cmp(&key_b))
     }
+}
 
 fn ensure_document_initialized(document: &mut Document) {
     if document.paragraphs.is_empty() {
@@ -1870,118 +1881,6 @@ fn inline_style_label(style: InlineStyle) -> Option<&'static str> {
     }
 }
 
-fn apply_style_to_span_path(
-    spans: &mut Vec<Span>,
-    path: &[usize],
-    start: usize,
-    end: usize,
-    style: InlineStyle,
-) -> bool {
-    if path.is_empty() {
-        return false;
-    }
-    let idx = path[0];
-    if idx >= spans.len() {
-        return false;
-    }
-    if path.len() == 1 {
-        apply_style_to_leaf_span(spans, idx, start, end, style)
-    } else {
-        let span = &mut spans[idx];
-        apply_style_to_span_path(&mut span.children, &path[1..], start, end, style)
-    }
-}
-
-fn apply_style_to_leaf_span(
-    spans: &mut Vec<Span>,
-    idx: usize,
-    start: usize,
-    end: usize,
-    style: InlineStyle,
-) -> bool {
-    if idx >= spans.len() {
-        return false;
-    }
-    let original = spans[idx].clone();
-    let len = original.text.chars().count();
-    if len == 0 {
-        return false;
-    }
-    let clamped_end = end.min(len);
-    let clamped_start = start.min(clamped_end);
-    if clamped_start >= clamped_end {
-        return false;
-    }
-
-    let (before_end, right_text) = split_text(&original.text, clamped_end);
-    let (left_text, mid_text) = split_text(&before_end, clamped_start);
-
-    if mid_text.is_empty() {
-        return false;
-    }
-
-    let mut replacements = Vec::new();
-
-    if !left_text.is_empty() {
-        let mut left_span = original.clone();
-        left_span.text = left_text;
-        left_span.children.clear();
-        replacements.push(left_span);
-    }
-
-    let mut mid_span = original.clone();
-    mid_span.text = mid_text;
-    mid_span.children.clear();
-    mid_span.style = style;
-    if mid_span.style != InlineStyle::Link {
-        mid_span.link_target = None;
-    }
-    replacements.push(mid_span);
-
-    if !right_text.is_empty() {
-        let mut right_span = original.clone();
-        right_span.text = right_text;
-        right_span.children.clear();
-        replacements.push(right_span);
-    }
-
-    spans.remove(idx);
-    for (offset, span) in replacements.into_iter().enumerate() {
-        spans.insert(idx + offset, span);
-    }
-
-    true
-}
-
-fn prune_and_merge_spans(spans: &mut Vec<Span>) {
-    let mut idx = 0;
-    while idx < spans.len() {
-        prune_and_merge_spans(&mut spans[idx].children);
-        if spans[idx].text.is_empty() && spans[idx].children.is_empty() {
-            spans.remove(idx);
-        } else {
-            idx += 1;
-        }
-    }
-
-    let mut i = 0;
-    while i + 1 < spans.len() {
-        if can_merge_spans(&spans[i], &spans[i + 1]) {
-            let right = spans.remove(i + 1);
-            spans[i].text.push_str(&right.text);
-        } else {
-            i += 1;
-        }
-    }
-}
-
-fn can_merge_spans(left: &Span, right: &Span) -> bool {
-    left.style == right.style
-        && left.link_target == right.link_target
-        && left.children.is_empty()
-        && right.children.is_empty()
-}
-
 fn split_paragraph_break(
     document: &mut Document,
     pointer: &CursorPointer,
@@ -2006,10 +1905,14 @@ fn split_paragraph_break(
             split
         } else {
             let paragraph = paragraph_mut(document, &pointer.paragraph_path)?;
-            let split = split_spans(&mut paragraph.content, &span_indices, pointer.offset);
-            if paragraph.content.is_empty() {
-                paragraph.content.push(Span::new_text(""));
-            }
+            let split = {
+                let spans = paragraph.content_mut();
+                let split = split_spans(spans, &span_indices, pointer.offset);
+                if spans.is_empty() {
+                    spans.push(Span::new_text(""));
+                }
+                split
+            };
             split
         }
     };
@@ -2171,69 +2074,6 @@ fn split_paragraph_break(
         }
         _ => None,
     }
-}
-
-fn split_spans(spans: &mut Vec<Span>, path: &[usize], offset: usize) -> Vec<Span> {
-    if path.is_empty() {
-        return Vec::new();
-    }
-
-    let idx = path[0];
-    if idx >= spans.len() {
-        return Vec::new();
-    }
-
-    let mut trailing = if idx + 1 < spans.len() {
-        spans.split_off(idx + 1)
-    } else {
-        Vec::new()
-    };
-
-    let span = &mut spans[idx];
-    let original_span = span.clone();
-
-    let new_span_opt = if path.len() == 1 {
-        let (left_text, right_text) = split_text(&original_span.text, offset);
-        span.text = left_text;
-        if right_text.is_empty() && original_span.children.is_empty() {
-            None
-        } else {
-            let mut new_span = original_span;
-            new_span.text = right_text;
-            if new_span.is_content_empty() {
-                None
-            } else {
-                Some(new_span)
-            }
-        }
-    } else {
-        let child_tail = split_spans(&mut span.children, &path[1..], offset);
-        if child_tail.is_empty() {
-            None
-        } else {
-            let mut new_span = original_span;
-            new_span.children = child_tail;
-            new_span.text.clear();
-            if new_span.is_content_empty() {
-                None
-            } else {
-                Some(new_span)
-            }
-        }
-    };
-
-    if let Some(new_span) = new_span_opt {
-        trailing.insert(0, new_span);
-    }
-
-    trailing
-}
-
-fn split_text(text: &str, offset: usize) -> (String, String) {
-    let byte_idx = char_to_byte_idx(text, offset);
-    let left = text[..byte_idx].to_string();
-    let right = text[byte_idx..].to_string();
-    (left, right)
 }
 
 fn parent_paragraph_path(path: &ParagraphPath) -> Option<ParagraphPath> {
@@ -2741,7 +2581,7 @@ fn remove_paragraph_by_path(document: &mut Document, path: &ParagraphPath) -> bo
     }
 }
 
-fn paragraph_mut<'a>(
+pub(crate) fn paragraph_mut<'a>(
     document: &'a mut Document,
     path: &ParagraphPath,
 ) -> Option<&'a mut Paragraph> {
@@ -2753,14 +2593,20 @@ fn paragraph_mut<'a>(
     };
     for step in iter {
         paragraph = match step {
-            PathStep::Child(idx) => paragraph.children.get_mut(*idx)?,
+            PathStep::Child(idx) => match paragraph {
+                Paragraph::Quote { children } => children.get_mut(*idx)?,
+                _ => return None,
+            },
             PathStep::Entry {
                 entry_index,
                 paragraph_index,
-            } => {
-                let entry = paragraph.entries.get_mut(*entry_index)?;
-                entry.get_mut(*paragraph_index)?
-            }
+            } => match paragraph {
+                Paragraph::OrderedList { entries } | Paragraph::UnorderedList { entries } => {
+                    let entry = entries.get_mut(*entry_index)?;
+                    entry.get_mut(*paragraph_index)?
+                }
+                _ => return None,
+            },
             PathStep::ChecklistItem { .. } => return None,
             PathStep::Root(_) => return None,
         };
@@ -2768,7 +2614,7 @@ fn paragraph_mut<'a>(
     Some(paragraph)
 }
 
-fn checklist_item_mut<'a>(document: &'a mut Document, path: &ParagraphPath) -> Option<&'a mut ChecklistItem> {
+pub(crate) fn checklist_item_mut<'a>(document: &'a mut Document, path: &ParagraphPath) -> Option<&'a mut ChecklistItem> {
     let steps = path.steps();
     let (checklist_step_idx, checklist_step) = steps
         .iter()
@@ -2781,25 +2627,29 @@ fn checklist_item_mut<'a>(document: &'a mut Document, path: &ParagraphPath) -> O
 
     let paragraph_path = ParagraphPath::from_steps(steps[..checklist_step_idx].to_vec());
     let paragraph = paragraph_mut(document, &paragraph_path)?;
+    let items = match paragraph {
+        Paragraph::Checklist { items } => items,
+        _ => return None,
+    };
 
-    let mut item: &mut ChecklistItem = paragraph.checklist_items.get_mut(*indices.first()?)?;
+    let mut item: &mut ChecklistItem = items.get_mut(*indices.first()?)?;
     for &idx in &indices[1..] {
         item = item.children.get_mut(idx)?;
     }
     Some(item)
 }
 
-fn span_mut<'a>(paragraph: &'a mut Paragraph, path: &SpanPath) -> Option<&'a mut Span> {
+pub(crate) fn span_mut<'a>(paragraph: &'a mut Paragraph, path: &SpanPath) -> Option<&'a mut Span> {
     let mut iter = path.indices().iter();
     let first = iter.next()?;
-    let mut span = paragraph.content.get_mut(*first)?;
+    let mut span = paragraph.content_mut().get_mut(*first)?;
     for idx in iter {
         span = span.children.get_mut(*idx)?;
     }
     Some(span)
 }
 
-fn span_mut_from_item<'a>(item: &'a mut ChecklistItem, path: &SpanPath) -> Option<&'a mut Span> {
+pub(crate) fn span_mut_from_item<'a>(item: &'a mut ChecklistItem, path: &SpanPath) -> Option<&'a mut Span> {
     let mut iter = path.indices().iter();
     let first = iter.next()?;
     let mut span = item.content.get_mut(*first)?;
@@ -2809,178 +2659,35 @@ fn span_mut_from_item<'a>(item: &'a mut ChecklistItem, path: &SpanPath) -> Optio
     Some(span)
 }
 
-fn insert_char_at(
-    document: &mut Document,
-    pointer: &CursorPointer,
-    offset: usize,
-    ch: char,
-) -> bool {
-    if let Some(item) = checklist_item_mut(document, &pointer.paragraph_path) {
-        let Some(span) = span_mut_from_item(item, &pointer.span_path) else {
-            return false;
-        };
-        let char_len = span.text.chars().count();
-        let clamped_offset = offset.min(char_len);
-        let byte_idx = char_to_byte_idx(&span.text, clamped_offset);
-        span.text.insert(byte_idx, ch);
-        return true;
-    }
-
-    let Some(paragraph) = paragraph_mut(document, &pointer.paragraph_path) else {
-        return false;
-    };
-    let Some(span) = span_mut(paragraph, &pointer.span_path) else {
-        return false;
-    };
-    let char_len = span.text.chars().count();
-    let clamped_offset = offset.min(char_len);
-    let byte_idx = char_to_byte_idx(&span.text, clamped_offset);
-    span.text.insert(byte_idx, ch);
-    true
-}
-
-fn remove_char_at(document: &mut Document, pointer: &CursorPointer, offset: usize) -> bool {
-    if let Some(item) = checklist_item_mut(document, &pointer.paragraph_path) {
-        let Some(span) = span_mut_from_item(item, &pointer.span_path) else {
-            return false;
-        };
-        let char_len = span.text.chars().count();
-        if offset >= char_len {
-            return false;
-        }
-        let byte_idx = char_to_byte_idx(&span.text, offset);
-        if let Some(ch) = span.text.chars().nth(offset) {
-            for _ in 0..ch.len_utf8() {
-                span.text.remove(byte_idx);
-            }
-            return true;
-        }
-        return false;
-    }
-
-    let Some(paragraph) = paragraph_mut(document, &pointer.paragraph_path) else {
-        return false;
-    };
-    let Some(span) = span_mut(paragraph, &pointer.span_path) else {
-        return false;
-    };
-    let char_len = span.text.chars().count();
-    if offset >= char_len {
-        return false;
-    }
-    let start = char_to_byte_idx(&span.text, offset);
-    let end = char_to_byte_idx(&span.text, offset + 1);
-    if start >= end || end > span.text.len() {
-        return false;
-    }
-    span.text.drain(start..end);
-    true
-}
-
-fn char_to_byte_idx(text: &str, char_idx: usize) -> usize {
-    if char_idx == 0 {
-        return 0;
-    }
-    let mut count = 0;
-    for (byte_idx, _) in text.char_indices() {
-        if count == char_idx {
-            return byte_idx;
-        }
-        count += 1;
-    }
-    text.len()
-}
-
-fn is_word_char(ch: char) -> bool {
-    ch.is_alphanumeric() || ch == '_'
-}
-
-fn previous_word_boundary(text: &str, offset: usize) -> usize {
-    let chars: Vec<char> = text.chars().collect();
-    let mut idx = offset.min(chars.len());
-    if idx == 0 {
-        return 0;
-    }
-
-    while idx > 0 && chars[idx - 1].is_whitespace() {
-        idx -= 1;
-    }
-    if idx == 0 {
-        return 0;
-    }
-
-    while idx > 0 && is_word_char(chars[idx - 1]) {
-        idx -= 1;
-    }
-    if idx > 0 && !is_word_char(chars[idx - 1]) && !chars[idx - 1].is_whitespace() {
-        while idx > 0 && !is_word_char(chars[idx - 1]) && !chars[idx - 1].is_whitespace() {
-            idx -= 1;
-        }
-    }
-    idx
-}
-
-fn next_word_boundary(text: &str, offset: usize) -> usize {
-    let chars: Vec<char> = text.chars().collect();
-    let len = chars.len();
-    let mut idx = offset.min(len);
-    if idx >= len {
-        return len;
-    }
-
-    if chars[idx].is_whitespace() {
-        while idx < len && chars[idx].is_whitespace() {
-            idx += 1;
-        }
-        return idx;
-    }
-
-    if is_word_char(chars[idx]) {
-        while idx < len && is_word_char(chars[idx]) {
-            idx += 1;
-        }
-        while idx < len && !chars[idx].is_whitespace() && !is_word_char(chars[idx]) {
-            idx += 1;
-        }
-        while idx < len && chars[idx].is_whitespace() {
-            idx += 1;
-        }
-        return idx;
-    }
-
-    while idx < len && !chars[idx].is_whitespace() && !is_word_char(chars[idx]) {
-        idx += 1;
-    }
-    while idx < len && chars[idx].is_whitespace() {
-        idx += 1;
-    }
-    idx
-}
-
-fn skip_leading_whitespace(text: &str) -> usize {
-    let mut count = 0;
-    for ch in text.chars() {
-        if ch.is_whitespace() {
-            count += 1;
-        } else {
-            break;
-        }
-    }
-    count
-}
 
 fn paragraph_is_empty(paragraph: &Paragraph) -> bool {
-    let content_empty = paragraph.content.iter().all(span_is_empty);
-    let children_empty = paragraph.children.iter().all(paragraph_is_empty);
-    let entries_empty = paragraph
-        .entries
-        .iter()
-        .all(|entry| entry.iter().all(paragraph_is_empty));
-    content_empty && children_empty && entries_empty
-}
+    let content_empty = if paragraph.paragraph_type().is_leaf() {
+        paragraph
+            .content()
+            .iter()
+            .all(content_span_is_empty)
+    } else {
+        true
+    };
 
-fn span_is_empty(span: &Span) -> bool {
-    span.text.is_empty() && span.children.iter().all(span_is_empty)
+    let children_empty = match paragraph {
+        Paragraph::Quote { children } => children.iter().all(paragraph_is_empty),
+        _ => true,
+    };
+
+    let entries_empty = match paragraph {
+        Paragraph::OrderedList { entries } | Paragraph::UnorderedList { entries } => entries
+            .iter()
+            .all(|entry| entry.iter().all(paragraph_is_empty)),
+        _ => true,
+    };
+
+    let checklist_empty = match paragraph {
+        Paragraph::Checklist { items } => items.iter().all(checklist_item_is_empty),
+        _ => true,
+    };
+
+    content_empty && children_empty && entries_empty && checklist_empty
 }
 
 #[cfg(test)]
@@ -2990,3 +2697,7 @@ mod editor_tests;
 #[cfg(test)]
 #[path = "cursor_tests.rs"]
 mod cursor_tests;
+
+#[cfg(test)]
+#[path = "content_tests.rs"]
+mod content_tests;
