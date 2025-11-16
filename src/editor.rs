@@ -1,15 +1,12 @@
 const MARKER_POINTER_PREFIX: &str = "1337;M";
 const MARKER_REVEAL_PREFIX: &str = "1337;R";
-use std::{cmp::Ordering, mem};
+use std::cmp::Ordering;
 use tdoc::{ChecklistItem, Document, InlineStyle, Paragraph, ParagraphType, Span};
 
 use content::{
-    checklist_item_is_empty,
     insert_char_at,
     prune_and_merge_spans,
     remove_char_at,
-    span_is_empty as content_span_is_empty,
-    split_spans,
 };
 
 mod inspect;
@@ -20,7 +17,7 @@ mod structure;
 
 pub(crate) use styles::inline_style_label;
 
-use inspect::{checklist_item_ref, paragraph_ref};
+use inspect::{checklist_item_ref, paragraph_ref, span_ref};
 use structure::{
     ensure_document_initialized,
     paragraph_mut,
@@ -29,13 +26,10 @@ use structure::{
     span_mut_from_item,
     paragraph_is_empty,
     is_single_paragraph_entry,
-    ParentScope,
     ParentRelation,
     determine_parent_scope,
     promote_single_child_into_parent,
-    apply_paragraph_type_in_place,
     break_list_entry_for_non_list_target,
-    EntryContext,
     extract_entry_context,
     merge_adjacent_lists,
     is_list_type,
@@ -45,7 +39,6 @@ use structure::{
     update_paragraph_type,
     split_paragraph_break,
     parent_paragraph_path,
-    IndentTarget,
     IndentTargetKind,
     find_indent_target,
     append_paragraph_to_quote,
@@ -294,9 +287,226 @@ impl DocumentEditor {
         selection_start_sentinel: char,
         selection_end_sentinel: char,
     ) -> (Document, Vec<MarkerRef>, Vec<RevealTagRef>, bool) {
-        // TODO: Implement proper clone_with_markers functionality
-        // This is a stub implementation for now
-        (self.document.clone(), Vec::new(), Vec::new(), false)
+        #[derive(Clone)]
+        struct SpanAssembly {
+            paragraph_path: ParagraphPath,
+            span_path: SpanPath,
+            original_text: String,
+            start: Option<String>,
+            text: Option<String>,
+            end: Option<String>,
+        }
+
+        let mut clone = self.document.clone();
+        let mut markers = Vec::new();
+        let mut reveal_tags = Vec::new();
+        let mut inserted_cursor = false;
+
+        let selection_bounds = selection.and_then(|(start_ptr, end_ptr)| {
+            let start_key = self.pointer_key(&start_ptr)?;
+            let end_key = self.pointer_key(&end_ptr)?;
+            if start_key <= end_key {
+                Some((start_key, end_key))
+            } else {
+                Some((end_key, start_key))
+            }
+        });
+
+        let mut assemblies: Vec<SpanAssembly> = Vec::new();
+
+        for (segment_index, segment) in self.segments.iter().enumerate() {
+            let Some(paragraph) = paragraph_ref(&self.document, &segment.paragraph_path) else {
+                continue;
+            };
+            let Some(span) = span_ref(paragraph, &segment.span_path) else {
+                continue;
+            };
+
+            let assembly = if let Some(existing) = assemblies.iter_mut().find(|entry| {
+                entry.paragraph_path == segment.paragraph_path
+                    && entry.span_path == segment.span_path
+            }) {
+                existing
+            } else {
+                assemblies.push(SpanAssembly {
+                    paragraph_path: segment.paragraph_path.clone(),
+                    span_path: segment.span_path.clone(),
+                    original_text: span.text.clone(),
+                    start: None,
+                    text: None,
+                    end: None,
+                });
+                assemblies.last_mut().unwrap()
+            };
+
+            match segment.kind {
+                SegmentKind::Text => {
+                    let original_chars: Vec<char> = assembly.original_text.chars().collect();
+                    let len = original_chars.len();
+                    let mut rebuilt = String::new();
+
+                    for offset in 0..=len {
+                        let id = markers.len();
+                        rebuilt.push_str(&format!("\x1b]{}{}\x1b\\", MARKER_POINTER_PREFIX, id));
+                        markers.push(MarkerRef {
+                            id,
+                            pointer: CursorPointer {
+                                paragraph_path: segment.paragraph_path.clone(),
+                                span_path: segment.span_path.clone(),
+                                offset,
+                                segment_kind: SegmentKind::Text,
+                            },
+                        });
+
+                        if let Some((start_key, end_key)) = selection_bounds {
+                            let current_key = PointerKey {
+                                segment_index,
+                                offset,
+                            };
+                            if current_key == start_key {
+                                rebuilt.push(selection_start_sentinel);
+                            }
+                            if current_key == end_key {
+                                rebuilt.push(selection_end_sentinel);
+                            }
+                        }
+
+                        if segment.matches(&self.cursor) && offset == self.cursor.offset {
+                            rebuilt.push(cursor_sentinel);
+                            inserted_cursor = true;
+                        }
+
+                        if offset < len {
+                            rebuilt.push(original_chars[offset]);
+                        }
+                    }
+
+                    assembly.text = Some(rebuilt);
+                }
+                SegmentKind::RevealStart(style) => {
+                    let len = segment.len.max(1);
+                    let mut rebuilt = String::new();
+                    for offset in 0..=len {
+                        let id = markers.len();
+                        rebuilt.push_str(&format!("\x1b]{}{}\x1b\\", MARKER_POINTER_PREFIX, id));
+                        markers.push(MarkerRef {
+                            id,
+                            pointer: CursorPointer {
+                                paragraph_path: segment.paragraph_path.clone(),
+                                span_path: segment.span_path.clone(),
+                                offset,
+                                segment_kind: SegmentKind::RevealStart(style),
+                            },
+                        });
+
+                        if let Some((start_key, end_key)) = selection_bounds {
+                            let current_key = PointerKey {
+                                segment_index,
+                                offset,
+                            };
+                            if current_key == start_key {
+                                rebuilt.push(selection_start_sentinel);
+                            }
+                            if current_key == end_key {
+                                rebuilt.push(selection_end_sentinel);
+                            }
+                        }
+
+                        if segment.matches(&self.cursor) && offset == self.cursor.offset {
+                            rebuilt.push(cursor_sentinel);
+                            inserted_cursor = true;
+                        }
+
+                        if offset < len {
+                            let tag_id = reveal_tags.len();
+                            reveal_tags.push(RevealTagRef {
+                                id: tag_id,
+                                style,
+                                kind: RevealTagKind::Start,
+                            });
+                            rebuilt.push_str(&format!(
+                                "\x1b]{}{}\x1b\\",
+                                MARKER_REVEAL_PREFIX, tag_id
+                            ));
+                        }
+                    }
+                    assembly.start = Some(rebuilt);
+                }
+                SegmentKind::RevealEnd(style) => {
+                    let len = segment.len.max(1);
+                    let mut rebuilt = String::new();
+                    for offset in 0..=len {
+                        let id = markers.len();
+                        rebuilt.push_str(&format!("\x1b]{}{}\x1b\\", MARKER_POINTER_PREFIX, id));
+                        markers.push(MarkerRef {
+                            id,
+                            pointer: CursorPointer {
+                                paragraph_path: segment.paragraph_path.clone(),
+                                span_path: segment.span_path.clone(),
+                                offset,
+                                segment_kind: SegmentKind::RevealEnd(style),
+                            },
+                        });
+
+                        if let Some((start_key, end_key)) = selection_bounds {
+                            let current_key = PointerKey {
+                                segment_index,
+                                offset,
+                            };
+                            if current_key == start_key {
+                                rebuilt.push(selection_start_sentinel);
+                            }
+                            if current_key == end_key {
+                                rebuilt.push(selection_end_sentinel);
+                            }
+                        }
+
+                        if segment.matches(&self.cursor) && offset == self.cursor.offset {
+                            rebuilt.push(cursor_sentinel);
+                            inserted_cursor = true;
+                        }
+
+                        if offset < len {
+                            let tag_id = reveal_tags.len();
+                            reveal_tags.push(RevealTagRef {
+                                id: tag_id,
+                                style,
+                                kind: RevealTagKind::End,
+                            });
+                            rebuilt.push_str(&format!(
+                                "\x1b]{}{}\x1b\\",
+                                MARKER_REVEAL_PREFIX, tag_id
+                            ));
+                        }
+                    }
+                    assembly.end = Some(rebuilt);
+                }
+            }
+        }
+
+        for assembly in assemblies.into_iter() {
+            let Some(paragraph) = paragraph_mut(&mut clone, &assembly.paragraph_path) else {
+                continue;
+            };
+            let Some(span) = span_mut(paragraph, &assembly.span_path) else {
+                continue;
+            };
+            let mut combined = String::new();
+            if let Some(start) = assembly.start {
+                combined.push_str(&start);
+            }
+            if let Some(text) = assembly.text {
+                combined.push_str(&text);
+            } else {
+                combined.push_str(&assembly.original_text);
+            }
+            if let Some(end) = assembly.end {
+                combined.push_str(&end);
+            }
+            span.text = combined;
+        }
+
+        (clone, markers, reveal_tags, inserted_cursor)
     }
 
     pub fn current_checklist_item_state(&self) -> Option<bool> {

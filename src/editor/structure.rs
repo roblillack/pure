@@ -356,26 +356,64 @@ pub(crate) fn apply_paragraph_type_in_place(paragraph: &mut Paragraph, target: P
             paragraph.content_mut().push(Span::new_text(""));
         }
     } else {
-        // For non-leaf, non-Quote types, just update the type
-        // This preserves existing structure (entries, etc.)
+        // For non-leaf, non-Quote types, convert existing structure
         *paragraph = match target {
-            ParagraphType::OrderedList => Paragraph::OrderedList {
-                entries: match paragraph {
+            ParagraphType::OrderedList => {
+                let entries = match paragraph {
                     Paragraph::OrderedList { entries } | Paragraph::UnorderedList { entries } => mem::take(entries),
-                    _ => Vec::new(),
-                }
+                    Paragraph::Quote { children } => {
+                        // Convert Quote children into list entries
+                        if children.is_empty() {
+                            vec![vec![empty_text_paragraph()]]
+                        } else {
+                            vec![mem::take(children)]
+                        }
+                    },
+                    _ => vec![vec![empty_text_paragraph()]],
+                };
+                Paragraph::OrderedList { entries }
             },
-            ParagraphType::UnorderedList => Paragraph::UnorderedList {
-                entries: match paragraph {
+            ParagraphType::UnorderedList => {
+                let entries = match paragraph {
                     Paragraph::OrderedList { entries } | Paragraph::UnorderedList { entries } => mem::take(entries),
-                    _ => Vec::new(),
-                }
+                    Paragraph::Quote { children } => {
+                        // Convert Quote children into list entries
+                        if children.is_empty() {
+                            vec![vec![empty_text_paragraph()]]
+                        } else {
+                            vec![mem::take(children)]
+                        }
+                    },
+                    _ => vec![vec![empty_text_paragraph()]],
+                };
+                Paragraph::UnorderedList { entries }
             },
-            ParagraphType::Checklist => Paragraph::Checklist {
-                items: match paragraph {
+            ParagraphType::Checklist => {
+                let items = match paragraph {
                     Paragraph::Checklist { items } => mem::take(items),
-                    _ => Vec::new(),
-                }
+                    Paragraph::Quote { children } => {
+                        // Convert Quote children into checklist items
+                        let mut checklist_items = Vec::new();
+                        for child in mem::take(children) {
+                            let content = child.content().to_vec();
+                            let item = ChecklistItem::new(false).with_content(
+                                if content.is_empty() {
+                                    vec![Span::new_text("")]
+                                } else {
+                                    content
+                                }
+                            );
+                            checklist_items.push(item);
+                        }
+                        if checklist_items.is_empty() {
+                            vec![ChecklistItem::new(false).with_content(vec![Span::new_text("")])]
+                        } else {
+                            checklist_items
+                        }
+                    },
+                    _ => vec![ChecklistItem::new(false).with_content(vec![Span::new_text("")])],
+                };
+                Paragraph::Checklist { items }
             },
             _ => Paragraph::new(target),
         };

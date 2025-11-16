@@ -110,11 +110,11 @@ fn ctrl_p_in_unordered_list_creates_sibling_paragraph() {
     let doc = editor.document();
     assert_eq!(doc.paragraphs.len(), 1);
     let list = &doc.paragraphs[0];
-    assert_eq!(list.entries.len(), 1);
-    let entry = &list.entries[0];
+    assert_eq!(list.entries().len(), 1);
+    let entry = &list.entries()[0];
     assert_eq!(entry.len(), 2);
-    assert_eq!(entry[0].content[0].text, "Alpha");
-    assert_eq!(entry[1].content[0].text, " Beta");
+    assert_eq!(entry[0].content()[0].text, "Alpha");
+    assert_eq!(entry[1].content()[0].text, " Beta");
 }
 
 #[test]
@@ -132,9 +132,9 @@ fn ctrl_p_in_checklist_behaves_like_enter() {
     let doc = editor.document();
     assert_eq!(doc.paragraphs.len(), 1);
     let checklist = &doc.paragraphs[0];
-    assert_eq!(checklist.checklist_items.len(), 2);
-    assert_eq!(checklist.checklist_items[0].content[0].text, "Task");
-    assert_eq!(checklist.checklist_items[1].checked, false);
+    assert_eq!(checklist.checklist_items().len(), 2);
+    assert_eq!(checklist.checklist_items()[0].content[0].text, "Task");
+    assert_eq!(checklist.checklist_items()[1].checked, false);
 }
 
 #[test]
@@ -637,7 +637,7 @@ fn clear_inline_style_resets_to_plain() {
     assert!(editor.apply_inline_style_to_selection(&(start, end), InlineStyle::None));
 
     let doc = editor.document();
-    let spans = &doc.paragraphs[0].content;
+    let spans = &doc.paragraphs[0].content();
     assert_eq!(spans.len(), 1);
     assert_eq!(spans[0].text, "styled text");
     assert_eq!(spans[0].style, InlineStyle::None);
@@ -654,8 +654,8 @@ fn top_level_paragraph_type_change_updates_current_paragraph() {
 
     let doc = editor.document();
     assert_eq!(doc.paragraphs.len(), 2);
-    assert_eq!(doc.paragraphs[0].paragraph_type, ParagraphType::Header1);
-    assert_eq!(doc.paragraphs[1].paragraph_type, ParagraphType::Text);
+    assert_eq!(doc.paragraphs[0].paragraph_type(), ParagraphType::Header1);
+    assert_eq!(doc.paragraphs[1].paragraph_type(), ParagraphType::Text);
 }
 
 #[test]
@@ -670,11 +670,11 @@ fn changing_sole_child_promotes_parent_container() {
     let doc = editor.document();
     assert_eq!(doc.paragraphs.len(), 1);
     let paragraph = &doc.paragraphs[0];
-    assert_eq!(paragraph.paragraph_type, ParagraphType::Header2);
-    assert!(paragraph.children.is_empty());
-    assert!(paragraph.entries.is_empty());
-    assert_eq!(paragraph.content.len(), 1);
-    assert_eq!(paragraph.content[0].text, "Nested");
+    assert_eq!(paragraph.paragraph_type(), ParagraphType::Header2);
+    assert!(paragraph.children().is_empty());
+    assert!(paragraph.entries().is_empty());
+    assert_eq!(paragraph.content().len(), 1);
+    assert_eq!(paragraph.content()[0].text, "Nested");
 }
 
 #[test]
@@ -690,10 +690,10 @@ fn changing_child_with_siblings_only_updates_that_child() {
     let doc = editor.document();
     assert_eq!(doc.paragraphs.len(), 1);
     let quote = &doc.paragraphs[0];
-    assert_eq!(quote.paragraph_type, ParagraphType::Quote);
-    assert_eq!(quote.children.len(), 2);
-    assert_eq!(quote.children[0].paragraph_type, ParagraphType::Header3);
-    assert_eq!(quote.children[1].paragraph_type, ParagraphType::Text);
+    assert_eq!(quote.paragraph_type(), ParagraphType::Quote);
+    assert_eq!(quote.children().len(), 2);
+    assert_eq!(quote.children()[0].paragraph_type(), ParagraphType::Header3);
+    assert_eq!(quote.children()[1].paragraph_type(), ParagraphType::Text);
 }
 
 #[test]
@@ -710,10 +710,10 @@ fn checklist_item_to_text_promotes_parent_list_when_single_item() {
     let doc = editor.document();
     assert_eq!(doc.paragraphs.len(), 1);
     let paragraph = &doc.paragraphs[0];
-    assert_eq!(paragraph.paragraph_type, ParagraphType::Text);
-    assert!(paragraph.checklist_items.is_empty());
-    assert_eq!(paragraph.content.len(), 1);
-    assert_eq!(paragraph.content[0].text, "Task");
+    assert_eq!(paragraph.paragraph_type(), ParagraphType::Text);
+    assert!(paragraph.checklist_items().is_empty());
+    assert_eq!(paragraph.content().len(), 1);
+    assert_eq!(paragraph.content()[0].text, "Task");
 }
 
 #[test]
@@ -730,13 +730,13 @@ fn checklist_item_with_siblings_only_changes_item() {
 
     let doc = editor.document();
     assert_eq!(doc.paragraphs.len(), 2);
-    assert_eq!(doc.paragraphs[0].paragraph_type, ParagraphType::Header1);
-    assert_eq!(doc.paragraphs[0].content[0].text, "First");
+    assert_eq!(doc.paragraphs[0].paragraph_type(), ParagraphType::Header1);
+    assert_eq!(doc.paragraphs[0].content()[0].text, "First");
 
     let checklist = &doc.paragraphs[1];
-    assert_eq!(checklist.paragraph_type, ParagraphType::Checklist);
-    assert_eq!(checklist.checklist_items.len(), 1);
-    assert_eq!(checklist.checklist_items[0].content[0].text, "Second");
+    assert_eq!(checklist.paragraph_type(), ParagraphType::Checklist);
+    assert_eq!(checklist.checklist_items().len(), 1);
+    assert_eq!(checklist.checklist_items()[0].content[0].text, "Second");
 }
 
 #[test]
@@ -777,21 +777,21 @@ fn unordered_list_item_conversion_splits_list() {
     let doc = editor.document();
     assert_eq!(doc.paragraphs.len(), 3);
     assert_eq!(
-        doc.paragraphs[0].paragraph_type,
+        doc.paragraphs[0].paragraph_type(),
         ParagraphType::UnorderedList
     );
-    assert_eq!(doc.paragraphs[0].entries.len(), 1);
-    assert_eq!(doc.paragraphs[0].entries[0][0].content[0].text, "First");
+    assert_eq!(doc.paragraphs[0].entries().len(), 1);
+    assert_eq!(doc.paragraphs[0].entries()[0][0].content()[0].text, "First");
 
-    assert_eq!(doc.paragraphs[1].paragraph_type, ParagraphType::Header2);
-    assert_eq!(doc.paragraphs[1].content[0].text, "Second");
+    assert_eq!(doc.paragraphs[1].paragraph_type(), ParagraphType::Header2);
+    assert_eq!(doc.paragraphs[1].content()[0].text, "Second");
 
     assert_eq!(
-        doc.paragraphs[2].paragraph_type,
+        doc.paragraphs[2].paragraph_type(),
         ParagraphType::UnorderedList
     );
-    assert_eq!(doc.paragraphs[2].entries.len(), 1);
-    assert_eq!(doc.paragraphs[2].entries[0][0].content[0].text, "Third");
+    assert_eq!(doc.paragraphs[2].entries().len(), 1);
+    assert_eq!(doc.paragraphs[2].entries()[0][0].content()[0].text, "Third");
 }
 
 #[test]
@@ -811,16 +811,16 @@ fn nested_list_item_conversion_inside_quote() {
     let doc = editor.document();
     assert_eq!(doc.paragraphs.len(), 1);
     let quote = &doc.paragraphs[0];
-    assert_eq!(quote.children.len(), 2);
+    assert_eq!(quote.children().len(), 2);
     assert_eq!(
-        quote.children[0].paragraph_type,
+        quote.children()[0].paragraph_type(),
         ParagraphType::UnorderedList
     );
-    assert_eq!(quote.children[0].entries.len(), 1);
-    assert_eq!(quote.children[0].entries[0][0].content[0].text, "Alpha");
+    assert_eq!(quote.children()[0].entries().len(), 1);
+    assert_eq!(quote.children()[0].entries()[0][0].content()[0].text, "Alpha");
 
-    assert_eq!(quote.children[1].paragraph_type, ParagraphType::Text);
-    assert_eq!(quote.children[1].content[0].text, "Beta");
+    assert_eq!(quote.children()[1].paragraph_type(), ParagraphType::Text);
+    assert_eq!(quote.children()[1].content()[0].text, "Beta");
 }
 
 #[test]
@@ -838,11 +838,11 @@ fn converting_between_lists_merges_all_entries() {
     let doc = editor.document();
     assert_eq!(doc.paragraphs.len(), 1);
     let list = &doc.paragraphs[0];
-    assert_eq!(list.paragraph_type, ParagraphType::UnorderedList);
-    assert_eq!(list.entries.len(), 3);
-    assert_eq!(list.entries[0][0].content[0].text, "One");
-    assert_eq!(list.entries[1][0].content[0].text, "Two");
-    assert_eq!(list.entries[2][0].content[0].text, "Three");
+    assert_eq!(list.paragraph_type(), ParagraphType::UnorderedList);
+    assert_eq!(list.entries().len(), 3);
+    assert_eq!(list.entries()[0][0].content()[0].text, "One");
+    assert_eq!(list.entries()[1][0].content()[0].text, "Two");
+    assert_eq!(list.entries()[2][0].content()[0].text, "Three");
 }
 
 #[test]
@@ -857,10 +857,10 @@ fn converting_before_list_merges_forward_only() {
     let doc = editor.document();
     assert_eq!(doc.paragraphs.len(), 1);
     let list = &doc.paragraphs[0];
-    assert_eq!(list.paragraph_type, ParagraphType::OrderedList);
-    assert_eq!(list.entries.len(), 2);
-    assert_eq!(list.entries[0][0].content[0].text, "Start");
-    assert_eq!(list.entries[1][0].content[0].text, "Next");
+    assert_eq!(list.paragraph_type(), ParagraphType::OrderedList);
+    assert_eq!(list.entries().len(), 2);
+    assert_eq!(list.entries()[0][0].content()[0].text, "Start");
+    assert_eq!(list.entries()[1][0].content()[0].text, "Next");
 }
 
 #[test]
@@ -875,8 +875,8 @@ fn converting_to_checklist_merges_with_previous_only() {
     let doc = editor.document();
     assert_eq!(doc.paragraphs.len(), 1);
     let list = &doc.paragraphs[0];
-    assert_eq!(list.paragraph_type, ParagraphType::Checklist);
-    assert_eq!(list.checklist_items.len(), 2);
-    assert_eq!(list.checklist_items[0].content[0].text, "Item 1");
-    assert_eq!(list.checklist_items[1].content[0].text, "Item 2");
+    assert_eq!(list.paragraph_type(), ParagraphType::Checklist);
+    assert_eq!(list.checklist_items().len(), 2);
+    assert_eq!(list.checklist_items()[0].content[0].text, "Item 1");
+    assert_eq!(list.checklist_items()[1].content[0].text, "Item 2");
 }
