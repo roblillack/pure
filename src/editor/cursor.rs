@@ -571,6 +571,10 @@ impl DocumentEditor {
         if segment.kind != SegmentKind::Text {
             return None;
         }
+        if let Some(item) = checklist_item_ref(&self.document, &self.cursor.paragraph_path) {
+            let span = span_ref_from_item(item, &self.cursor.span_path)?;
+            return Some(span.text.as_str());
+        }
         let paragraph = paragraph_ref(&self.document, &self.cursor.paragraph_path)?;
         let span = span_ref(paragraph, &self.cursor.span_path)?;
         Some(span.text.as_str())
@@ -579,6 +583,10 @@ impl DocumentEditor {
     pub(crate) fn segment_text(&self, segment: &SegmentRef) -> Option<&str> {
         if segment.kind != SegmentKind::Text {
             return None;
+        }
+        if let Some(item) = checklist_item_ref(&self.document, &segment.paragraph_path) {
+            let span = span_ref_from_item(item, &segment.span_path)?;
+            return Some(span.text.as_str());
         }
         let paragraph = paragraph_ref(&self.document, &segment.paragraph_path)?;
         let span = span_ref(paragraph, &segment.span_path)?;

@@ -1507,6 +1507,34 @@ mod tests {
     }
 
     #[test]
+    fn cursor_is_rendered_inside_checklist_items() {
+        let checklist = Paragraph::new_checklist().with_checklist_items(vec![
+            tdoc::ChecklistItem::new(false).with_content(vec![DocSpan::new_text("Task")]),
+        ]);
+        let document = Document::new().with_paragraphs(vec![checklist]);
+        let mut editor = DocumentEditor::new(document);
+        editor.ensure_cursor_selectable();
+
+        let (doc_with_markers, markers, reveal_tags, inserted_cursor) = editor.clone_with_markers(
+            SENTINELS.cursor,
+            None,
+            SENTINELS.selection_start,
+            SENTINELS.selection_end,
+        );
+        assert!(
+            inserted_cursor,
+            "cursor sentinel should be inserted when pointing at checklist content"
+        );
+
+        let rendered =
+            render_document(&doc_with_markers, 120, 0, &markers, &reveal_tags, SENTINELS);
+        assert!(
+            rendered.cursor.is_some(),
+            "expected cursor to be rendered for checklist content"
+        );
+    }
+
+    #[test]
     fn cursor_metrics_ignore_layout_indentation() {
         let input = format!(
             r#"

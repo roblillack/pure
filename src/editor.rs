@@ -17,7 +17,7 @@ mod structure;
 
 pub(crate) use styles::inline_style_label;
 
-use inspect::{checklist_item_ref, paragraph_ref, span_ref};
+use inspect::{checklist_item_ref, paragraph_ref, span_ref, span_ref_from_item};
 use structure::{
     ensure_document_initialized,
     paragraph_mut,
@@ -295,6 +295,7 @@ impl DocumentEditor {
             start: Option<String>,
             text: Option<String>,
             end: Option<String>,
+            from_checklist: bool,
         }
 
         let mut clone = self.document.clone();
@@ -315,27 +316,42 @@ impl DocumentEditor {
         let mut assemblies: Vec<SpanAssembly> = Vec::new();
 
         for (segment_index, segment) in self.segments.iter().enumerate() {
-            let Some(paragraph) = paragraph_ref(&self.document, &segment.paragraph_path) else {
-                continue;
-            };
-            let Some(span) = span_ref(paragraph, &segment.span_path) else {
-                continue;
-            };
-
             let assembly = if let Some(existing) = assemblies.iter_mut().find(|entry| {
                 entry.paragraph_path == segment.paragraph_path
                     && entry.span_path == segment.span_path
             }) {
                 existing
             } else {
-                assemblies.push(SpanAssembly {
-                    paragraph_path: segment.paragraph_path.clone(),
-                    span_path: segment.span_path.clone(),
-                    original_text: span.text.clone(),
-                    start: None,
-                    text: None,
-                    end: None,
-                });
+                if let Some(item) = checklist_item_ref(&self.document, &segment.paragraph_path) {
+                    let Some(span) = span_ref_from_item(item, &segment.span_path) else {
+                        continue;
+                    };
+                    assemblies.push(SpanAssembly {
+                        paragraph_path: segment.paragraph_path.clone(),
+                        span_path: segment.span_path.clone(),
+                        original_text: span.text.clone(),
+                        start: None,
+                        text: None,
+                        end: None,
+                        from_checklist: true,
+                    });
+                } else {
+                    let Some(paragraph) = paragraph_ref(&self.document, &segment.paragraph_path) else {
+                        continue;
+                    };
+                    let Some(span) = span_ref(paragraph, &segment.span_path) else {
+                        continue;
+                    };
+                    assemblies.push(SpanAssembly {
+                        paragraph_path: segment.paragraph_path.clone(),
+                        span_path: segment.span_path.clone(),
+                        original_text: span.text.clone(),
+                        start: None,
+                        text: None,
+                        end: None,
+                        from_checklist: false,
+                    });
+                }
                 assemblies.last_mut().unwrap()
             };
 
@@ -485,12 +501,6 @@ impl DocumentEditor {
         }
 
         for assembly in assemblies.into_iter() {
-            let Some(paragraph) = paragraph_mut(&mut clone, &assembly.paragraph_path) else {
-                continue;
-            };
-            let Some(span) = span_mut(paragraph, &assembly.span_path) else {
-                continue;
-            };
             let mut combined = String::new();
             if let Some(start) = assembly.start {
                 combined.push_str(&start);
@@ -503,7 +513,23 @@ impl DocumentEditor {
             if let Some(end) = assembly.end {
                 combined.push_str(&end);
             }
-            span.text = combined;
+            if assembly.from_checklist {
+                let Some(item) = checklist_item_mut(&mut clone, &assembly.paragraph_path) else {
+                    continue;
+                };
+                let Some(span) = span_mut_from_item(item, &assembly.span_path) else {
+                    continue;
+                };
+                span.text = combined;
+            } else {
+                let Some(paragraph) = paragraph_mut(&mut clone, &assembly.paragraph_path) else {
+                    continue;
+                };
+                let Some(span) = span_mut(paragraph, &assembly.span_path) else {
+                    continue;
+                };
+                span.text = combined;
+            }
         }
 
         (clone, markers, reveal_tags, inserted_cursor)
