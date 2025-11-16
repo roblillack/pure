@@ -166,7 +166,7 @@ impl<'a> Renderer<'a> {
     }
 
     fn render_paragraph(&mut self, paragraph: &Paragraph, prefix: &str) {
-        match paragraph.paragraph_type {
+        match paragraph.paragraph_type() {
             ParagraphType::Text => self.render_text_paragraph(paragraph, prefix, prefix),
             ParagraphType::Header1 => self.render_header(paragraph, prefix, HeaderLevel::One),
             ParagraphType::Header2 => self.render_header(paragraph, prefix, HeaderLevel::Two),
@@ -191,7 +191,7 @@ impl<'a> Renderer<'a> {
             marker_map: &self.marker_map,
             reveal_tags: &self.reveal_tags,
         };
-        for span in &paragraph.content {
+        for span in paragraph.content() {
             collect_fragments(span, Style::default(), &ctx, &mut fragments);
         }
         let fragments = trim_layout_fragments(fragments);
@@ -211,7 +211,7 @@ impl<'a> Renderer<'a> {
             marker_map: &self.marker_map,
             reveal_tags: &self.reveal_tags,
         };
-        for span in &paragraph.content {
+        for span in paragraph.content() {
             collect_fragments(span, Style::default(), &ctx, &mut fragments);
         }
         let fragments = trim_layout_fragments(fragments);
@@ -259,7 +259,7 @@ impl<'a> Renderer<'a> {
             marker_map: &self.marker_map,
             reveal_tags: &self.reveal_tags,
         };
-        for span in &paragraph.content {
+        for span in paragraph.content() {
             collect_fragments(span, Style::default(), &ctx, &mut fragments);
         }
         let lines = wrap_fragments(&fragments, prefix, prefix, usize::MAX / 4);
@@ -270,11 +270,11 @@ impl<'a> Renderer<'a> {
 
     fn render_quote(&mut self, paragraph: &Paragraph, prefix: &str) {
         let quote_prefix = format!("{}| ", prefix);
-        if !paragraph.content.is_empty() {
+        if !paragraph.content().is_empty() {
             self.render_text_paragraph(paragraph, &quote_prefix, &quote_prefix);
         }
-        for (idx, child) in paragraph.children.iter().enumerate() {
-            if idx > 0 || !paragraph.content.is_empty() {
+        for (idx, child) in paragraph.children().iter().enumerate() {
+            if idx > 0 || !paragraph.content().is_empty() {
                 self.push_plain_line(&quote_prefix, false);
             }
             self.render_paragraph(child, &quote_prefix);
@@ -282,7 +282,7 @@ impl<'a> Renderer<'a> {
     }
 
     fn render_unordered_list(&mut self, paragraph: &Paragraph, prefix: &str) {
-        for (idx, entry) in paragraph.entries.iter().enumerate() {
+        for (idx, entry) in paragraph.entries().iter().enumerate() {
             if idx > 0 {
                 self.push_plain_line("", false);
             }
@@ -294,7 +294,7 @@ impl<'a> Renderer<'a> {
     }
 
     fn render_ordered_list(&mut self, paragraph: &Paragraph, prefix: &str) {
-        for (idx, entry) in paragraph.entries.iter().enumerate() {
+        for (idx, entry) in paragraph.entries().iter().enumerate() {
             if idx > 0 {
                 self.push_plain_line("", false);
             }
@@ -312,7 +312,7 @@ impl<'a> Renderer<'a> {
     }
 
     fn render_checklist(&mut self, paragraph: &Paragraph, prefix: &str) {
-        for (idx, item) in paragraph.checklist_items.iter().enumerate() {
+        for (idx, item) in paragraph.checklist_items().iter().enumerate() {
             if idx > 0 {
                 self.push_plain_line("", false);
             }
@@ -372,7 +372,7 @@ impl<'a> Renderer<'a> {
 
         let mut iter = entry.iter();
         if let Some(first) = iter.next() {
-            match first.paragraph_type {
+            match first.paragraph_type() {
                 ParagraphType::Text => {
                     self.render_text_paragraph(first, first_prefix, continuation_prefix);
                 }
@@ -384,7 +384,7 @@ impl<'a> Renderer<'a> {
         }
 
         for rest in iter {
-            if rest.paragraph_type == ParagraphType::Text {
+            if rest.paragraph_type() == ParagraphType::Text {
                 self.push_plain_line("", false);
             }
             self.render_paragraph(rest, continuation_prefix);
