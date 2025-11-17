@@ -5,6 +5,19 @@
 <ul>
   <li><input type="checkbox" checked /> Jumping by word</li>
   <li>
+    <input type="checkbox" /> Checklists: Moving downwards by adding Enter in front should move "checked"
+    state with the item
+  </li>
+  <li><input type="checkbox" /> Performance of moving the cursor</li>
+  <li><input type="checkbox" /> Styling for checklist items</li>
+  <li><input type="checkbox" /> Number child paragraphs of lists</li>
+  <li>
+    <input type="checkbox" /> Separate inline styles from paragraph styles in status bar
+  </li>
+  <li>
+    <input type="checkbox" /> Format line/char in statusbar as "7:34" instead "[7,34]"
+  </li>
+  <li>
     <input type="checkbox" checked /> Delete by word (Ctrl-Backspace, Ctrl-Delete, Ctrl-W)
   </li>
   <li>
