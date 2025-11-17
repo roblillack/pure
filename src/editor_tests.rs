@@ -146,6 +146,62 @@ fn ctrl_p_in_checklist_behaves_like_enter() {
 }
 
 #[test]
+fn enter_split_checked_checklist_preserves_state() {
+    let item = ChecklistItem::new(true).with_content(vec![Span::new_text("Done")]);
+    let checklist = Paragraph::new_checklist().with_checklist_items(vec![item]);
+    let document = Document::new().with_paragraphs(vec![checklist]);
+    let mut editor = DocumentEditor::new(document);
+
+    let mut pointer = pointer_to_checklist_item_span(0, 0);
+    pointer.offset = 2;
+    assert!(editor.move_to_pointer(&pointer));
+
+    assert!(editor.insert_paragraph_break());
+
+    let checklist = &editor.document().paragraphs[0];
+    assert_eq!(checklist.checklist_items().len(), 2);
+    assert!(checklist.checklist_items()[0].checked);
+    assert!(checklist.checklist_items()[1].checked);
+}
+
+#[test]
+fn enter_at_start_of_checked_checklist_preserves_state() {
+    let item = ChecklistItem::new(true).with_content(vec![Span::new_text("Complete task")]);
+    let checklist = Paragraph::new_checklist().with_checklist_items(vec![item]);
+    let document = Document::new().with_paragraphs(vec![checklist]);
+    let mut editor = DocumentEditor::new(document);
+
+    let pointer = pointer_to_checklist_item_span(0, 0);
+    assert!(editor.move_to_pointer(&pointer));
+
+    assert!(editor.insert_paragraph_break());
+
+    let checklist = &editor.document().paragraphs[0];
+    assert_eq!(checklist.checklist_items().len(), 2);
+    assert!(checklist.checklist_items()[0].checked);
+    assert!(checklist.checklist_items()[1].checked);
+}
+
+#[test]
+fn ctrl_p_split_checked_checklist_preserves_state() {
+    let item = ChecklistItem::new(true).with_content(vec![Span::new_text("Task item")]);
+    let checklist = Paragraph::new_checklist().with_checklist_items(vec![item]);
+    let document = Document::new().with_paragraphs(vec![checklist]);
+    let mut editor = DocumentEditor::new(document);
+
+    let mut pointer = pointer_to_checklist_item_span(0, 0);
+    pointer.offset = 4;
+    assert!(editor.move_to_pointer(&pointer));
+
+    assert!(editor.insert_paragraph_break_as_sibling());
+
+    let checklist = &editor.document().paragraphs[0];
+    assert_eq!(checklist.checklist_items().len(), 2);
+    assert!(checklist.checklist_items()[0].checked);
+    assert!(checklist.checklist_items()[1].checked);
+}
+
+#[test]
 fn indent_text_paragraph_following_list() {
     let initial_doc = ftml! {
         ul {

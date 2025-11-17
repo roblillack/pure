@@ -1473,7 +1473,8 @@ pub(crate) fn split_paragraph_break(
             // Insert a new checklist item after the current one
             let insert_idx = (item_index + 1).min(items.len());
 
-            let new_item = ChecklistItem::new(false).with_content(right_spans);
+            let checked_state = items[item_index].checked;
+            let new_item = ChecklistItem::new(checked_state).with_content(right_spans);
             items.insert(insert_idx, new_item);
 
             let mut new_steps = prefix.to_vec();
