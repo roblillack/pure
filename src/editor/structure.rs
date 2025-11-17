@@ -756,6 +756,94 @@ pub(crate) fn extract_entry_context(path: &ParagraphPath) -> Option<EntryContext
     None
 }
 
+#[derive(Clone)]
+pub(crate) struct ChecklistItemContext {
+    pub checklist_path: ParagraphPath,
+    pub indices: Vec<usize>,
+    pub tail_steps: Vec<PathStep>,
+}
+
+pub(crate) fn extract_checklist_item_context(path: &ParagraphPath) -> Option<ChecklistItemContext> {
+    let steps = path.steps();
+    for idx in (0..steps.len()).rev() {
+        if let PathStep::ChecklistItem { indices } = &steps[idx] {
+            let checklist_path = ParagraphPath::from_steps(steps[..idx].to_vec());
+            let tail_steps = steps[idx + 1..].to_vec();
+            return Some(ChecklistItemContext {
+                checklist_path,
+                indices: indices.clone(),
+                tail_steps,
+            });
+        }
+    }
+    None
+}
+
+fn checklist_items_container_mut<'a>(
+    document: &'a mut Document,
+    checklist_path: &ParagraphPath,
+    ancestor_indices: &[usize],
+) -> Option<&'a mut Vec<ChecklistItem>> {
+    let paragraph = paragraph_mut(document, checklist_path)?;
+    let Paragraph::Checklist { items } = paragraph else {
+        return None;
+    };
+
+    let mut current = items;
+    for idx in ancestor_indices {
+        let item = current.get_mut(*idx)?;
+        current = &mut item.children;
+    }
+    Some(current)
+}
+
+fn take_checklist_item_at(
+    document: &mut Document,
+    ctx: &ChecklistItemContext,
+) -> Option<ChecklistItem> {
+    if ctx.indices.is_empty() {
+        return None;
+    }
+
+    let parent_indices = &ctx.indices[..ctx.indices.len().saturating_sub(1)];
+    let container = checklist_items_container_mut(document, &ctx.checklist_path, parent_indices)?;
+    let target_idx = *ctx.indices.last()?;
+    if target_idx >= container.len() {
+        return None;
+    }
+    Some(container.remove(target_idx))
+}
+
+fn insert_checklist_item_after_parent(
+    document: &mut Document,
+    ctx: &ChecklistItemContext,
+    item: ChecklistItem,
+) -> Option<ParagraphPath> {
+    if ctx.indices.len() <= 1 {
+        return None;
+    }
+
+    let parent_indices = &ctx.indices[..ctx.indices.len() - 1];
+    let (parent_idx, container_indices) = match parent_indices.split_last() {
+        Some((last, prefix)) => (*last, prefix),
+        None => return None,
+    };
+
+    let container = checklist_items_container_mut(document, &ctx.checklist_path, container_indices)?;
+    let insert_position = parent_idx + 1;
+    if insert_position > container.len() {
+        return None;
+    }
+    container.insert(insert_position, item);
+
+    let mut new_indices = container_indices.to_vec();
+    new_indices.push(insert_position);
+    let mut steps = ctx.checklist_path.steps().to_vec();
+    steps.push(PathStep::ChecklistItem { indices: new_indices });
+    steps.extend(ctx.tail_steps.iter().cloned());
+    Some(ParagraphPath::from_steps(steps))
+}
+
 pub(crate) fn merge_adjacent_lists(
     document: &mut Document,
     list_path: &ParagraphPath,
@@ -1334,6 +1422,18 @@ fn previous_sibling_path(path: &ParagraphPath) -> Option<ParagraphPath> {
             });
             Some(ParagraphPath::from_steps(new_steps))
         }
+        PathStep::ChecklistItem { ref indices } => {
+            if let Some((last, head)) = indices.split_last() {
+                if *last > 0 {
+                    let mut new_indices = head.to_vec();
+                    new_indices.push(*last - 1);
+                    let mut new_steps = prefix.to_vec();
+                    new_steps.push(PathStep::ChecklistItem { indices: new_indices });
+                    return Some(ParagraphPath::from_steps(new_steps));
+                }
+            }
+            None
+        }
         _ => None,
     }
 }
@@ -1349,6 +1449,7 @@ pub(crate) enum IndentTargetKind {
     Quote,
     List,
     ListEntry { entry_index: usize },
+    ChecklistItem,
 }
 
 pub(crate) fn find_indent_target(document: &Document, path: &ParagraphPath) -> Option<IndentTarget> {
@@ -1365,7 +1466,30 @@ pub(crate) fn find_indent_target(document: &Document, path: &ParagraphPath) -> O
 }
 
 fn determine_indent_target(document: &Document, path: &ParagraphPath) -> Option<IndentTarget> {
+    if matches!(path.steps().last(), Some(PathStep::ChecklistItem { .. })) {
+        return Some(IndentTarget {
+            path: path.clone(),
+            kind: IndentTargetKind::ChecklistItem,
+        });
+    }
     let paragraph = paragraph_ref(document, path)?;
+    if paragraph.paragraph_type() == ParagraphType::Checklist {
+        let items = paragraph.checklist_items();
+        if items.is_empty() {
+            return Some(IndentTarget {
+                path: path.clone(),
+                kind: IndentTargetKind::List,
+            });
+        }
+        let mut steps = path.steps().to_vec();
+        steps.push(PathStep::ChecklistItem {
+            indices: vec![items.len().saturating_sub(1)],
+        });
+        return Some(IndentTarget {
+            path: ParagraphPath::from_steps(steps),
+            kind: IndentTargetKind::ChecklistItem,
+        });
+    }
     if paragraph.paragraph_type() == ParagraphType::Quote {
         return Some(IndentTarget {
             path: path.clone(),
@@ -1671,6 +1795,90 @@ pub(crate) fn indent_list_entry_into_entry(
 
     Some(CursorPointer {
         paragraph_path,
+        span_path: pointer.span_path.clone(),
+        offset: pointer.offset,
+        segment_kind: pointer.segment_kind,
+    })
+}
+
+fn paragraph_to_checklist_item(paragraph: Paragraph) -> ChecklistItem {
+    let mut content = paragraph.content().to_vec();
+    if content.is_empty() {
+        content.push(Span::new_text(""));
+    }
+
+    ChecklistItem::new(false).with_content(content)
+}
+
+pub(crate) fn append_paragraph_as_checklist_child(
+    document: &mut Document,
+    target_path: &ParagraphPath,
+    paragraph: Paragraph,
+) -> Option<ParagraphPath> {
+    let new_item = paragraph_to_checklist_item(paragraph);
+    append_checklist_child(document, target_path, new_item)
+}
+
+fn append_checklist_child(
+    document: &mut Document,
+    target_path: &ParagraphPath,
+    item: ChecklistItem,
+) -> Option<ParagraphPath> {
+    let parent_item = checklist_item_mut(document, target_path)?;
+    parent_item.children.push(item);
+    let new_child_index = parent_item.children.len().saturating_sub(1);
+
+    let mut steps = target_path.steps().to_vec();
+    let last = steps.pop()?;
+    match last {
+        PathStep::ChecklistItem { mut indices } => {
+            indices.push(new_child_index);
+            steps.push(PathStep::ChecklistItem { indices });
+            Some(ParagraphPath::from_steps(steps))
+        }
+        _ => None,
+    }
+}
+
+pub(crate) fn indent_checklist_item_into_item(
+    document: &mut Document,
+    pointer: &CursorPointer,
+    target_path: &ParagraphPath,
+) -> Option<CursorPointer> {
+    let source_ctx = extract_checklist_item_context(&pointer.paragraph_path)?;
+    let target_ctx = extract_checklist_item_context(target_path)?;
+
+    if source_ctx.checklist_path != target_ctx.checklist_path {
+        return None;
+    }
+
+    let item = take_checklist_item_at(document, &source_ctx)?;
+    let new_base_path = append_checklist_child(document, target_path, item)?;
+    let mut steps = new_base_path.steps().to_vec();
+    steps.extend(source_ctx.tail_steps.iter().cloned());
+
+    Some(CursorPointer {
+        paragraph_path: ParagraphPath::from_steps(steps),
+        span_path: pointer.span_path.clone(),
+        offset: pointer.offset,
+        segment_kind: pointer.segment_kind,
+    })
+}
+
+pub(crate) fn unindent_checklist_item(
+    document: &mut Document,
+    pointer: &CursorPointer,
+) -> Option<CursorPointer> {
+    let ctx = extract_checklist_item_context(&pointer.paragraph_path)?;
+    if ctx.indices.len() <= 1 {
+        return None;
+    }
+
+    let item = take_checklist_item_at(document, &ctx)?;
+    let new_path = insert_checklist_item_after_parent(document, &ctx, item)?;
+
+    Some(CursorPointer {
+        paragraph_path: new_path,
         span_path: pointer.span_path.clone(),
         offset: pointer.offset,
         segment_kind: pointer.segment_kind,

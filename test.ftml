@@ -29,6 +29,7 @@
   <li>
     <input type="checkbox" checked /> Context menu entry to toggle checklist items
   </li>
+  <li><input type="checkbox" /> Support for nesting checklist items</li>
   <li>
     <input type="checkbox" /> Wire keyboard shortcuts for basic inline styling where possible (Ctrl-B,
     Ctrl-I, Ctrl-U, Ctrl-K)
@@ -118,8 +119,8 @@
   <li>
     <p>This is another test.</p>
     <p>We have a second paragraph here.</p>
+    <p>Und hier kommt dann noch ein Test.</p>
     <ul>
-      <p>Und hier kommt dann noch ein Test.</p>
     </ul>
   </li>
 </ul>

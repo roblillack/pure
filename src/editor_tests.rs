@@ -55,8 +55,15 @@ fn pointer_to_entry_span(
 }
 
 fn pointer_to_checklist_item_span(root_index: usize, item_index: usize) -> CursorPointer {
+    pointer_to_nested_checklist_item_span(root_index, vec![item_index])
+}
+
+fn pointer_to_nested_checklist_item_span(
+    root_index: usize,
+    indices: Vec<usize>,
+) -> CursorPointer {
     let mut path = ParagraphPath::new_root(root_index);
-    path.push_checklist_item(vec![item_index]);
+    path.push_checklist_item(indices);
     CursorPointer {
         paragraph_path: path,
         span_path: SpanPath::new(vec![0]),
@@ -409,6 +416,96 @@ fn indent_more_from_middle_of_list() {
             }
         }
     );
+}
+
+
+#[test]
+fn indent_checklist_item_into_previous_item() {
+    let checklist = Paragraph::new_checklist().with_checklist_items(vec![
+        ChecklistItem::new(false).with_content(vec![Span::new_text("First")]),
+        ChecklistItem::new(false).with_content(vec![Span::new_text("Second")]),
+        ChecklistItem::new(false).with_content(vec![Span::new_text("Third")]),
+    ]);
+    let document = Document::new().with_paragraphs(vec![checklist]);
+    let mut editor = DocumentEditor::new(document);
+
+    let pointer = pointer_to_checklist_item_span(0, 2);
+    assert!(editor.move_to_pointer(&pointer));
+    assert!(editor.can_indent_more());
+    assert!(editor.indent_current_paragraph());
+
+    let checklist = &editor.document().paragraphs[0];
+    assert_eq!(checklist.checklist_items().len(), 2);
+    let second = &checklist.checklist_items()[1];
+    assert_eq!(second.content[0].text, "Second");
+    assert_eq!(second.children.len(), 1);
+    assert_eq!(second.children[0].content[0].text, "Third");
+
+    assert!(editor.can_indent_less());
+    assert!(editor.unindent_current_paragraph());
+
+    let checklist = &editor.document().paragraphs[0];
+    assert_eq!(checklist.checklist_items().len(), 3);
+    assert_eq!(checklist.checklist_items()[2].content[0].text, "Third");
+}
+
+#[test]
+fn indent_nested_checklist_child() {
+    let child_a = ChecklistItem::new(false).with_content(vec![Span::new_text("Child A")]);
+    let child_b = ChecklistItem::new(false).with_content(vec![Span::new_text("Child B")]);
+    let parent = ChecklistItem::new(false)
+        .with_content(vec![Span::new_text("Parent")])
+        .with_children(vec![child_a.clone(), child_b.clone()]);
+    let sibling = ChecklistItem::new(false).with_content(vec![Span::new_text("Sibling")]);
+    let checklist = Paragraph::new_checklist().with_checklist_items(vec![parent, sibling]);
+    let document = Document::new().with_paragraphs(vec![checklist]);
+    let mut editor = DocumentEditor::new(document);
+
+    let pointer = pointer_to_nested_checklist_item_span(0, vec![0, 1]);
+    assert!(editor.move_to_pointer(&pointer));
+    assert!(editor.can_indent_more());
+    assert!(editor.indent_current_paragraph());
+
+    let checklist = &editor.document().paragraphs[0];
+    let parent = &checklist.checklist_items()[0];
+    assert_eq!(parent.children.len(), 1);
+    let first_child = &parent.children[0];
+    assert_eq!(first_child.children.len(), 1);
+    assert_eq!(first_child.children[0].content[0].text, "Child B");
+
+    assert!(editor.can_indent_less());
+    assert!(editor.unindent_current_paragraph());
+
+    let parent = &editor.document().paragraphs[0].checklist_items()[0];
+    assert_eq!(parent.children.len(), 2);
+    assert_eq!(parent.children[1].content[0].text, "Child B");
+}
+
+#[test]
+fn indent_text_paragraph_into_checklist_item() {
+    let document = Document::new().with_paragraphs(vec![
+        checklist(&["Parent"]),
+        text_paragraph("Child"),
+    ]);
+    let mut editor = DocumentEditor::new(document);
+
+    let pointer = pointer_to_root_span(1);
+    assert!(editor.move_to_pointer(&pointer));
+    assert!(editor.can_indent_more());
+    assert!(editor.indent_current_paragraph());
+
+    let checklist = &editor.document().paragraphs[0];
+    assert_eq!(checklist.checklist_items().len(), 1);
+    let parent = &checklist.checklist_items()[0];
+    assert_eq!(parent.children.len(), 1);
+    assert_eq!(parent.children[0].content[0].text, "Child");
+
+    assert!(editor.can_indent_less());
+    assert!(editor.unindent_current_paragraph());
+
+    let checklist = &editor.document().paragraphs[0];
+    assert_eq!(checklist.checklist_items().len(), 2);
+    assert_eq!(checklist.checklist_items()[1].content[0].text, "Child");
 }
 
 #[test]

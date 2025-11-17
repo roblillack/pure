@@ -22,6 +22,7 @@ use structure::{
     ensure_document_initialized,
     paragraph_mut,
     checklist_item_mut,
+    extract_checklist_item_context,
     span_mut,
     span_mut_from_item,
     paragraph_is_empty,
@@ -48,9 +49,12 @@ use structure::{
     entry_has_multiple_paragraphs,
     indent_paragraph_within_entry,
     indent_list_entry_into_entry,
+    indent_checklist_item_into_item,
+    append_paragraph_as_checklist_child,
     take_paragraph_at,
     insert_paragraph_after_parent,
     remove_paragraph_by_path,
+    unindent_checklist_item,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -554,6 +558,9 @@ impl DocumentEditor {
     }
 
     pub fn can_indent_less(&self) -> bool {
+        if let Some(ctx) = extract_checklist_item_context(&self.cursor.paragraph_path) {
+            return ctx.indices.len() > 1;
+        }
         self.cursor.paragraph_path.steps().len() > 1
     }
 
@@ -581,6 +588,39 @@ impl DocumentEditor {
                 }
                 return true;
             }
+        }
+
+        if matches!(target.kind, IndentTargetKind::ChecklistItem) {
+            if let Some(new_pointer) =
+                indent_checklist_item_into_item(&mut self.document, &pointer, &target.path)
+            {
+                self.rebuild_segments();
+                if !self.move_to_pointer(&new_pointer) {
+                    if !self.fallback_move_to_text(&new_pointer, false) {
+                        self.ensure_cursor_selectable();
+                    }
+                }
+                return true;
+            }
+
+            let Some(paragraph) = take_paragraph_at(&mut self.document, &pointer.paragraph_path)
+            else {
+                return false;
+            };
+            let Some(paragraph_path) =
+                append_paragraph_as_checklist_child(&mut self.document, &target.path, paragraph)
+            else {
+                return false;
+            };
+            let mut new_pointer = pointer;
+            new_pointer.paragraph_path = paragraph_path;
+            self.rebuild_segments();
+            if !self.move_to_pointer(&new_pointer) {
+                if !self.fallback_move_to_text(&new_pointer, false) {
+                    self.ensure_cursor_selectable();
+                }
+            }
+            return true;
         }
 
         let Some(paragraph) = take_paragraph_at(&mut self.document, &pointer.paragraph_path) else {
@@ -613,6 +653,7 @@ impl DocumentEditor {
             IndentTargetKind::ListEntry { entry_index } => {
                 append_paragraph_to_entry(&mut self.document, &target.path, entry_index, paragraph)
             }
+            IndentTargetKind::ChecklistItem => unreachable!(),
         };
         let Some(paragraph_path) = new_path else {
             return false;
@@ -633,6 +674,17 @@ impl DocumentEditor {
             return false;
         }
         let pointer = self.cursor_stable_pointer();
+
+        if let Some(new_pointer) = unindent_checklist_item(&mut self.document, &pointer) {
+            self.rebuild_segments();
+            if !self.move_to_pointer(&new_pointer) {
+                if !self.fallback_move_to_text(&new_pointer, false) {
+                    self.ensure_cursor_selectable();
+                }
+            }
+            return true;
+        }
+
         if matches!(
             pointer.paragraph_path.steps().last(),
             Some(PathStep::Entry { .. })
