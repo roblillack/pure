@@ -9,9 +9,9 @@ use content::{
     remove_char_at,
 };
 
-mod inspect;
-mod cursor;
-mod content;
+pub mod inspect;
+pub mod cursor;
+pub mod content;
 mod styles;
 mod structure;
 
