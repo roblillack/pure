@@ -18,6 +18,21 @@ pub fn collect_segments(document: &Document, reveal_codes: bool) -> Vec<SegmentR
     result
 }
 
+/// Collect segments for a single paragraph subtree (including all descendants).
+/// This is used for incremental updates when only one paragraph changes.
+pub fn collect_segments_for_paragraph_tree(
+    document: &Document,
+    root_path: &ParagraphPath,
+    reveal_codes: bool,
+) -> Vec<SegmentRef> {
+    let mut result = Vec::new();
+    if let Some(paragraph) = paragraph_ref(document, root_path) {
+        let mut path = root_path.clone();
+        collect_paragraph_segments(paragraph, &mut path, reveal_codes, &mut result);
+    }
+    result
+}
+
 pub fn breadcrumbs_for_pointer(
     document: &Document,
     pointer: &CursorPointer,
