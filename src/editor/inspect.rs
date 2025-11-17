@@ -25,18 +25,29 @@ pub fn breadcrumbs_for_pointer(
     if pointer.paragraph_path.is_empty() {
         return None;
     }
-    let (mut labels, paragraph) = collect_paragraph_labels(document, &pointer.paragraph_path)?;
-    let inline_labels = collect_inline_labels(paragraph, &pointer.span_path)?;
+    let (mut labels, target) = collect_paragraph_labels(document, &pointer.paragraph_path)?;
+    let inline_labels = match target {
+        LabelTarget::Paragraph(paragraph) => collect_inline_labels(paragraph, &pointer.span_path)?,
+        LabelTarget::ChecklistItem(item) => {
+            collect_inline_labels_from_item(item, &pointer.span_path)?
+        }
+    };
     labels.extend(inline_labels);
     Some(labels)
+}
+
+enum LabelTarget<'a> {
+    Paragraph(&'a Paragraph),
+    ChecklistItem(&'a ChecklistItem),
 }
 
 fn collect_paragraph_labels<'a>(
     document: &'a Document,
     path: &ParagraphPath,
-) -> Option<(Vec<String>, &'a Paragraph)> {
+) -> Option<(Vec<String>, LabelTarget<'a>)> {
     let mut labels = Vec::new();
     let mut current: Option<&'a Paragraph> = None;
+    let mut current_item: Option<&'a ChecklistItem> = None;
     let mut traversed = Vec::new();
 
     for step in path.steps() {
@@ -55,8 +66,17 @@ fn collect_paragraph_labels<'a>(
                 let entry = parent.entries().get(entry_index)?;
                 entry.get(paragraph_index)?
             }
-            PathStep::ChecklistItem { .. } => {
-                // ChecklistItem doesn't have its own paragraph type, skip for label collection
+            PathStep::ChecklistItem { ref indices } => {
+                if indices.len() > 1 {
+                    for _ in 1..indices.len() {
+                        labels.push("Checklist".to_string());
+                    }
+                }
+                if labels.is_empty() {
+                    labels.push("Checklist".to_string());
+                }
+                let current_path = ParagraphPath::from_steps(traversed.clone());
+                current_item = checklist_item_ref(document, &current_path);
                 continue;
             }
             PathStep::Root(_) => return None,
@@ -67,10 +87,15 @@ fn collect_paragraph_labels<'a>(
             labels.push(paragraph.paragraph_type().to_string());
         }
         current = Some(paragraph);
+        current_item = None;
     }
 
-    let paragraph = current?;
-    Some((labels, paragraph))
+    if let Some(item) = current_item {
+        Some((labels, LabelTarget::ChecklistItem(item)))
+    } else {
+        let paragraph = current?;
+        Some((labels, LabelTarget::Paragraph(paragraph)))
+    }
 }
 
 fn collect_inline_labels(paragraph: &Paragraph, span_path: &SpanPath) -> Option<Vec<String>> {
@@ -80,6 +105,24 @@ fn collect_inline_labels(paragraph: &Paragraph, span_path: &SpanPath) -> Option<
     }
 
     let mut spans = paragraph.content();
+    for &idx in span_path.indices() {
+        let span = spans.get(idx)?;
+        if let Some(label) = inline_style_label(span.style) {
+            labels.push(label.to_string());
+        }
+        spans = &span.children;
+    }
+
+    Some(labels)
+}
+
+fn collect_inline_labels_from_item(item: &ChecklistItem, span_path: &SpanPath) -> Option<Vec<String>> {
+    let mut labels = Vec::new();
+    if span_path.is_empty() {
+        return Some(labels);
+    }
+
+    let mut spans = &item.content;
     for &idx in span_path.indices() {
         let span = spans.get(idx)?;
         if let Some(label) = inline_style_label(span.style) {
@@ -372,6 +415,17 @@ mod tests {
         }
     }
 
+    fn pointer_to_checklist_item_span(root_index: usize, indices: Vec<usize>) -> CursorPointer {
+        let mut path = ParagraphPath::new_root(root_index);
+        path.push_checklist_item(indices);
+        CursorPointer {
+            paragraph_path: path,
+            span_path: SpanPath::new(vec![0]),
+            offset: 0,
+            segment_kind: SegmentKind::Text,
+        }
+    }
+
     fn text_paragraph(text: &str) -> Paragraph {
         Paragraph::new_text().with_content(vec![Span::new_text(text)])
     }
@@ -425,5 +479,23 @@ mod tests {
             breadcrumbs,
             vec!["Unordered List".to_string(), "Text".to_string()]
         );
+    }
+
+    #[test]
+    fn breadcrumbs_include_checklist_items() {
+        let nested = ChecklistItem::new(false).with_content(vec![Span::new_text("Nested")]);
+        let parent = ChecklistItem::new(false)
+            .with_content(vec![Span::new_text("Parent")])
+            .with_children(vec![nested.clone()]);
+        let checklist = Paragraph::new_checklist().with_checklist_items(vec![parent]);
+        let document = Document::new().with_paragraphs(vec![checklist]);
+
+        let top_pointer = pointer_to_checklist_item_span(0, vec![0]);
+        let breadcrumbs = breadcrumbs_for_pointer(&document, &top_pointer).unwrap();
+        assert_eq!(breadcrumbs, vec!["Checklist".to_string()]);
+
+        let nested_pointer = pointer_to_checklist_item_span(0, vec![0, 0]);
+        let nested_breadcrumbs = breadcrumbs_for_pointer(&document, &nested_pointer).unwrap();
+        assert_eq!(nested_breadcrumbs, vec!["Checklist".to_string(), "Checklist".to_string()]);
     }
 }

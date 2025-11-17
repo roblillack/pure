@@ -343,6 +343,7 @@ fn build_context_menu_entries(
     has_selection: bool,
     can_indent_more: bool,
     can_indent_less: bool,
+    allow_paragraph_change: bool,
 ) -> Vec<MenuEntry> {
     let mut entries = Vec::new();
 
@@ -378,58 +379,94 @@ fn build_context_menu_entries(
         entries.push(MenuEntry::Separator);
     }
 
-    entries.extend(default_context_menu_entries(has_selection));
+    entries.extend(default_context_menu_entries(has_selection, allow_paragraph_change));
     entries
 }
 
-fn default_context_menu_entries(has_selection: bool) -> Vec<MenuEntry> {
+fn default_context_menu_entries(has_selection: bool, allow_paragraph_change: bool) -> Vec<MenuEntry> {
     vec![
         MenuEntry::Section("Paragraph type"),
-        MenuEntry::Item(MenuItem::enabled_with_shortcut(
-            "Text",
-            MenuAction::SetParagraphType(ParagraphType::Text),
-            MenuShortcut::new('0'),
-        )),
-        MenuEntry::Item(MenuItem::enabled_with_shortcut(
-            "Heading 1",
-            MenuAction::SetParagraphType(ParagraphType::Header1),
-            MenuShortcut::new('1'),
-        )),
-        MenuEntry::Item(MenuItem::enabled_with_shortcut(
-            "Heading 2",
-            MenuAction::SetParagraphType(ParagraphType::Header2),
-            MenuShortcut::new('2'),
-        )),
-        MenuEntry::Item(MenuItem::enabled_with_shortcut(
-            "Heading 3",
-            MenuAction::SetParagraphType(ParagraphType::Header3),
-            MenuShortcut::new('3'),
-        )),
-        MenuEntry::Item(MenuItem::enabled_with_shortcut(
-            "Quote",
-            MenuAction::SetParagraphType(ParagraphType::Quote),
-            MenuShortcut::new('5'),
-        )),
-        MenuEntry::Item(MenuItem::enabled_with_shortcut(
-            "Code",
-            MenuAction::SetParagraphType(ParagraphType::CodeBlock),
-            MenuShortcut::new('6'),
-        )),
-        MenuEntry::Item(MenuItem::enabled_with_shortcut(
-            "Numbered List",
-            MenuAction::SetParagraphType(ParagraphType::OrderedList),
-            MenuShortcut::new('7'),
-        )),
-        MenuEntry::Item(MenuItem::enabled_with_shortcut(
-            "Bullet List",
-            MenuAction::SetParagraphType(ParagraphType::UnorderedList),
-            MenuShortcut::new('8'),
-        )),
-        MenuEntry::Item(MenuItem::enabled_with_shortcut(
-            "Checklist",
-            MenuAction::SetParagraphType(ParagraphType::Checklist),
-            MenuShortcut::new('9'),
-        )),
+        MenuEntry::Item(if allow_paragraph_change {
+            MenuItem::enabled_with_shortcut(
+                "Text",
+                MenuAction::SetParagraphType(ParagraphType::Text),
+                MenuShortcut::new('0'),
+            )
+        } else {
+            MenuItem::disabled_with_shortcut("Text", MenuShortcut::new('0'))
+        }),
+        MenuEntry::Item(if allow_paragraph_change {
+            MenuItem::enabled_with_shortcut(
+                "Heading 1",
+                MenuAction::SetParagraphType(ParagraphType::Header1),
+                MenuShortcut::new('1'),
+            )
+        } else {
+            MenuItem::disabled_with_shortcut("Heading 1", MenuShortcut::new('1'))
+        }),
+        MenuEntry::Item(if allow_paragraph_change {
+            MenuItem::enabled_with_shortcut(
+                "Heading 2",
+                MenuAction::SetParagraphType(ParagraphType::Header2),
+                MenuShortcut::new('2'),
+            )
+        } else {
+            MenuItem::disabled_with_shortcut("Heading 2", MenuShortcut::new('2'))
+        }),
+        MenuEntry::Item(if allow_paragraph_change {
+            MenuItem::enabled_with_shortcut(
+                "Heading 3",
+                MenuAction::SetParagraphType(ParagraphType::Header3),
+                MenuShortcut::new('3'),
+            )
+        } else {
+            MenuItem::disabled_with_shortcut("Heading 3", MenuShortcut::new('3'))
+        }),
+        MenuEntry::Item(if allow_paragraph_change {
+            MenuItem::enabled_with_shortcut(
+                "Quote",
+                MenuAction::SetParagraphType(ParagraphType::Quote),
+                MenuShortcut::new('5'),
+            )
+        } else {
+            MenuItem::disabled_with_shortcut("Quote", MenuShortcut::new('5'))
+        }),
+        MenuEntry::Item(if allow_paragraph_change {
+            MenuItem::enabled_with_shortcut(
+                "Code",
+                MenuAction::SetParagraphType(ParagraphType::CodeBlock),
+                MenuShortcut::new('6'),
+            )
+        } else {
+            MenuItem::disabled_with_shortcut("Code", MenuShortcut::new('6'))
+        }),
+        MenuEntry::Item(if allow_paragraph_change {
+            MenuItem::enabled_with_shortcut(
+                "Numbered List",
+                MenuAction::SetParagraphType(ParagraphType::OrderedList),
+                MenuShortcut::new('7'),
+            )
+        } else {
+            MenuItem::disabled_with_shortcut("Numbered List", MenuShortcut::new('7'))
+        }),
+        MenuEntry::Item(if allow_paragraph_change {
+            MenuItem::enabled_with_shortcut(
+                "Bullet List",
+                MenuAction::SetParagraphType(ParagraphType::UnorderedList),
+                MenuShortcut::new('8'),
+            )
+        } else {
+            MenuItem::disabled_with_shortcut("Bullet List", MenuShortcut::new('8'))
+        }),
+        MenuEntry::Item(if allow_paragraph_change {
+            MenuItem::enabled_with_shortcut(
+                "Checklist",
+                MenuAction::SetParagraphType(ParagraphType::Checklist),
+                MenuShortcut::new('9'),
+            )
+        } else {
+            MenuItem::disabled_with_shortcut("Checklist", MenuShortcut::new('9'))
+        }),
         MenuEntry::Separator,
         MenuEntry::Section("Inline style"),
         MenuEntry::Item(if has_selection {
@@ -893,6 +930,7 @@ impl App {
             has_selection,
             self.editor.can_indent_more(),
             self.editor.can_indent_less(),
+            self.editor.can_change_paragraph_type(),
         );
         self.context_menu = Some(ContextMenuState::new(entries));
     }

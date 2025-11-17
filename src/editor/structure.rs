@@ -137,6 +137,30 @@ fn paragraph_from_checklist_item(item: ChecklistItem) -> Paragraph {
     Paragraph::new_text().with_content(item.content)
 }
 
+fn checklist_item_content_to_paragraph(content: Vec<Span>, target: ParagraphType) -> Paragraph {
+    let mut paragraph = Paragraph::new_text();
+    *paragraph.content_mut() = content;
+    apply_paragraph_type_in_place(&mut paragraph, target);
+    if paragraph.paragraph_type().is_leaf() && paragraph.content().is_empty() {
+        paragraph.content_mut().push(Span::new_text(""));
+    }
+    paragraph
+}
+
+fn flatten_checklist_items_to_text(items: Vec<ChecklistItem>) -> Vec<Paragraph> {
+    let mut result = Vec::new();
+    for item in items {
+        let mut paragraph = Paragraph::new_text();
+        *paragraph.content_mut() = item.content;
+        if paragraph.content().is_empty() {
+            paragraph.content_mut().push(Span::new_text(""));
+        }
+        result.extend(vec![paragraph]);
+        result.extend(flatten_checklist_items_to_text(item.children));
+    }
+    result
+}
+
 pub(crate) fn is_single_paragraph_entry(document: &Document, path: &ParagraphPath) -> bool {
     let steps = path.steps();
     let (last_step, prefix) = match steps.split_last() {
@@ -464,18 +488,55 @@ pub(crate) fn break_list_entry_for_non_list_target(
             }
             let items_after: Vec<ChecklistItem> = items.split_off(entry_index + 1);
             let selected_item = items.remove(entry_index);
-
-            // Convert checklist item to a paragraph
-            let mut paragraph = Paragraph::new_text();
-            *paragraph.content_mut() = selected_item.content;
-            apply_paragraph_type_in_place(&mut paragraph, target);
-            if paragraph.paragraph_type().is_leaf() && paragraph.content().is_empty() {
-                paragraph.content_mut().push(Span::new_text(""));
-            }
-
+            let ChecklistItem { content, children, .. } = selected_item;
             let has_prefix = !items.is_empty();
 
-            (ParagraphType::Checklist, vec![], items_after, vec![paragraph], 0, has_prefix)
+            let mut extracted = Vec::new();
+
+            match target {
+                ParagraphType::Quote => {
+                    let mut quote_children = Vec::new();
+                    let mut text_paragraph = checklist_item_content_to_paragraph(content, ParagraphType::Text);
+                    quote_children.push(text_paragraph);
+                    if !children.is_empty() {
+                        quote_children.push(Paragraph::Checklist { items: children });
+                    }
+                    extracted.push(Paragraph::Quote { children: quote_children });
+                }
+                ParagraphType::OrderedList | ParagraphType::UnorderedList => {
+                    let mut entry = Vec::new();
+                    entry.push(checklist_item_content_to_paragraph(content, ParagraphType::Text));
+                    if !children.is_empty() {
+                        entry.push(Paragraph::Checklist { items: children });
+                    }
+                    let paragraph = if target == ParagraphType::OrderedList {
+                        Paragraph::OrderedList { entries: vec![entry] }
+                    } else {
+                        Paragraph::UnorderedList { entries: vec![entry] }
+                    };
+                    extracted.push(paragraph);
+                }
+                ParagraphType::Checklist => {
+                    extracted.push(Paragraph::Checklist {
+                        items: if children.is_empty() {
+                            vec![ChecklistItem::new(false).with_content(content)]
+                        } else {
+                            let mut root = ChecklistItem::new(false).with_content(content);
+                            root.children = children;
+                            vec![root]
+                        },
+                    });
+                }
+                _ => {
+                    extracted.push(checklist_item_content_to_paragraph(content, target));
+                    if !children.is_empty() {
+                        let mut extra = flatten_checklist_items_to_text(children);
+                        extracted.append(&mut extra);
+                    }
+                }
+            }
+
+            (ParagraphType::Checklist, vec![], items_after, extracted, 0, has_prefix)
         } else {
             // Handle regular list entries
             let (entries, list_type) = match list {
@@ -1465,6 +1526,27 @@ pub(crate) fn find_indent_target(document: &Document, path: &ParagraphPath) -> O
     Some(target)
 }
 
+pub(crate) fn find_container_indent_target(document: &Document, path: &ParagraphPath) -> Option<IndentTarget> {
+    let mut current = path.clone();
+    loop {
+        if let Some(prev_path) = previous_sibling_path(&current) {
+            if let Some(target) = determine_indent_target(document, &prev_path) {
+                return Some(target);
+            }
+        }
+
+        if let Some(parent) = parent_paragraph_path(&current) {
+            if matches!(current.steps().last(), Some(PathStep::Entry { .. })) {
+                break;
+            }
+            current = parent;
+        } else {
+            break;
+        }
+    }
+    None
+}
+
 fn determine_indent_target(document: &Document, path: &ParagraphPath) -> Option<IndentTarget> {
     if matches!(path.steps().last(), Some(PathStep::ChecklistItem { .. })) {
         return Some(IndentTarget {
@@ -1838,6 +1920,126 @@ fn append_checklist_child(
         }
         _ => None,
     }
+}
+
+fn remove_nested_list_paragraph(document: &mut Document, parent_ctx: &EntryContext) {
+    let Some(list_paragraph) = paragraph_mut(document, &parent_ctx.list_path) else {
+        return;
+    };
+    let entries = match list_paragraph {
+        Paragraph::OrderedList { entries } | Paragraph::UnorderedList { entries } => entries,
+        _ => return,
+    };
+    if parent_ctx.entry_index >= entries.len() {
+        return;
+    }
+    let parent_entry = &mut entries[parent_ctx.entry_index];
+    if parent_ctx.paragraph_index < parent_entry.len() {
+        parent_entry.remove(parent_ctx.paragraph_index);
+    }
+    if parent_entry.is_empty() {
+        parent_entry.push(empty_text_paragraph());
+    }
+}
+
+fn take_list_entry(document: &mut Document, ctx: &EntryContext) -> Option<(Vec<Paragraph>, bool)> {
+    let list = paragraph_mut(document, &ctx.list_path)?;
+    let entries = match list {
+        Paragraph::OrderedList { entries } | Paragraph::UnorderedList { entries } => entries,
+        _ => return None,
+    };
+    if ctx.entry_index >= entries.len() {
+        return None;
+    }
+    let entry = entries.remove(ctx.entry_index);
+    let became_empty = entries.is_empty();
+    Some((entry, became_empty))
+}
+
+pub(crate) fn indent_list_entry_into_foreign_list(
+    document: &mut Document,
+    pointer: &CursorPointer,
+    source_ctx: &EntryContext,
+    target_list_path: &ParagraphPath,
+) -> Option<CursorPointer> {
+    let list_type = paragraph_ref(document, &source_ctx.list_path)?.paragraph_type();
+    if !matches!(list_type, ParagraphType::OrderedList | ParagraphType::UnorderedList) {
+        return None;
+    }
+
+    let (entry, list_empty) = take_list_entry(document, source_ctx)?;
+    if list_empty {
+        remove_paragraph_by_path(document, &source_ctx.list_path);
+    }
+    if entry.is_empty() {
+        return None;
+    }
+
+    let nested_paragraph = if list_type == ParagraphType::OrderedList {
+        Paragraph::OrderedList { entries: vec![entry.clone()] }
+    } else {
+        Paragraph::UnorderedList { entries: vec![entry.clone()] }
+    };
+
+    let base_path = if let Some(entry_index) = list_entry_append_target(document, target_list_path) {
+        append_paragraph_to_entry(document, target_list_path, entry_index, nested_paragraph)?
+    } else {
+        append_paragraph_to_list(document, target_list_path, nested_paragraph)?
+    };
+    let mut steps = base_path.steps().to_vec();
+    steps.push(PathStep::Entry {
+        entry_index: 0,
+        paragraph_index: source_ctx.paragraph_index.min(entry.len().saturating_sub(1)),
+    });
+    steps.extend(source_ctx.tail_steps.iter().cloned());
+
+    Some(CursorPointer {
+        paragraph_path: ParagraphPath::from_steps(steps),
+        span_path: pointer.span_path.clone(),
+        offset: pointer.offset,
+        segment_kind: pointer.segment_kind,
+    })
+}
+
+pub(crate) fn promote_list_entry_to_parent(
+    document: &mut Document,
+    pointer: &CursorPointer,
+    ctx: &EntryContext,
+    paragraph_index: usize,
+) -> Option<CursorPointer> {
+    let parent_ctx = extract_entry_context(&ctx.list_path)?;
+
+    let (entry, list_became_empty) = take_list_entry(document, ctx)?;
+
+    if entry.is_empty() {
+        return None;
+    }
+
+    if list_became_empty {
+        remove_nested_list_paragraph(document, &parent_ctx);
+    }
+
+    let list = paragraph_mut(document, &parent_ctx.list_path)?;
+    let parent_entries = match list {
+        Paragraph::OrderedList { entries } | Paragraph::UnorderedList { entries } => entries,
+        _ => return None,
+    };
+    let insert_index = (parent_ctx.entry_index + 1).min(parent_entries.len());
+    parent_entries.insert(insert_index, entry);
+
+    let mut steps = parent_ctx.list_path.steps().to_vec();
+    steps.push(PathStep::Entry {
+        entry_index: insert_index,
+        paragraph_index,
+    });
+    steps.extend(ctx.tail_steps.iter().cloned());
+
+    Some(CursorPointer {
+        paragraph_path: ParagraphPath::from_steps(steps),
+        span_path: pointer.span_path.clone(),
+        offset: pointer.offset,
+        segment_kind: pointer.segment_kind,
+    })
 }
 
 pub(crate) fn indent_checklist_item_into_item(

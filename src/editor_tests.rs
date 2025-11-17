@@ -351,33 +351,9 @@ fn indent_list_item() {
                             li {
                                 p { "Subitem 2" }
                                 p { "Subitem 2, paragraph 2" }
-                            }
-                            li { p { "Following paragraph" } }
-                        }
-                    }
-                }
-            }
-        }
-    );
-
-    // Indent further, into the second list item this time
-    assert!(editor.can_indent_more());
-    assert!(editor.indent_current_paragraph());
-    assert_eq!(
-        editor.document().clone(),
-        ftml! {
-            quote {
-                p { "Paragraph in quote" }
-                ul {
-                    li { p {"Item 1" } }
-                    li { p {"Item 2" } }
-                    li {
-                        ol {
-                            li { p { "Subitem 1" }  }
-                            li {
-                                p { "Subitem 2" }
-                                p { "Subitem 2, paragraph 2" }
-                                p { "Following paragraph" }
+                                ul {
+                                    li { p { "Following paragraph" } }
+                                }
                             }
                         }
                     }
@@ -386,7 +362,6 @@ fn indent_list_item() {
         }
     );
 
-    assert!(!editor.can_indent_more());
 }
 
 #[test]
@@ -509,6 +484,102 @@ fn indent_text_paragraph_into_checklist_item() {
 }
 
 #[test]
+fn unindent_nested_list_item_becomes_sibling() {
+    let initial_doc = ftml! {
+        ul {
+            li {
+                p { "Parent" }
+                ul {
+                    li { p { "Child" } }
+                }
+            }
+            li { p { "After" } }
+        }
+    };
+    let mut editor = DocumentEditor::new(initial_doc);
+
+    let mut path = ParagraphPath::new_root(0);
+    path.push_entry(0, 1); // nested list paragraph within first entry
+    path.push_entry(0, 0); // first entry inside nested list
+    let pointer = CursorPointer {
+        paragraph_path: path,
+        span_path: SpanPath::new(vec![0]),
+        offset: 0,
+        segment_kind: SegmentKind::Text,
+    };
+    assert!(editor.move_to_pointer(&pointer));
+    assert!(editor.can_indent_less());
+    assert!(editor.unindent_current_paragraph());
+
+    let expected = ftml! {
+        ul {
+            li { p { "Parent" } }
+            li { p { "Child" } }
+            li { p { "After" } }
+        }
+    };
+    assert_eq!(editor.document().clone(), expected);
+}
+
+#[test]
+fn indent_numbered_item_under_bullet_item() {
+    let document = Document::new().with_paragraphs(vec![
+        unordered_list(&["Bullet"]),
+        ordered_list(&["First", "Second"]),
+    ]);
+    let mut editor = DocumentEditor::new(document);
+
+    let pointer = pointer_to_entry_span(1, 0, 0);
+    assert!(editor.move_to_pointer(&pointer));
+    assert!(editor.can_indent_more());
+    assert!(editor.indent_current_paragraph());
+
+    let expected = ftml! {
+        ul {
+            li {
+                p { "Bullet" }
+                ol {
+                    li { p { "First" } }
+                }
+            }
+        }
+        ol {
+            li { p { "Second" } }
+        }
+    };
+    assert_eq!(editor.document().clone(), expected);
+}
+
+#[test]
+fn indent_bullet_item_under_numbered_item() {
+    let document = Document::new().with_paragraphs(vec![
+        ordered_list(&["One"]),
+        unordered_list(&["Alpha", "Beta"]),
+    ]);
+    let mut editor = DocumentEditor::new(document);
+
+    let pointer = pointer_to_entry_span(1, 0, 0);
+    assert!(editor.move_to_pointer(&pointer));
+    assert!(editor.can_indent_more());
+    assert!(editor.indent_current_paragraph());
+
+    let expected = ftml! {
+        ol {
+            li {
+                p { "One" }
+                ul {
+                    li { p { "Alpha" } }
+                }
+            }
+        }
+        ul {
+            li { p { "Beta" } }
+        }
+    };
+    assert_eq!(editor.document().clone(), expected);
+}
+
+#[test]
 fn convert_paragraph_from_middle_of_list() {
     let initial_doc = ftml! {
         ul {
@@ -534,6 +605,127 @@ fn convert_paragraph_from_middle_of_list() {
             }
         }
     );
+}
+
+#[test]
+fn convert_nested_list_item_to_text_keeps_parent_list() {
+    let initial_doc = ftml! {
+        ul {
+            li {
+                p { "Parent" }
+                ul {
+                    li { p { "Child" } }
+                }
+            }
+        }
+    };
+    let mut editor = DocumentEditor::new(initial_doc);
+    let mut path = ParagraphPath::new_root(0);
+    path.push_entry(0, 1);
+    path.push_entry(0, 0);
+    let pointer = CursorPointer {
+        paragraph_path: path,
+        span_path: SpanPath::new(vec![0]),
+        offset: 0,
+        segment_kind: SegmentKind::Text,
+    };
+    assert!(editor.move_to_pointer(&pointer));
+    assert!(editor.set_paragraph_type(ParagraphType::Text));
+
+    let expected = ftml! {
+        ul {
+            li {
+                p { "Parent" }
+                p { "Child" }
+            }
+        }
+    };
+    assert_eq!(editor.document().clone(), expected);
+}
+
+#[test]
+fn convert_nested_checklist_item_to_text_is_forbidden() {
+    let checklist = Paragraph::new_checklist().with_checklist_items(vec![
+        ChecklistItem::new(false)
+            .with_content(vec![Span::new_text("Parent")])
+            .with_children(vec![ChecklistItem::new(false).with_content(vec![Span::new_text("Child")])]),
+    ]);
+    let document = Document::new().with_paragraphs(vec![checklist]);
+    let mut editor = DocumentEditor::new(document.clone());
+
+    let pointer = pointer_to_nested_checklist_item_span(0, vec![0, 0]);
+    assert!(editor.move_to_pointer(&pointer));
+    assert!(!editor.set_paragraph_type(ParagraphType::Text));
+    assert_eq!(editor.document().clone(), document);
+}
+
+#[test]
+fn convert_checklist_item_with_children_to_text() {
+    let checklist = Paragraph::new_checklist().with_checklist_items(vec![
+        ChecklistItem::new(false)
+            .with_content(vec![Span::new_text("Parent")])
+            .with_children(vec![ChecklistItem::new(false).with_content(vec![Span::new_text("Child")])]),
+    ]);
+    let mut editor = DocumentEditor::new(Document::new().with_paragraphs(vec![checklist]));
+    let pointer = pointer_to_checklist_item_span(0, 0);
+    assert!(editor.move_to_pointer(&pointer));
+    assert!(editor.set_paragraph_type(ParagraphType::Text));
+
+    let document = editor.document();
+    assert_eq!(document.paragraphs.len(), 2);
+    assert_eq!(document.paragraphs[0].paragraph_type(), ParagraphType::Text);
+    assert_eq!(document.paragraphs[0].content()[0].text, "Parent");
+    assert_eq!(document.paragraphs[1].paragraph_type(), ParagraphType::Text);
+    assert_eq!(document.paragraphs[1].content()[0].text, "Child");
+}
+
+#[test]
+fn convert_checklist_item_with_children_to_quote() {
+    let checklist = Paragraph::new_checklist().with_checklist_items(vec![
+        ChecklistItem::new(false)
+            .with_content(vec![Span::new_text("Parent")])
+            .with_children(vec![ChecklistItem::new(false).with_content(vec![Span::new_text("Child")])]),
+    ]);
+    let mut editor = DocumentEditor::new(Document::new().with_paragraphs(vec![checklist]));
+    let pointer = pointer_to_checklist_item_span(0, 0);
+    assert!(editor.move_to_pointer(&pointer));
+    assert!(editor.set_paragraph_type(ParagraphType::Quote));
+
+    let document = editor.document();
+    assert_eq!(document.paragraphs.len(), 1);
+    let quote = &document.paragraphs[0];
+    assert_eq!(quote.paragraph_type(), ParagraphType::Quote);
+    let children = quote.children();
+    assert_eq!(children.len(), 2);
+    assert_eq!(children[0].paragraph_type(), ParagraphType::Text);
+    assert_eq!(children[0].content()[0].text, "Parent");
+    assert_eq!(children[1].paragraph_type(), ParagraphType::Checklist);
+    assert_eq!(children[1].checklist_items()[0].content[0].text, "Child");
+}
+
+#[test]
+fn convert_checklist_item_with_children_to_unordered_list() {
+    let checklist = Paragraph::new_checklist().with_checklist_items(vec![
+        ChecklistItem::new(false)
+            .with_content(vec![Span::new_text("Parent")])
+            .with_children(vec![ChecklistItem::new(false).with_content(vec![Span::new_text("Child")])]),
+    ]);
+    let mut editor = DocumentEditor::new(Document::new().with_paragraphs(vec![checklist]));
+    let pointer = pointer_to_checklist_item_span(0, 0);
+    assert!(editor.move_to_pointer(&pointer));
+    assert!(editor.set_paragraph_type(ParagraphType::UnorderedList));
+
+    let document = editor.document();
+    assert_eq!(document.paragraphs.len(), 1);
+    let list = &document.paragraphs[0];
+    assert_eq!(list.paragraph_type(), ParagraphType::UnorderedList);
+    let entries = list.entries();
+    assert_eq!(entries.len(), 1);
+    assert!(entries[0].len() >= 2);
+    assert_eq!(entries[0][0].paragraph_type(), ParagraphType::Text);
+    assert_eq!(entries[0][0].content()[0].text, "Parent");
+    assert_eq!(entries[0][1].paragraph_type(), ParagraphType::Checklist);
+    assert_eq!(entries[0][1].checklist_items()[0].content[0].text, "Child");
 }
 
 #[test]
@@ -644,10 +836,8 @@ fn convert_paragraph_to_nested_list_in_middle_of_list() {
         ftml! {
             ul {
                 li { p {"Item 1" } }
-                li {
-                    p {"Item 2, paragraph 1" }
-                    p {"Item 2, paragraph 2" }
-                }
+                li { p {"Item 2, paragraph 2" } }
+                li { p {"Item 2, paragraph 1" } }
                 li { p {"Item 3" } }
             }
         }

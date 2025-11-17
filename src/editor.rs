@@ -42,6 +42,7 @@ use structure::{
     parent_paragraph_path,
     IndentTargetKind,
     find_indent_target,
+    find_container_indent_target,
     append_paragraph_to_quote,
     append_paragraph_to_list,
     list_entry_append_target,
@@ -49,6 +50,8 @@ use structure::{
     entry_has_multiple_paragraphs,
     indent_paragraph_within_entry,
     indent_list_entry_into_entry,
+    promote_list_entry_to_parent,
+    indent_list_entry_into_foreign_list,
     indent_checklist_item_into_item,
     append_paragraph_as_checklist_child,
     take_paragraph_at,
@@ -554,7 +557,13 @@ impl DocumentEditor {
     }
 
     pub fn can_indent_more(&self) -> bool {
-        find_indent_target(&self.document, &self.cursor.paragraph_path).is_some()
+        if find_indent_target(&self.document, &self.cursor.paragraph_path).is_some() {
+            return true;
+        }
+        if let Some(ctx) = extract_entry_context(&self.cursor.paragraph_path) {
+            return find_container_indent_target(&self.document, &ctx.list_path).is_some();
+        }
+        false
     }
 
     pub fn can_indent_less(&self) -> bool {
@@ -564,8 +573,21 @@ impl DocumentEditor {
         self.cursor.paragraph_path.steps().len() > 1
     }
 
+    pub fn can_change_paragraph_type(&self) -> bool {
+        if let Some(ctx) = extract_checklist_item_context(&self.cursor.paragraph_path) {
+            return ctx.indices.len() <= 1;
+        }
+        true
+    }
+
     pub fn indent_current_paragraph(&mut self) -> bool {
-        let Some(target) = find_indent_target(&self.document, &self.cursor.paragraph_path) else {
+        let mut target = find_indent_target(&self.document, &self.cursor.paragraph_path);
+        if target.is_none() {
+            if let Some(ctx) = extract_entry_context(&self.cursor.paragraph_path) {
+                target = find_container_indent_target(&self.document, &ctx.list_path);
+            }
+        }
+        let Some(target) = target else {
             return false;
         };
         let pointer = self.cursor_stable_pointer();
@@ -621,6 +643,27 @@ impl DocumentEditor {
                 }
             }
             return true;
+        }
+
+        if matches!(target.kind, IndentTargetKind::List) {
+            if let Some(source_ctx) = extract_entry_context(&pointer.paragraph_path) {
+                if !entry_has_multiple_paragraphs(&self.document, &source_ctx) {
+                    if let Some(new_pointer) = indent_list_entry_into_foreign_list(
+                        &mut self.document,
+                        &pointer,
+                        &source_ctx,
+                        &target.path,
+                    ) {
+                        self.rebuild_segments();
+                        if !self.move_to_pointer(&new_pointer) {
+                            if !self.fallback_move_to_text(&new_pointer, false) {
+                                self.ensure_cursor_selectable();
+                            }
+                        }
+                        return true;
+                    }
+                }
+            }
         }
 
         let Some(paragraph) = take_paragraph_at(&mut self.document, &pointer.paragraph_path) else {
@@ -752,6 +795,22 @@ impl DocumentEditor {
             }
             true
         } else {
+            if let Some(ctx) = extract_entry_context(&pointer.paragraph_path) {
+                if let Some(new_pointer) = promote_list_entry_to_parent(
+                    &mut self.document,
+                    &pointer,
+                    &ctx,
+                    paragraph_index,
+                ) {
+                    self.rebuild_segments();
+                    if !self.move_to_pointer(&new_pointer) {
+                        if !self.fallback_move_to_text(&new_pointer, false) {
+                            self.ensure_cursor_selectable();
+                        }
+                    }
+                    return true;
+                }
+            }
             let Some(mut new_pointer) = break_list_entry_for_non_list_target(
                 &mut self.document,
                 &pointer.paragraph_path,
@@ -772,6 +831,14 @@ impl DocumentEditor {
 
     pub fn set_paragraph_type(&mut self, target: ParagraphType) -> bool {
         let current_pointer = self.cursor.clone();
+
+        let mut in_checklist_context = false;
+        if let Some(ctx) = extract_checklist_item_context(&current_pointer.paragraph_path) {
+            if ctx.indices.len() > 1 {
+                return false;
+            }
+            in_checklist_context = true;
+        }
         let mut replacement_pointer = None;
 
         let mut operation_path = current_pointer.paragraph_path.clone();
@@ -782,23 +849,39 @@ impl DocumentEditor {
             is_single_paragraph_entry(&self.document, &current_pointer.paragraph_path);
 
 
-        if let Some(scope) = determine_parent_scope(&self.document, &operation_path) {
-            operation_path = scope.parent_path.clone();
-            let needs_promotion = match scope.relation {
-                ParentRelation::Child(_) => true,
-                ParentRelation::Entry { .. } => !is_list_type(target),
-            };
+        if !in_checklist_context {
+            if let Some(scope) = determine_parent_scope(&self.document, &operation_path) {
+                operation_path = scope.parent_path.clone();
+                let needs_promotion = match scope.relation {
+                    ParentRelation::Child(_) => true,
+                    ParentRelation::Entry { .. } => !is_list_type(target),
+                };
 
-            if needs_promotion {
-                if !promote_single_child_into_parent(&mut self.document, &scope) {
-                    return false;
+                if needs_promotion {
+                    if !promote_single_child_into_parent(&mut self.document, &scope) {
+                        return false;
+                    }
+                    pointer_hint = Some(CursorPointer {
+                        paragraph_path: operation_path.clone(),
+                        span_path: current_pointer.span_path.clone(),
+                        offset: current_pointer.offset,
+                        segment_kind: current_pointer.segment_kind,
+                    });
                 }
-                pointer_hint = Some(CursorPointer {
-                    paragraph_path: operation_path.clone(),
-                    span_path: current_pointer.span_path.clone(),
-                    offset: current_pointer.offset,
-                    segment_kind: current_pointer.segment_kind,
-                });
+            }
+        }
+
+        if in_checklist_context && is_list_type(target) {
+            if let Some(pointer) = break_list_entry_for_non_list_target(
+                &mut self.document,
+                &current_pointer.paragraph_path,
+                target,
+            ) {
+                operation_path = pointer.paragraph_path.clone();
+                pointer_hint = Some(pointer);
+                handled_directly = true;
+            } else {
+                return false;
             }
         }
 
@@ -897,6 +980,7 @@ impl DocumentEditor {
 
         true
     }
+
 
     pub fn insert_paragraph_break(&mut self) -> bool {
         if !self.cursor.is_valid() {
