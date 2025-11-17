@@ -916,7 +916,7 @@ fn checklist_items_container_mut<'a>(
     Some(current)
 }
 
-fn take_checklist_item_at(
+pub(crate) fn take_checklist_item_at(
     document: &mut Document,
     ctx: &ChecklistItemContext,
 ) -> Option<ChecklistItem> {

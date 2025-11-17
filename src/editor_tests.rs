@@ -541,6 +541,108 @@ fn indent_text_paragraph_into_checklist_item() {
 }
 
 #[test]
+fn backspace_merges_checklist_item_into_previous_paragraph() {
+    let inner_ordered = Paragraph::new_ordered_list().with_entries(vec![
+        vec![text_paragraph("Inner first paragraph")],
+        vec![
+            text_paragraph("Inner second paragraph"),
+            text_paragraph("Target paragraph"),
+        ],
+    ]);
+
+    let outer_list = Paragraph::new_unordered_list().with_entries(vec![
+        vec![text_paragraph("Outer first paragraph")],
+        vec![text_paragraph("Outer second paragraph"), inner_ordered],
+    ]);
+
+    let blockquote = Paragraph::new_quote().with_children(vec![outer_list]);
+
+    let child_item =
+        ChecklistItem::new(false).with_content(vec![Span::new_text("Child checklist")]);
+    let parent_item = ChecklistItem::new(false)
+        .with_content(vec![Span::new_text("Parent checklist")])
+        .with_children(vec![child_item]);
+
+    let checklist = Paragraph::new_checklist().with_checklist_items(vec![parent_item]);
+
+    let document = Document::new().with_paragraphs(vec![blockquote, checklist]);
+    let mut editor = DocumentEditor::new(document);
+
+    let pointer = pointer_to_checklist_item_span(1, 0);
+    assert!(editor.move_to_pointer(&pointer));
+    assert!(editor.backspace());
+
+    let doc = editor.document();
+    assert_eq!(doc.paragraphs.len(), 1);
+    let Paragraph::Quote { children } = &doc.paragraphs[0] else {
+        panic!("expected blockquote as first paragraph");
+    };
+    assert_eq!(children.len(), 1);
+    let Paragraph::UnorderedList { entries } = &children[0] else {
+        panic!("expected unordered list inside blockquote");
+    };
+    assert_eq!(entries.len(), 2);
+
+    let second_entry = &entries[1];
+    assert_eq!(second_entry.len(), 2);
+    let Paragraph::OrderedList { entries: inner_entries } = &second_entry[1] else {
+        panic!("expected nested ordered list");
+    };
+    assert_eq!(inner_entries.len(), 2);
+    let second_inner_entry = &inner_entries[1];
+    assert_eq!(second_inner_entry.len(), 3);
+
+    let merged_paragraph = &second_inner_entry[1];
+    assert_eq!(
+        merged_paragraph.content()[0].text,
+        "Target paragraphParent checklist"
+    );
+
+    let Paragraph::Checklist { items } = &second_inner_entry[2] else {
+        panic!("expected checklist paragraph inserted");
+    };
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].content[0].text, "Child checklist");
+}
+
+#[test]
+fn backspace_merges_checklist_item_into_previous_checklist_item() {
+    let existing_child =
+        ChecklistItem::new(false).with_content(vec![Span::new_text("Existing child")]);
+    let first_item = ChecklistItem::new(false)
+        .with_content(vec![Span::new_text("First item")])
+        .with_children(vec![existing_child]);
+    let second_child =
+        ChecklistItem::new(false).with_content(vec![Span::new_text("Second child")]);
+    let second_item = ChecklistItem::new(false)
+        .with_content(vec![Span::new_text("Second item")])
+        .with_children(vec![second_child]);
+
+    let checklist = Paragraph::new_checklist().with_checklist_items(vec![first_item, second_item]);
+    let document = Document::new().with_paragraphs(vec![checklist]);
+    let mut editor = DocumentEditor::new(document);
+
+    let pointer = pointer_to_checklist_item_span(0, 1);
+    assert!(editor.move_to_pointer(&pointer));
+    assert!(editor.backspace());
+
+    let doc = editor.document();
+    assert_eq!(doc.paragraphs.len(), 1);
+    let checklist = &doc.paragraphs[0];
+    assert_eq!(checklist.checklist_items().len(), 1);
+    let merged = &checklist.checklist_items()[0];
+    let merged_text: String = merged
+        .content
+        .iter()
+        .map(|span| span.text.as_str())
+        .collect();
+    assert_eq!(merged_text, "First itemSecond item");
+    assert_eq!(merged.children.len(), 2);
+    assert_eq!(merged.children[0].content[0].text, "Existing child");
+    assert_eq!(merged.children[1].content[0].text, "Second child");
+}
+
+#[test]
 fn unindent_nested_list_item_becomes_sibling() {
     let initial_doc = ftml! {
         ul {

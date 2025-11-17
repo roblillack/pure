@@ -54,6 +54,7 @@ use structure::{
     indent_list_entry_into_foreign_list,
     indent_checklist_item_into_item,
     append_paragraph_as_checklist_child,
+    take_checklist_item_at,
     take_paragraph_at,
     insert_paragraph_after_parent,
     remove_paragraph_by_path,
@@ -1073,6 +1074,9 @@ impl DocumentEditor {
             }
         }
         if self.cursor.offset == 0 {
+            if self.try_merge_checklist_item_with_previous_paragraph() {
+                return true;
+            }
             if !self.shift_to_previous_segment() {
                 return false;
             }
@@ -1106,6 +1110,208 @@ impl DocumentEditor {
         } else {
             false
         }
+    }
+
+    fn try_merge_checklist_item_with_previous_paragraph(&mut self) -> bool {
+        if self.segments.is_empty() {
+            return false;
+        }
+        if !matches!(self.cursor.segment_kind, SegmentKind::Text) {
+            return false;
+        }
+        let current_segment = match self.segments.get(self.cursor_segment) {
+            Some(segment) => segment.clone(),
+            None => return false,
+        };
+        if !matches!(
+            current_segment.paragraph_path.steps().last(),
+            Some(PathStep::ChecklistItem { .. })
+        ) {
+            return false;
+        }
+
+        // Ensure we're at the start of the checklist item (ignoring zero-length and reveal segments)
+        let mut idx = self.cursor_segment;
+        while idx > 0 {
+            idx -= 1;
+            let segment = &self.segments[idx];
+            if segment.paragraph_path != current_segment.paragraph_path {
+                break;
+            }
+            if matches!(segment.kind, SegmentKind::Text) && segment.len > 0 {
+                return false;
+            }
+        }
+
+        let Some(ctx) = extract_checklist_item_context(&current_segment.paragraph_path) else {
+            return false;
+        };
+
+        let previous_item_path = ctx.indices.last().and_then(|last| {
+            if *last == 0 {
+                return None;
+            }
+            let mut prev_indices = ctx.indices.clone();
+            if let Some(last_mut) = prev_indices.last_mut() {
+                *last_mut -= 1;
+            }
+            let mut steps = ctx.checklist_path.steps().to_vec();
+            steps.push(PathStep::ChecklistItem { indices: prev_indices });
+            Some(ParagraphPath::from_steps(steps))
+        });
+
+        let target_path = if let Some(prev_path) = previous_item_path {
+            prev_path
+        } else {
+            let mut search_idx = self.cursor_segment;
+            let mut found_path: Option<ParagraphPath> = None;
+            while search_idx > 0 {
+                search_idx -= 1;
+                let segment = &self.segments[search_idx];
+                if !matches!(segment.kind, SegmentKind::Text) {
+                    continue;
+                }
+                if segment.paragraph_path == current_segment.paragraph_path {
+                    continue;
+                }
+                found_path = Some(segment.paragraph_path.clone());
+                break;
+            }
+            match found_path {
+                Some(path) => path,
+                None => return false,
+            }
+        };
+        let target_char_count: usize = self
+            .segments
+            .iter()
+            .filter(|segment| {
+                matches!(segment.kind, SegmentKind::Text)
+                    && segment.paragraph_path == target_path
+            })
+            .map(|segment| segment.len)
+            .sum();
+
+        enum MergeTargetKind {
+            Paragraph,
+            ChecklistItem,
+        }
+
+        let target_kind = if matches!(
+            target_path.steps().last(),
+            Some(PathStep::ChecklistItem { .. })
+        ) {
+            MergeTargetKind::ChecklistItem
+        } else {
+            if paragraph_ref(&self.document, &target_path).is_none() {
+                return false;
+            }
+            MergeTargetKind::Paragraph
+        };
+
+        let Some(item) = take_checklist_item_at(&mut self.document, &ctx) else {
+            return false;
+        };
+
+        // If we removed the only item in a top-level checklist, remove the checklist paragraph itself.
+        if ctx.indices.len() == 1 {
+            let mut remove_checklist = false;
+            if let Some(paragraph) = paragraph_mut(&mut self.document, &ctx.checklist_path) {
+                if let Paragraph::Checklist { items } = paragraph {
+                    if items.is_empty() {
+                        remove_checklist = true;
+                    }
+                }
+            }
+            if remove_checklist {
+                remove_paragraph_by_path(&mut self.document, &ctx.checklist_path);
+            }
+        }
+
+        let ChecklistItem {
+            checked: _,
+            mut content,
+            mut children,
+        } = item;
+
+        match target_kind {
+            MergeTargetKind::Paragraph => {
+                let maybe_paragraph = paragraph_mut(&mut self.document, &target_path);
+                let Some(target_paragraph) = maybe_paragraph else {
+                    self.rebuild_segments();
+                    self.ensure_cursor_selectable();
+                    return true;
+                };
+                let spans = target_paragraph.content_mut();
+                if spans.is_empty() {
+                    spans.push(Span::new_text(""));
+                }
+                if !content.is_empty() {
+                    spans.extend(content.drain(..));
+                }
+                prune_and_merge_spans(spans);
+
+                if !children.is_empty() {
+                    let child_paragraph =
+                        Paragraph::new_checklist().with_checklist_items(children);
+                    let _ =
+                        insert_paragraph_after_parent(&mut self.document, &target_path, child_paragraph);
+                }
+            }
+            MergeTargetKind::ChecklistItem => {
+                let Some(target_item) = checklist_item_mut(&mut self.document, &target_path) else {
+                    return false;
+                };
+                if target_item.content.is_empty() {
+                    target_item.content.push(Span::new_text(""));
+                }
+                if !content.is_empty() {
+                    target_item.content.extend(content.drain(..));
+                }
+                prune_and_merge_spans(&mut target_item.content);
+
+                if !children.is_empty() {
+                    target_item.children.extend(children);
+                }
+            }
+        }
+
+        self.rebuild_segments();
+
+        if let Some(pointer) =
+            self.pointer_at_paragraph_char_offset(&target_path, target_char_count)
+        {
+            if !self.move_to_pointer(&pointer) {
+                if !self.fallback_move_to_text(&pointer, false) {
+                    self.ensure_cursor_selectable();
+                }
+            }
+        } else {
+            self.ensure_cursor_selectable();
+        }
+
+        true
+    }
+
+    fn pointer_at_paragraph_char_offset(
+        &self,
+        path: &ParagraphPath,
+        mut char_offset: usize,
+    ) -> Option<CursorPointer> {
+        for segment in &self.segments {
+            if segment.paragraph_path == *path && matches!(segment.kind, SegmentKind::Text) {
+                if char_offset <= segment.len {
+                    return Some(CursorPointer {
+                        paragraph_path: segment.paragraph_path.clone(),
+                        span_path: segment.span_path.clone(),
+                        offset: char_offset,
+                        segment_kind: SegmentKind::Text,
+                    });
+                }
+                char_offset = char_offset.saturating_sub(segment.len);
+            }
+        }
+        None
     }
 
     pub fn delete(&mut self) -> bool {
