@@ -100,17 +100,43 @@ impl DocumentEditor {
         }
 
         if changed {
+            // Collect all unique root paths that need updating
+            let mut unique_paths = Vec::new();
+
             for path in touched_paragraphs {
                 if let Some(paragraph) = paragraph_mut(&mut self.document, &path) {
                     prune_and_merge_spans(paragraph.content_mut());
+                }
+                // Get the root path for this paragraph (first step in path)
+                if let Some(first_step) = path.steps().first() {
+                    let root_path = super::ParagraphPath::from_steps(vec![first_step.clone()]);
+                    if !unique_paths.iter().any(|p| p == &root_path) {
+                        unique_paths.push(root_path);
+                    }
                 }
             }
             for path in touched_checklists {
                 if let Some(item) = checklist_item_mut(&mut self.document, &path) {
                     prune_and_merge_spans(&mut item.content);
                 }
+                // Get the root path for this checklist (first step in path)
+                if let Some(first_step) = path.steps().first() {
+                    let root_path = super::ParagraphPath::from_steps(vec![first_step.clone()]);
+                    if !unique_paths.iter().any(|p| p == &root_path) {
+                        unique_paths.push(root_path);
+                    }
+                }
             }
-            self.rebuild_segments();
+
+            // Incrementally update only the affected root paragraphs
+            if unique_paths.len() == 1 {
+                // Single paragraph affected: use incremental update
+                self.update_segments_for_paragraph(&unique_paths[0]);
+            } else if unique_paths.len() > 1 {
+                // Multiple root paragraphs affected: fall back to full rebuild for simplicity
+                // (Could be optimized further to update each root incrementally)
+                self.rebuild_segments();
+            }
         }
 
         changed

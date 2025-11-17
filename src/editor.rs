@@ -1021,7 +1021,8 @@ impl DocumentEditor {
         }
         if insert_char_at(&mut self.document, &pointer, self.cursor.offset, ch) {
             self.cursor.offset += 1;
-            self.rebuild_segments();
+            // Incremental update: only rebuild segments for the modified paragraph
+            self.update_segments_for_paragraph(&pointer.paragraph_path);
             true
         } else {
             false
@@ -1105,7 +1106,8 @@ impl DocumentEditor {
         }
         let pointer = self.cursor.clone();
         if remove_char_at(&mut self.document, &pointer, self.cursor.offset) {
-            self.rebuild_segments();
+            // Incremental update: only rebuild segments for the modified paragraph
+            self.update_segments_for_paragraph(&pointer.paragraph_path);
             true
         } else {
             false
@@ -1340,7 +1342,8 @@ impl DocumentEditor {
             }
             let pointer = self.cursor.clone();
             if remove_char_at(&mut self.document, &pointer, self.cursor.offset) {
-                self.rebuild_segments();
+                // Incremental update: only rebuild segments for the modified paragraph
+                self.update_segments_for_paragraph(&pointer.paragraph_path);
                 return true;
             }
             return false;
@@ -1371,7 +1374,15 @@ impl DocumentEditor {
             segment_kind: next_segment.kind,
         };
         if remove_char_at(&mut self.document, &pointer, 0) {
-            self.rebuild_segments();
+            // Check if we're deleting within the same paragraph or crossing paragraphs
+            let current_para = &self.segments[self.cursor_segment].paragraph_path;
+            if current_para == &pointer.paragraph_path {
+                // Same paragraph: use incremental update
+                self.update_segments_for_paragraph(&pointer.paragraph_path);
+            } else {
+                // Different paragraphs: this might be a merge operation, use full rebuild
+                self.rebuild_segments();
+            }
             true
         } else {
             false

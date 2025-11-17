@@ -755,6 +755,57 @@ impl DocumentEditor {
         self.clamp_cursor_offset();
     }
 
+    /// Incrementally update segments for a single paragraph without rebuilding the entire tree.
+    /// This is much faster than rebuild_segments() for localized changes.
+    pub(crate) fn update_segments_for_paragraph(&mut self, root_path: &ParagraphPath) {
+        // Find the range of segments belonging to this paragraph tree
+        let (start_idx, end_idx) = self.find_paragraph_segment_range(root_path);
+
+        // Collect new segments for just this paragraph tree
+        let new_segments = super::inspect::collect_segments_for_paragraph_tree(
+            &self.document,
+            root_path,
+            self.reveal_codes
+        );
+
+        // Replace the old segment range with new segments
+        self.segments.splice(start_idx..end_idx, new_segments);
+
+        // If segments are now empty, ensure we have a placeholder
+        if self.segments.is_empty() {
+            self.ensure_placeholder_segment();
+            self.segments = collect_segments(&self.document, self.reveal_codes);
+        }
+
+        if self.segments.is_empty() {
+            self.cursor = CursorPointer::default();
+            self.cursor_segment = 0;
+            return;
+        }
+
+        // Re-sync cursor position
+        self.sync_cursor_segment();
+        self.clamp_cursor_offset();
+    }
+
+    /// Find the range [start, end) of segments belonging to a paragraph path and all its descendants.
+    fn find_paragraph_segment_range(&self, root_path: &ParagraphPath) -> (usize, usize) {
+        use super::inspect::paragraph_path_is_prefix;
+
+        let start = self.segments
+            .iter()
+            .position(|seg| paragraph_path_is_prefix(root_path, &seg.paragraph_path))
+            .unwrap_or(self.segments.len());
+
+        let end = self.segments[start..]
+            .iter()
+            .position(|seg| !paragraph_path_is_prefix(root_path, &seg.paragraph_path))
+            .map(|offset| start + offset)
+            .unwrap_or(self.segments.len());
+
+        (start, end)
+    }
+
     pub(crate) fn ensure_placeholder_segment(&mut self) {
         if self.document.paragraphs.is_empty() {
             self.document
