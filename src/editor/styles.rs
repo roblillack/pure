@@ -1,5 +1,6 @@
 use super::content::{apply_style_to_span_path, prune_and_merge_spans};
 use super::{
+    checklist_item_mut,
     paragraph_mut,
     CursorPointer,
     DocumentEditor,
@@ -8,6 +9,12 @@ use super::{
     SegmentRef,
 };
 use tdoc::InlineStyle;
+
+enum InlineStyleScope {
+    None,
+    Paragraph,
+    Checklist,
+}
 
 impl DocumentEditor {
     pub fn apply_inline_style_to_selection(
@@ -42,7 +49,8 @@ impl DocumentEditor {
 
         let segments_snapshot = self.segments.clone();
         let mut changed = false;
-        let mut touched_paths: Vec<ParagraphPath> = Vec::new();
+        let mut touched_paragraphs: Vec<ParagraphPath> = Vec::new();
+        let mut touched_checklists: Vec<ParagraphPath> = Vec::new();
 
         for segment_index in (start_key.segment_index..=end_key.segment_index).rev() {
             let Some(segment) = segments_snapshot.get(segment_index) else {
@@ -68,21 +76,38 @@ impl DocumentEditor {
                 continue;
             }
 
-            if self.apply_inline_style_to_segment(segment, seg_start, seg_end, style) {
-                changed = true;
-                if !touched_paths
-                    .iter()
-                    .any(|path| *path == segment.paragraph_path)
-                {
-                    touched_paths.push(segment.paragraph_path.clone());
+            match self.apply_inline_style_to_segment(segment, seg_start, seg_end, style) {
+                InlineStyleScope::None => {}
+                InlineStyleScope::Paragraph => {
+                    changed = true;
+                    if !touched_paragraphs
+                        .iter()
+                        .any(|path| *path == segment.paragraph_path)
+                    {
+                        touched_paragraphs.push(segment.paragraph_path.clone());
+                    }
+                }
+                InlineStyleScope::Checklist => {
+                    changed = true;
+                    if !touched_checklists
+                        .iter()
+                        .any(|path| *path == segment.paragraph_path)
+                    {
+                        touched_checklists.push(segment.paragraph_path.clone());
+                    }
                 }
             }
         }
 
         if changed {
-            for path in touched_paths {
+            for path in touched_paragraphs {
                 if let Some(paragraph) = paragraph_mut(&mut self.document, &path) {
                     prune_and_merge_spans(paragraph.content_mut());
+                }
+            }
+            for path in touched_checklists {
+                if let Some(item) = checklist_item_mut(&mut self.document, &path) {
+                    prune_and_merge_spans(&mut item.content);
                 }
             }
             self.rebuild_segments();
@@ -97,17 +122,34 @@ impl DocumentEditor {
         start: usize,
         end: usize,
         style: InlineStyle,
-    ) -> bool {
+    ) -> InlineStyleScope {
+        if let Some(item) = checklist_item_mut(&mut self.document, &segment.paragraph_path) {
+            if apply_style_to_span_path(
+                &mut item.content,
+                segment.span_path.indices(),
+                start,
+                end,
+                style,
+            ) {
+                return InlineStyleScope::Checklist;
+            }
+            return InlineStyleScope::None;
+        }
+
         let Some(paragraph) = paragraph_mut(&mut self.document, &segment.paragraph_path) else {
-            return false;
+            return InlineStyleScope::None;
         };
-        apply_style_to_span_path(
+        if apply_style_to_span_path(
             paragraph.content_mut(),
             segment.span_path.indices(),
             start,
             end,
             style,
-        )
+        ) {
+            InlineStyleScope::Paragraph
+        } else {
+            InlineStyleScope::None
+        }
     }
 }
 

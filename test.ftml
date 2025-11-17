@@ -9,7 +9,7 @@
     state with the item
   </li>
   <li><input type="checkbox" /> Performance of moving the cursor</li>
-  <li><input type="checkbox" /> Styling for checklist items</li>
+  <li><input type="checkbox" checked /> Styling for checklist items</li>
   <li><input type="checkbox" /> Number child paragraphs of lists</li>
   <li>
     <input type="checkbox" /> Separate inline styles from paragraph styles in status bar
@@ -39,10 +39,13 @@
   <li>
     <input type="checkbox" /> Keyboard shortcut to toggle checklist items?
   </li>
+  <li><input type="checkbox" /> Sorting paragraphs with Alt-Up/Down</li>
   <li>
     <input type="checkbox" checked /> Context menu entry to toggle checklist items
   </li>
-  <li><input type="checkbox" /> Support for nesting checklist items</li>
+  <li>
+    <input type="checkbox" checked /> Support for nesting checklist items
+  </li>
   <li>
     <input type="checkbox" /> Wire keyboard shortcuts for basic inline styling where possible (Ctrl-B,
     Ctrl-I, Ctrl-U, Ctrl-K)
@@ -54,7 +57,7 @@
   </li>
   <li>
     <input type="checkbox" /> Adapt rendering to be more in line with tdoc: Horizontal padding, max
-    screen width, marging between heading paragraphs, what else?
+    screen width, margins between heading paragraphs, what else?
   </li>
   <li>
     <input type="checkbox" /> Style scrollbar like in tdoc, fix calculation
@@ -85,7 +88,7 @@
     <input type="checkbox" checked /> Keep position when toggling Reveal Codes mode
   </li>
   <li>
-    <input type="checkbox" /> Clarify shown paragraph type in interface by only showing "Text" if this is
+    <input type="checkbox" checked /> Clarify shown paragraph type in interface by only showing "Text" if this is
     a toplevel text paragraph. In all other cases, we should show the
     "effective paragraph type" which structurally makes way more sense to think
     about

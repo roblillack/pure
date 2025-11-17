@@ -9,8 +9,27 @@ fn pointer_to_root_span(root_index: usize) -> CursorPointer {
     }
 }
 
+fn pointer_to_checklist_item_span(root_index: usize, item_index: usize) -> CursorPointer {
+    let mut path = ParagraphPath::new_root(root_index);
+    path.push_checklist_item(vec![item_index]);
+    CursorPointer {
+        paragraph_path: path,
+        span_path: SpanPath::new(vec![0]),
+        offset: 0,
+        segment_kind: SegmentKind::Text,
+    }
+}
+
 fn text_paragraph(text: &str) -> Paragraph {
     Paragraph::new_text().with_content(vec![Span::new_text(text)])
+}
+
+fn checklist(items: &[&str]) -> Paragraph {
+    let checklist_items = items
+        .iter()
+        .map(|text| ChecklistItem::new(false).with_content(vec![Span::new_text(*text)]))
+        .collect::<Vec<_>>();
+    Paragraph::new_checklist().with_checklist_items(checklist_items)
 }
 
 #[test]
@@ -86,4 +105,30 @@ fn clear_inline_style_resets_to_plain() {
     assert_eq!(spans.len(), 1);
     assert_eq!(spans[0].text, "styled text");
     assert_eq!(spans[0].style, InlineStyle::None);
+}
+
+#[test]
+fn apply_inline_style_in_checklist_item() {
+    let document = Document::new().with_paragraphs(vec![checklist(&["make tea"])]);
+    let mut editor = DocumentEditor::new(document);
+
+    let start = pointer_to_checklist_item_span(0, 0);
+    let mut end = start.clone();
+    end.offset = 4;
+
+    assert!(
+        editor.apply_inline_style_to_selection(&(start.clone(), end.clone()), InlineStyle::Italic)
+    );
+
+    let doc = editor.document();
+    let Paragraph::Checklist { items } = &doc.paragraphs[0] else {
+        panic!("expected checklist paragraph");
+    };
+    assert_eq!(items.len(), 1);
+    let item = &items[0];
+    assert_eq!(item.content.len(), 2);
+    assert_eq!(item.content[0].text, "make");
+    assert_eq!(item.content[0].style, InlineStyle::Italic);
+    assert_eq!(item.content[1].text, " tea");
+    assert_eq!(item.content[1].style, InlineStyle::None);
 }
