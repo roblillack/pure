@@ -5,6 +5,19 @@
 <ul>
   <li><input type="checkbox" checked /> Jumping by word</li>
   <li>
+    <input type="checkbox" /> Checklists: Moving downwards by adding Enter in front should move "checked"
+    state with the item
+  </li>
+  <li><input type="checkbox" /> Performance of moving the cursor</li>
+  <li><input type="checkbox" checked /> Styling for checklist items</li>
+  <li><input type="checkbox" /> Number child paragraphs of lists</li>
+  <li>
+    <input type="checkbox" /> Separate inline styles from paragraph styles in status bar
+  </li>
+  <li>
+    <input type="checkbox" /> Format line/char in statusbar as "7:34" instead "[7,34]"
+  </li>
+  <li>
     <input type="checkbox" checked /> Delete by word (Ctrl-Backspace, Ctrl-Delete, Ctrl-W)
   </li>
   <li>
@@ -26,8 +39,12 @@
   <li>
     <input type="checkbox" /> Keyboard shortcut to toggle checklist items?
   </li>
+  <li><input type="checkbox" /> Sorting paragraphs with Alt-Up/Down</li>
   <li>
     <input type="checkbox" checked /> Context menu entry to toggle checklist items
+  </li>
+  <li>
+    <input type="checkbox" checked /> Support for nesting checklist items
   </li>
   <li>
     <input type="checkbox" /> Wire keyboard shortcuts for basic inline styling where possible (Ctrl-B,
@@ -40,7 +57,7 @@
   </li>
   <li>
     <input type="checkbox" /> Adapt rendering to be more in line with tdoc: Horizontal padding, max
-    screen width, marging between heading paragraphs, what else?
+    screen width, margins between heading paragraphs, what else?
   </li>
   <li>
     <input type="checkbox" /> Style scrollbar like in tdoc, fix calculation
@@ -71,7 +88,7 @@
     <input type="checkbox" checked /> Keep position when toggling Reveal Codes mode
   </li>
   <li>
-    <input type="checkbox" /> Clarify shown paragraph type in interface by only showing "Text" if this is
+    <input type="checkbox" checked /> Clarify shown paragraph type in interface by only showing "Text" if this is
     a toplevel text paragraph. In all other cases, we should show the
     "effective paragraph type" which structurally makes way more sense to think
     about
@@ -118,8 +135,8 @@
   <li>
     <p>This is another test.</p>
     <p>We have a second paragraph here.</p>
+    <p>Und hier kommt dann noch ein Test.</p>
     <ul>
-      <p>Und hier kommt dann noch ein Test.</p>
     </ul>
   </li>
 </ul>

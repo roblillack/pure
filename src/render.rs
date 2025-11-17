@@ -166,7 +166,7 @@ impl<'a> Renderer<'a> {
     }
 
     fn render_paragraph(&mut self, paragraph: &Paragraph, prefix: &str) {
-        match paragraph.paragraph_type {
+        match paragraph.paragraph_type() {
             ParagraphType::Text => self.render_text_paragraph(paragraph, prefix, prefix),
             ParagraphType::Header1 => self.render_header(paragraph, prefix, HeaderLevel::One),
             ParagraphType::Header2 => self.render_header(paragraph, prefix, HeaderLevel::Two),
@@ -176,7 +176,6 @@ impl<'a> Renderer<'a> {
             ParagraphType::UnorderedList => self.render_unordered_list(paragraph, prefix),
             ParagraphType::OrderedList => self.render_ordered_list(paragraph, prefix),
             ParagraphType::Checklist => self.render_checklist(paragraph, prefix),
-            ParagraphType::ChecklistItem => self.render_checklist_item(paragraph, prefix),
         }
     }
 
@@ -192,7 +191,7 @@ impl<'a> Renderer<'a> {
             marker_map: &self.marker_map,
             reveal_tags: &self.reveal_tags,
         };
-        for span in &paragraph.content {
+        for span in paragraph.content() {
             collect_fragments(span, Style::default(), &ctx, &mut fragments);
         }
         let fragments = trim_layout_fragments(fragments);
@@ -212,7 +211,7 @@ impl<'a> Renderer<'a> {
             marker_map: &self.marker_map,
             reveal_tags: &self.reveal_tags,
         };
-        for span in &paragraph.content {
+        for span in paragraph.content() {
             collect_fragments(span, Style::default(), &ctx, &mut fragments);
         }
         let fragments = trim_layout_fragments(fragments);
@@ -260,7 +259,7 @@ impl<'a> Renderer<'a> {
             marker_map: &self.marker_map,
             reveal_tags: &self.reveal_tags,
         };
-        for span in &paragraph.content {
+        for span in paragraph.content() {
             collect_fragments(span, Style::default(), &ctx, &mut fragments);
         }
         let lines = wrap_fragments(&fragments, prefix, prefix, usize::MAX / 4);
@@ -271,11 +270,11 @@ impl<'a> Renderer<'a> {
 
     fn render_quote(&mut self, paragraph: &Paragraph, prefix: &str) {
         let quote_prefix = format!("{}| ", prefix);
-        if !paragraph.content.is_empty() {
+        if !paragraph.content().is_empty() {
             self.render_text_paragraph(paragraph, &quote_prefix, &quote_prefix);
         }
-        for (idx, child) in paragraph.children.iter().enumerate() {
-            if idx > 0 || !paragraph.content.is_empty() {
+        for (idx, child) in paragraph.children().iter().enumerate() {
+            if idx > 0 || !paragraph.content().is_empty() {
                 self.push_plain_line(&quote_prefix, false);
             }
             self.render_paragraph(child, &quote_prefix);
@@ -283,7 +282,7 @@ impl<'a> Renderer<'a> {
     }
 
     fn render_unordered_list(&mut self, paragraph: &Paragraph, prefix: &str) {
-        for (idx, entry) in paragraph.entries.iter().enumerate() {
+        for (idx, entry) in paragraph.entries().iter().enumerate() {
             if idx > 0 {
                 self.push_plain_line("", false);
             }
@@ -295,7 +294,7 @@ impl<'a> Renderer<'a> {
     }
 
     fn render_ordered_list(&mut self, paragraph: &Paragraph, prefix: &str) {
-        for (idx, entry) in paragraph.entries.iter().enumerate() {
+        for (idx, entry) in paragraph.entries().iter().enumerate() {
             if idx > 0 {
                 self.push_plain_line("", false);
             }
@@ -313,39 +312,51 @@ impl<'a> Renderer<'a> {
     }
 
     fn render_checklist(&mut self, paragraph: &Paragraph, prefix: &str) {
-        for (idx, entry) in paragraph.entries.iter().enumerate() {
+        for (idx, item) in paragraph.checklist_items().iter().enumerate() {
             if idx > 0 {
                 self.push_plain_line("", false);
             }
-            if let Some(item) = entry
-                .iter()
-                .find(|p| p.paragraph_type == ParagraphType::ChecklistItem)
-            {
-                self.render_checklist_item(item, prefix);
-                for rest in entry
-                    .iter()
-                    .filter(|p| p.paragraph_type != ParagraphType::ChecklistItem)
-                {
-                    self.render_paragraph(rest, prefix);
-                }
-            } else if let Some(first) = entry.first() {
-                self.render_text_paragraph(first, prefix, prefix);
-                for rest in entry.iter().skip(1) {
-                    self.render_paragraph(rest, prefix);
-                }
-            }
+            self.render_checklist_item_struct(item, prefix);
         }
     }
 
-    fn render_checklist_item(&mut self, paragraph: &Paragraph, prefix: &str) {
-        let marker = if paragraph.checklist_item_checked.unwrap_or(false) {
-            "[✓] "
-        } else {
-            "[ ] "
-        };
+    fn render_checklist_item_struct(&mut self, item: &tdoc::ChecklistItem, prefix: &str) {
+        let marker = if item.checked { "[✓] " } else { "[ ] " };
         let first_prefix = format!("{}{}", prefix, marker);
         let continuation_prefix = format!("{}{}", prefix, " ".repeat(marker.chars().count()));
-        self.render_text_paragraph(paragraph, &first_prefix, &continuation_prefix);
+
+        let mut fragments = Vec::new();
+        let ctx = FragmentContext {
+            sentinels: self.sentinels,
+            marker_map: &self.marker_map,
+            reveal_tags: &self.reveal_tags,
+        };
+        for span in &item.content {
+            collect_fragments(span, Style::default(), &ctx, &mut fragments);
+        }
+        let fragments = trim_layout_fragments(fragments);
+        let lines = wrap_fragments(
+            &fragments,
+            &first_prefix,
+            &continuation_prefix,
+            self.wrap_limit,
+        );
+        self.consume_lines(lines);
+
+        // Render nested checklist items
+        for child in &item.children {
+            let child_prefix = format!("{}    ", prefix);
+            self.render_checklist_item_struct(child, &child_prefix);
+        }
+    }
+
+    // Deprecated: render_checklist_item for old Paragraph-based checklist API
+    // This function is no longer used since checklists now use ChecklistItem structs
+    #[allow(dead_code)]
+    fn render_checklist_item(&mut self, paragraph: &Paragraph, prefix: &str) {
+        // This is a deprecated function kept for compatibility
+        // Checklists now use render_checklist_item_struct
+        self.render_text_paragraph(paragraph, prefix, prefix);
     }
 
     fn render_list_entry(
@@ -361,12 +372,9 @@ impl<'a> Renderer<'a> {
 
         let mut iter = entry.iter();
         if let Some(first) = iter.next() {
-            match first.paragraph_type {
+            match first.paragraph_type() {
                 ParagraphType::Text => {
                     self.render_text_paragraph(first, first_prefix, continuation_prefix);
-                }
-                ParagraphType::ChecklistItem => {
-                    self.render_checklist_item(first, first_prefix);
                 }
                 _ => {
                     self.push_plain_line(first_prefix, false);
@@ -376,7 +384,7 @@ impl<'a> Renderer<'a> {
         }
 
         for rest in iter {
-            if rest.paragraph_type == ParagraphType::Text {
+            if rest.paragraph_type() == ParagraphType::Text {
                 self.push_plain_line("", false);
             }
             self.render_paragraph(rest, continuation_prefix);
@@ -1496,6 +1504,34 @@ mod tests {
             render_document(&doc_with_markers, 120, 0, &markers, &reveal_tags, SENTINELS);
         let lines = lines_to_strings(&rendered.lines);
         assert_eq!(lines, vec!["• Alpha ", "", "  Beta"]);
+    }
+
+    #[test]
+    fn cursor_is_rendered_inside_checklist_items() {
+        let checklist = Paragraph::new_checklist().with_checklist_items(vec![
+            tdoc::ChecklistItem::new(false).with_content(vec![DocSpan::new_text("Task")]),
+        ]);
+        let document = Document::new().with_paragraphs(vec![checklist]);
+        let mut editor = DocumentEditor::new(document);
+        editor.ensure_cursor_selectable();
+
+        let (doc_with_markers, markers, reveal_tags, inserted_cursor) = editor.clone_with_markers(
+            SENTINELS.cursor,
+            None,
+            SENTINELS.selection_start,
+            SENTINELS.selection_end,
+        );
+        assert!(
+            inserted_cursor,
+            "cursor sentinel should be inserted when pointing at checklist content"
+        );
+
+        let rendered =
+            render_document(&doc_with_markers, 120, 0, &markers, &reveal_tags, SENTINELS);
+        assert!(
+            rendered.cursor.is_some(),
+            "expected cursor to be rendered for checklist content"
+        );
     }
 
     #[test]

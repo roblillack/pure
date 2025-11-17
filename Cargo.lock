@@ -1500,6 +1500,7 @@ dependencies = [
 [[package]]
 name = "tdoc"
 version = "0.7.3"
+source = "git+https://github.com/roblillack/tdoc.git?branch=refactor-document-structure-to-use-enum-paragraphs#0ed317f20b69112e7a5ea94c81dfd63044f37a30"
 dependencies = [
  "atty",
  "clap",
