@@ -79,7 +79,7 @@ pub(crate) fn remove_char_at(
     true
 }
 
-pub(crate) fn char_to_byte_idx(text: &str, char_idx: usize) -> usize {
+pub fn char_to_byte_idx(text: &str, char_idx: usize) -> usize {
     if char_idx == 0 {
         return 0;
     }
@@ -97,7 +97,7 @@ pub(crate) fn is_word_char(ch: char) -> bool {
     ch.is_alphanumeric() || ch == '_'
 }
 
-pub(crate) fn previous_word_boundary(text: &str, offset: usize) -> usize {
+pub fn previous_word_boundary(text: &str, offset: usize) -> usize {
     let chars: Vec<char> = text.chars().collect();
     let mut idx = offset.min(chars.len());
     if idx == 0 {
@@ -122,7 +122,7 @@ pub(crate) fn previous_word_boundary(text: &str, offset: usize) -> usize {
     idx
 }
 
-pub(crate) fn next_word_boundary(text: &str, offset: usize) -> usize {
+pub fn next_word_boundary(text: &str, offset: usize) -> usize {
     let chars: Vec<char> = text.chars().collect();
     let len = chars.len();
     let mut idx = offset.min(len);

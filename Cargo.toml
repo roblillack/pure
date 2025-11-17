@@ -9,3 +9,7 @@ crossterm = "0.29.0"
 ratatui = "0.29"
 tdoc = { git = "https://github.com/roblillack/tdoc.git", branch = "refactor-document-structure-to-use-enum-paragraphs" }
 unicode-width = "0.2.0"
+
+[[bench]]
+name = "performance"
+harness = true
