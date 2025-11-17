@@ -1,6 +1,7 @@
 use tdoc::ftml;
 
 use super::*;
+use super::structure;
 
 fn pointer_to_root_span(root_index: usize) -> CursorPointer {
     CursorPointer {
@@ -1166,4 +1167,51 @@ fn converting_to_checklist_merges_with_previous_only() {
     assert_eq!(list.checklist_items().len(), 2);
     assert_eq!(list.checklist_items()[0].content[0].text, "Item 1");
     assert_eq!(list.checklist_items()[1].content[0].text, "Item 2");
+}
+
+#[test]
+fn converting_list_with_children_to_checklist_is_recursive() {
+    let nested = unordered_list(&["Child 1", "Child 2"]);
+    let quoted = Paragraph::new_quote().with_children(vec![text_paragraph("Nested quote")]);
+    let list = Paragraph::new_unordered_list().with_entries(vec![
+        vec![text_paragraph("Parent"), nested],
+        vec![text_paragraph("Sibling"), quoted],
+    ]);
+    let mut document = Document::new().with_paragraphs(vec![list]);
+    let path = ParagraphPath::new_root(0);
+    assert!(structure::update_existing_list_type(
+        &mut document,
+        &path,
+        ParagraphType::Checklist
+    ));
+
+    let checklist = &document.paragraphs[0];
+    assert_eq!(checklist.paragraph_type(), ParagraphType::Checklist);
+    assert_eq!(checklist.checklist_items().len(), 2);
+
+    let parent = &checklist.checklist_items()[0];
+    assert_eq!(parent.content[0].text, "Parent");
+    assert_eq!(parent.children.len(), 2);
+    assert_eq!(parent.children[0].content[0].text, "Child 1");
+    assert_eq!(parent.children[1].content[0].text, "Child 2");
+
+    let sibling = &checklist.checklist_items()[1];
+    assert_eq!(sibling.content[0].text, "Sibling");
+    assert_eq!(sibling.children.len(), 1);
+    assert_eq!(sibling.children[0].content[0].text, "Nested quote");
+}
+
+#[test]
+fn converting_quote_children_to_checklist_is_recursive() {
+    let mut quote = Paragraph::new_quote().with_children(vec![
+        text_paragraph("First"),
+        unordered_list(&["Second"]),
+    ]);
+    structure::apply_paragraph_type_in_place(&mut quote, ParagraphType::Checklist);
+
+    let checklist = quote;
+    assert_eq!(checklist.paragraph_type(), ParagraphType::Checklist);
+    assert_eq!(checklist.checklist_items().len(), 2);
+    assert_eq!(checklist.checklist_items()[0].content[0].text, "First");
+    assert_eq!(checklist.checklist_items()[1].content[0].text, "Second");
 }

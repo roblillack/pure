@@ -161,6 +161,62 @@ fn flatten_checklist_items_to_text(items: Vec<ChecklistItem>) -> Vec<Paragraph> 
     result
 }
 
+fn ensure_checklist_content(mut content: Vec<Span>) -> Vec<Span> {
+    if content.is_empty() {
+        content.push(Span::new_text(""));
+    }
+    content
+}
+
+fn paragraphs_to_checklist_items_recursive(paragraphs: Vec<Paragraph>) -> Vec<ChecklistItem> {
+    paragraphs
+        .into_iter()
+        .flat_map(paragraph_to_checklist_items_recursive)
+        .collect()
+}
+
+fn paragraph_to_checklist_items_recursive(paragraph: Paragraph) -> Vec<ChecklistItem> {
+    match paragraph {
+        Paragraph::Text { content }
+        | Paragraph::Header1 { content }
+        | Paragraph::Header2 { content }
+        | Paragraph::Header3 { content }
+        | Paragraph::CodeBlock { content } => {
+            vec![ChecklistItem::new(false).with_content(ensure_checklist_content(content))]
+        }
+        Paragraph::Checklist { items } => items,
+        Paragraph::OrderedList { entries } | Paragraph::UnorderedList { entries } => entries
+            .into_iter()
+            .map(entry_to_checklist_item)
+            .collect(),
+        Paragraph::Quote { children } => paragraphs_to_checklist_items_recursive(children),
+    }
+}
+
+fn entry_to_checklist_item(entry: Vec<Paragraph>) -> ChecklistItem {
+    let mut entry_iter = entry.into_iter();
+    let mut head = match entry_iter.next() {
+        Some(first_paragraph) => {
+            let mut produced = paragraph_to_checklist_items_recursive(first_paragraph);
+            if produced.is_empty() {
+                ChecklistItem::new(false).with_content(vec![Span::new_text("")])
+            } else {
+                let mut head = produced.remove(0);
+                head.children.extend(produced);
+                head
+            }
+        }
+        None => ChecklistItem::new(false).with_content(vec![Span::new_text("")]),
+    };
+
+    for paragraph in entry_iter {
+        let mut children = paragraph_to_checklist_items_recursive(paragraph);
+        head.children.append(&mut children);
+    }
+
+    head
+}
+
 pub(crate) fn is_single_paragraph_entry(document: &Document, path: &ParagraphPath) -> bool {
     let steps = path.steps();
     let (last_step, prefix) = match steps.split_last() {
@@ -416,26 +472,28 @@ pub(crate) fn apply_paragraph_type_in_place(paragraph: &mut Paragraph, target: P
                 let items = match paragraph {
                     Paragraph::Checklist { items } => mem::take(items),
                     Paragraph::Quote { children } => {
-                        // Convert Quote children into checklist items
-                        let mut checklist_items = Vec::new();
-                        for child in mem::take(children) {
-                            let content = child.content().to_vec();
-                            let item = ChecklistItem::new(false).with_content(
-                                if content.is_empty() {
-                                    vec![Span::new_text("")]
-                                } else {
-                                    content
-                                }
-                            );
-                            checklist_items.push(item);
-                        }
-                        if checklist_items.is_empty() {
+                        let converted = paragraphs_to_checklist_items_recursive(mem::take(children));
+                        if converted.is_empty() {
                             vec![ChecklistItem::new(false).with_content(vec![Span::new_text("")])]
                         } else {
-                            checklist_items
+                            converted
                         }
                     },
-                    _ => vec![ChecklistItem::new(false).with_content(vec![Span::new_text("")])],
+                    Paragraph::OrderedList { entries } | Paragraph::UnorderedList { entries } => {
+                        let converted: Vec<ChecklistItem> =
+                            entries.drain(..).map(entry_to_checklist_item).collect();
+                        if converted.is_empty() {
+                            vec![ChecklistItem::new(false).with_content(vec![Span::new_text("")])]
+                        } else {
+                            converted
+                        }
+                    },
+                    Paragraph::Text { content }
+                    | Paragraph::Header1 { content }
+                    | Paragraph::Header2 { content }
+                    | Paragraph::Header3 { content }
+                    | Paragraph::CodeBlock { content } => vec![ChecklistItem::new(false)
+                        .with_content(ensure_checklist_content(mem::take(content)))],
                 };
                 Paragraph::Checklist { items }
             },
@@ -1079,13 +1137,10 @@ pub(crate) fn update_existing_list_type(
                 _ => Vec::new(),
             };
 
-            let mut items = Vec::new();
-            for entry in &entries_to_convert {
-                if let Some(first) = entry.first() {
-                    let item = ChecklistItem::new(false).with_content(first.content().to_vec());
-                    items.push(item);
-                }
-            }
+            let mut items: Vec<ChecklistItem> = entries_to_convert
+                .into_iter()
+                .map(entry_to_checklist_item)
+                .collect();
 
             if items.is_empty() {
                 items.push(ChecklistItem::new(false).with_content(vec![Span::new_text("")]));
