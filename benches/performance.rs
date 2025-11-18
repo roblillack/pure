@@ -188,6 +188,71 @@ fn bench_rendering_performance() {
 }
 
 #[test]
+fn bench_rendering_with_cache() {
+    println!("\n\n╔════════════════════════════════════════════════════════════════╗");
+    println!("║         RENDERING WITH CACHE BENCHMARKS (CACHE HITS)          ║");
+    println!("╚════════════════════════════════════════════════════════════════╝");
+
+    let docs = vec![
+        ("Small (10 paras)", create_test_document(SMALL_DOC_PARAGRAPHS, 20)),
+        ("Medium (100 paras)", create_test_document(MEDIUM_DOC_PARAGRAPHS, 20)),
+        ("Large (1000 paras)", create_test_document(LARGE_DOC_PARAGRAPHS, 20)),
+        ("Huge (10000 paras)", create_test_document(HUGE_DOC_PARAGRAPHS, 20)),
+    ];
+
+    for (name, doc) in docs {
+        let mut cache = pure::render::RenderCache::new();
+
+        // First render - cache miss
+        let start = std::time::Instant::now();
+        let _ = pure::render::render_document_with_cache(
+            &doc,
+            80,  // wrap_width
+            0,   // left_padding
+            &[],  // markers
+            &[],  // reveal_tags
+            NO_SENTINELS,
+            Some(&mut cache),
+        );
+        let first_render = start.elapsed();
+
+        // Subsequent renders - cache hits
+        let iterations = if name.contains("Huge") { 50 } else { 100 };
+        let mut durations = Vec::new();
+
+        for _ in 0..iterations {
+            let start = std::time::Instant::now();
+            let _ = pure::render::render_document_with_cache(
+                &doc,
+                80,
+                0,
+                &[],
+                &[],
+                NO_SENTINELS,
+                Some(&mut cache),
+            );
+            durations.push(start.elapsed());
+        }
+
+        let total_duration: Duration = durations.iter().sum();
+        let avg_cached = total_duration / iterations as u32;
+        let min_cached = *durations.iter().min().unwrap();
+        let max_cached = *durations.iter().max().unwrap();
+
+        println!("\n{}", name);
+        println!("  First render (cold cache): {:?}", first_render);
+        println!("  Cached renders (avg):      {:?}", avg_cached);
+        println!("  Cached renders (min):      {:?}", min_cached);
+        println!("  Cached renders (max):      {:?}", max_cached);
+        println!("  Speedup:                   {:.2}x",
+            first_render.as_secs_f64() / avg_cached.as_secs_f64());
+        println!("  Cache hits:                {}", cache.hits);
+        println!("  Cache misses:              {}", cache.misses);
+        println!("  Cache hit rate:            {:.1}%", cache.hit_rate() * 100.0);
+    }
+}
+
+#[test]
 fn bench_rendering_with_styles() {
     println!("\n\n╔════════════════════════════════════════════════════════════════╗");
     println!("║        RENDERING WITH INLINE STYLES BENCHMARKS                 ║");

@@ -31,7 +31,7 @@ mod editor;
 mod render;
 
 use editor::{CursorPointer, DocumentEditor};
-use render::{CursorVisualPosition, RenderResult, RenderSentinels, render_document};
+use render::{CursorVisualPosition, RenderCache, RenderResult, RenderSentinels, render_document, render_document_with_cache};
 
 const CURSOR_SENTINEL: char = '\u{F8FF}';
 const SELECTION_START_SENTINEL: char = '\u{F8FE}';
@@ -584,6 +584,7 @@ struct App {
     mouse_drag_anchor: Option<CursorPointer>,
     cursor_following: bool,
     pending_scroll_restore: Option<ScrollRestore>,
+    render_cache: RenderCache,
 }
 
 impl App {
@@ -619,6 +620,7 @@ impl App {
             mouse_drag_anchor: None,
             cursor_following: true,
             pending_scroll_restore: None,
+            render_cache: RenderCache::new(),
         }
     }
 
@@ -1576,7 +1578,7 @@ impl App {
             SELECTION_START_SENTINEL,
             SELECTION_END_SENTINEL,
         );
-        render_document(
+        render_document_with_cache(
             &clone,
             wrap_width,
             left_padding,
@@ -1587,6 +1589,7 @@ impl App {
                 selection_start: SELECTION_START_SENTINEL,
                 selection_end: SELECTION_END_SENTINEL,
             },
+            Some(&mut self.render_cache),
         )
     }
 
@@ -1887,6 +1890,8 @@ impl App {
 
     fn mark_dirty(&mut self) {
         self.dirty = true;
+        // Clear render cache when document changes
+        self.render_cache.clear();
     }
 
     fn cursor_status_text(&self) -> String {
