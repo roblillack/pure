@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 
 use ratatui::{
     style::{Color, Modifier, Style},
@@ -15,6 +16,180 @@ pub struct RenderSentinels {
     pub cursor: char,
     pub selection_start: char,
     pub selection_end: char,
+}
+
+/// Cache key for a rendered paragraph
+#[derive(Clone, Hash, Eq, PartialEq)]
+struct ParagraphCacheKey {
+    /// Index of the paragraph in the document
+    paragraph_index: usize,
+    /// Hash of the paragraph content
+    content_hash: u64,
+    /// Wrap width used for rendering
+    wrap_width: usize,
+    /// Left padding used for rendering
+    left_padding: usize,
+    /// Whether this paragraph has markers or sentinels (can't cache if true)
+    has_markers: bool,
+}
+
+/// Cached rendering result for a paragraph
+#[derive(Clone)]
+struct CachedParagraphRender {
+    /// The rendered lines
+    lines: Vec<Line<'static>>,
+    /// Number of content lines (used for line metrics)
+    content_line_count: usize,
+}
+
+/// Cache for rendered paragraphs
+pub struct RenderCache {
+    cache: HashMap<ParagraphCacheKey, CachedParagraphRender>,
+    /// Maximum cache size (number of entries)
+    max_size: usize,
+    /// Statistics for cache performance
+    pub hits: usize,
+    pub misses: usize,
+}
+
+impl RenderCache {
+    pub fn new() -> Self {
+        Self {
+            cache: HashMap::new(),
+            max_size: 50000, // Cache up to 50k paragraphs (increased for large documents)
+            hits: 0,
+            misses: 0,
+        }
+    }
+
+    /// Clear the entire cache (called when document structure changes significantly)
+    pub fn clear(&mut self) {
+        self.cache.clear();
+        self.hits = 0;
+        self.misses = 0;
+    }
+
+    /// Invalidate cache for a specific paragraph index
+    pub fn invalidate_paragraph(&mut self, paragraph_index: usize) {
+        self.cache.retain(|key, _| key.paragraph_index != paragraph_index);
+    }
+
+    /// Get cache hit rate (0.0 to 1.0)
+    pub fn hit_rate(&self) -> f64 {
+        let total = self.hits + self.misses;
+        if total == 0 {
+            0.0
+        } else {
+            self.hits as f64 / total as f64
+        }
+    }
+
+    fn get(&mut self, key: &ParagraphCacheKey) -> Option<&CachedParagraphRender> {
+        if let Some(result) = self.cache.get(key) {
+            self.hits += 1;
+            Some(result)
+        } else {
+            self.misses += 1;
+            None
+        }
+    }
+
+    fn insert(&mut self, key: ParagraphCacheKey, value: CachedParagraphRender) {
+        // Simple eviction: if cache is too large, clear it
+        if self.cache.len() >= self.max_size {
+            self.cache.clear();
+        }
+        self.cache.insert(key, value);
+    }
+}
+
+/// Compute a hash of paragraph content for cache invalidation
+fn hash_paragraph(paragraph: &Paragraph) -> u64 {
+    use std::collections::hash_map::DefaultHasher;
+
+    let mut hasher = DefaultHasher::new();
+
+    // Hash paragraph type
+    match paragraph.paragraph_type() {
+        ParagraphType::Text => 0u8.hash(&mut hasher),
+        ParagraphType::Header1 => 1u8.hash(&mut hasher),
+        ParagraphType::Header2 => 2u8.hash(&mut hasher),
+        ParagraphType::Header3 => 3u8.hash(&mut hasher),
+        ParagraphType::CodeBlock => 4u8.hash(&mut hasher),
+        ParagraphType::Quote => 5u8.hash(&mut hasher),
+        ParagraphType::UnorderedList => 6u8.hash(&mut hasher),
+        ParagraphType::OrderedList => 7u8.hash(&mut hasher),
+        ParagraphType::Checklist => 8u8.hash(&mut hasher),
+    }
+
+    // Hash content spans (recursively)
+    hash_spans(paragraph.content(), &mut hasher);
+
+    // Hash children (for quotes)
+    paragraph.children().len().hash(&mut hasher);
+    for child in paragraph.children() {
+        hash_paragraph(child).hash(&mut hasher);
+    }
+
+    // Hash entries (for lists)
+    paragraph.entries().len().hash(&mut hasher);
+    for entry in paragraph.entries() {
+        entry.len().hash(&mut hasher);
+        for para in entry {
+            hash_paragraph(para).hash(&mut hasher);
+        }
+    }
+
+    // Hash checklist items
+    if let Paragraph::Checklist { items } = paragraph {
+        items.len().hash(&mut hasher);
+        for item in items {
+            item.checked.hash(&mut hasher);
+            hash_spans(&item.content, &mut hasher);
+            // Hash nested items
+            item.children.len().hash(&mut hasher);
+            // (Recursive hashing would go here, keeping it simple for now)
+        }
+    }
+
+    hasher.finish()
+}
+
+/// Hash a list of spans recursively
+fn hash_spans(spans: &[DocSpan], hasher: &mut impl Hasher) {
+    spans.len().hash(hasher);
+    for span in spans {
+        hash_span(span, hasher);
+    }
+}
+
+/// Hash a single span recursively
+fn hash_span(span: &DocSpan, hasher: &mut impl Hasher) {
+    // Hash style
+    match span.style {
+        InlineStyle::None => 0u8.hash(hasher),
+        InlineStyle::Bold => 1u8.hash(hasher),
+        InlineStyle::Italic => 2u8.hash(hasher),
+        InlineStyle::Highlight => 3u8.hash(hasher),
+        InlineStyle::Underline => 4u8.hash(hasher),
+        InlineStyle::Strike => 5u8.hash(hasher),
+        InlineStyle::Link => 6u8.hash(hasher),
+        InlineStyle::Code => 7u8.hash(hasher),
+    }
+
+    // Hash text content
+    span.text.hash(hasher);
+
+    // Hash link target if present
+    if let Some(ref target) = span.link_target {
+        target.hash(hasher);
+    }
+
+    // Hash children recursively
+    span.children.len().hash(hasher);
+    for child in &span.children {
+        hash_span(child, hasher);
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -90,12 +265,33 @@ pub fn render_document(
     reveal_tags: &[RevealTagRef],
     sentinels: RenderSentinels,
 ) -> RenderResult {
+    render_document_with_cache(
+        document,
+        wrap_width,
+        left_padding,
+        markers,
+        reveal_tags,
+        sentinels,
+        None,
+    )
+}
+
+pub fn render_document_with_cache(
+    document: &Document,
+    wrap_width: usize,
+    left_padding: usize,
+    markers: &[MarkerRef],
+    reveal_tags: &[RevealTagRef],
+    sentinels: RenderSentinels,
+    cache: Option<&mut RenderCache>,
+) -> RenderResult {
     let mut renderer = Renderer::new(
         wrap_width.max(1),
         left_padding,
         sentinels,
         markers,
         reveal_tags,
+        cache,
     );
     renderer.render_document(document);
     renderer.finish()
@@ -115,6 +311,7 @@ struct Renderer<'a> {
     markers: &'a [MarkerRef],
     marker_map: HashMap<usize, CursorPointer>,
     reveal_tags: HashMap<usize, RevealTagRef>,
+    cache: Option<&'a mut RenderCache>,
 }
 
 impl<'a> Renderer<'a> {
@@ -124,6 +321,7 @@ impl<'a> Renderer<'a> {
         sentinels: RenderSentinels,
         markers: &'a [MarkerRef],
         reveal_tags: &[RevealTagRef],
+        cache: Option<&'a mut RenderCache>,
     ) -> Self {
         let wrap_limit = if wrap_width > 1 { wrap_width - 1 } else { 1 };
         let padding = if left_padding > 0 {
@@ -153,6 +351,7 @@ impl<'a> Renderer<'a> {
             markers,
             marker_map,
             reveal_tags: reveal_map,
+            cache,
         }
     }
 
@@ -161,7 +360,65 @@ impl<'a> Renderer<'a> {
             if idx > 0 {
                 self.push_plain_line("", false);
             }
-            self.render_paragraph(paragraph, "");
+            self.render_paragraph_cached(paragraph, idx, "");
+        }
+    }
+
+    fn render_paragraph_cached(&mut self, paragraph: &Paragraph, paragraph_index: usize, prefix: &str) {
+        // Check if we can use the cache
+        let has_markers = !self.marker_map.is_empty() || !self.reveal_tags.is_empty()
+            || self.sentinels.cursor != '\0';
+
+        // Only use cache if no markers/sentinels and we have a cache
+        if !has_markers && self.cache.is_some() && prefix.is_empty() {
+            let content_hash = hash_paragraph(paragraph);
+            let cache_key = ParagraphCacheKey {
+                paragraph_index,
+                content_hash,
+                wrap_width: self.wrap_width,
+                left_padding: self.left_padding,
+                has_markers: false,
+            };
+
+            // Try to get from cache
+            if let Some(cache) = &mut self.cache {
+                if let Some(cached) = cache.get(&cache_key) {
+                    // Cache hit! Use cached lines
+                    for line in &cached.lines {
+                        self.lines.push(line.clone());
+                        self.line_metrics.push(LineMetric { counts_as_content: true });
+                        self.current_line_index += 1;
+                    }
+                    return;
+                }
+            }
+
+            // Cache miss - render normally and cache the result
+            let start_line = self.lines.len();
+            let start_metric_count = self.line_metrics.len();
+
+            self.render_paragraph(paragraph, prefix);
+
+            // Extract the lines we just rendered
+            let rendered_lines: Vec<Line<'static>> = self.lines[start_line..].to_vec();
+            let content_line_count = self.line_metrics[start_metric_count..]
+                .iter()
+                .filter(|m| m.counts_as_content)
+                .count();
+
+            // Store in cache
+            if let Some(cache) = &mut self.cache {
+                cache.insert(
+                    cache_key,
+                    CachedParagraphRender {
+                        lines: rendered_lines,
+                        content_line_count,
+                    },
+                );
+            }
+        } else {
+            // Can't use cache - has markers or sentinels, or non-empty prefix
+            self.render_paragraph(paragraph, prefix);
         }
     }
 
