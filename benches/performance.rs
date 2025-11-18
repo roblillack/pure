@@ -646,3 +646,109 @@ fn bench_user_guide_rendering() {
     println!("  Speedup: {:.2}x", first_render.as_secs_f64() / cached_avg.as_secs_f64());
     println!("  Cache hit rate: {:.1}%", cache.hit_rate() * 100.0);
 }
+
+#[test]
+fn bench_real_world_render_flow() {
+    println!("\n\n╔════════════════════════════════════════════════════════════════╗");
+    println!("║        REAL-WORLD RENDER FLOW (WHAT APP ACTUALLY DOES)        ║");
+    println!("╚════════════════════════════════════════════════════════════════╝");
+    println!("\nThis measures the COMPLETE flow that happens on every frame:");
+    println!("  1. Clone document with markers (for cursor sentinels)");
+    println!("  2. Render the cloned document");
+    println!("  3. Clone the rendered lines (for widget)");
+
+    // Load actual USER-GUIDE.md
+    let content = std::fs::read_to_string("USER-GUIDE.md")
+        .expect("Failed to read USER-GUIDE.md");
+    let doc = tdoc::markdown::parse(std::io::Cursor::new(&content))
+        .expect("Failed to parse markdown");
+
+    let mut editor = pure::editor::DocumentEditor::new(doc);
+    let mut cache = pure::render::RenderCache::new();
+
+    println!("\nDocument stats:");
+    println!("  Paragraphs: {}", editor.document().paragraphs.len());
+    println!("  File size: {} bytes", content.len());
+
+    let iterations = 20;
+    let mut durations = Vec::new();
+    let mut clone_times = Vec::new();
+    let mut render_times = Vec::new();
+    let mut line_clone_times = Vec::new();
+
+    for _ in 0..iterations {
+        let total_start = Instant::now();
+
+        // Step 1: Clone document with markers (THIS IS THE KILLER)
+        let clone_start = Instant::now();
+        let (clone, markers, reveal_tags, _) = editor.clone_with_markers(
+            '\u{F8FF}',
+            None,
+            '\u{F8FE}',
+            '\u{F8FD}',
+        );
+        clone_times.push(clone_start.elapsed());
+
+        // Step 2: Render the cloned document
+        let render_start = Instant::now();
+        let render_result = pure::render::render_document_with_cache(
+            &clone,
+            80,
+            0,
+            &markers,
+            &reveal_tags,
+            RenderSentinels {
+                cursor: '\u{F8FF}',
+                selection_start: '\u{F8FE}',
+                selection_end: '\u{F8FD}',
+            },
+            Some(&mut cache),
+        );
+        render_times.push(render_start.elapsed());
+
+        // Step 3: Clone rendered lines (for ratatui widget)
+        let line_clone_start = Instant::now();
+        let _lines_clone = render_result.lines.clone();
+        line_clone_times.push(line_clone_start.elapsed());
+
+        durations.push(total_start.elapsed());
+    }
+
+    let total_avg: Duration = durations.iter().sum::<Duration>() / iterations as u32;
+    let clone_avg: Duration = clone_times.iter().sum::<Duration>() / iterations as u32;
+    let render_avg: Duration = render_times.iter().sum::<Duration>() / iterations as u32;
+    let line_clone_avg: Duration = line_clone_times.iter().sum::<Duration>() / iterations as u32;
+
+    println!("\n📊 Performance Breakdown:");
+    println!("  Document clone:       {:>8?}  ({:>5.1}%)", clone_avg,
+        clone_avg.as_secs_f64() / total_avg.as_secs_f64() * 100.0);
+    println!("  Render (cached):      {:>8?}  ({:>5.1}%)", render_avg,
+        render_avg.as_secs_f64() / total_avg.as_secs_f64() * 100.0);
+    println!("  Clone render lines:   {:>8?}  ({:>5.1}%)", line_clone_avg,
+        line_clone_avg.as_secs_f64() / total_avg.as_secs_f64() * 100.0);
+    println!("  ─────────────────────────────────────");
+    println!("  TOTAL per frame:      {:>8?}  (100.0%)", total_avg);
+
+    println!("\n📈 Cache statistics:");
+    println!("  Cache hits:     {}", cache.hits);
+    println!("  Cache misses:   {}", cache.misses);
+    println!("  Hit rate:       {:.1}%", cache.hit_rate() * 100.0);
+    println!("  Expected hits:  {} (if only 1 para with cursor changes per frame)",
+        iterations * (editor.document().paragraphs.len() - 1));
+    println!("  Expected misses: {} (1 para with cursor per frame)", iterations);
+    println!("  Actual misses/iter: {:.1} paragraphs", cache.misses as f64 / iterations as f64);
+
+    println!("\n🔍 Analysis:");
+    if clone_avg.as_secs_f64() / total_avg.as_secs_f64() > 0.5 {
+        println!("  ⚠️  CRITICAL: Document cloning accounts for > 50% of render time!");
+        println!("     The render cache is working, but document cloning negates its benefits.");
+    }
+
+    if total_avg.as_millis() > 100 {
+        println!("  ❌ TOTAL time > 100ms - users will notice lag");
+    } else if total_avg.as_millis() > 16 {
+        println!("  ⚠️  TOTAL time > 16ms - may drop frames");
+    } else {
+        println!("  ✅ TOTAL time < 16ms - smooth 60 FPS");
+    }
+}
