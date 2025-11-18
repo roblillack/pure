@@ -553,3 +553,96 @@ mod summary {
         println!("  • > 1000ms = unacceptable");
     }
 }
+
+#[test]
+fn bench_user_guide_rendering() {
+    println!("\n\n╔════════════════════════════════════════════════════════════════╗");
+    println!("║              USER-GUIDE.MD RENDERING BENCHMARK                 ║");
+    println!("╚════════════════════════════════════════════════════════════════╝");
+
+    // Load the actual USER-GUIDE.md
+    let content = std::fs::read_to_string("USER-GUIDE.md")
+        .expect("Failed to read USER-GUIDE.md");
+
+    let doc = tdoc::markdown::parse(std::io::Cursor::new(&content)).expect("Failed to parse markdown");
+
+    println!("\nDocument stats:");
+    println!("  Paragraphs: {}", doc.paragraphs.len());
+    println!("  File size: {} bytes", content.len());
+
+    // Test cold rendering (no cache)
+    println!("\nCold rendering (no cache):");
+    let iterations = 10;
+    let mut durations = Vec::new();
+
+    for _ in 0..iterations {
+        let start = Instant::now();
+        let _ = pure::render::render_document(
+            &doc,
+            80,
+            0,
+            &[],
+            &[],
+            NO_SENTINELS,
+        );
+        durations.push(start.elapsed());
+    }
+
+    let total: Duration = durations.iter().sum();
+    let avg = total / iterations as u32;
+    let min = *durations.iter().min().unwrap();
+    let max = *durations.iter().max().unwrap();
+
+    println!("  Average: {:?}", avg);
+    println!("  Min: {:?}", min);
+    println!("  Max: {:?}", max);
+
+    if avg.as_millis() > 100 {
+        println!("  ⚠️  WARNING: Rendering takes > 100ms (noticeable lag!)");
+    } else if avg.as_millis() > 16 {
+        println!("  ⚠️  CAUTION: Rendering takes > 16ms (may drop frames)");
+    } else {
+        println!("  ✅ GOOD: Rendering is fast enough for 60 FPS");
+    }
+
+    // Test with cache
+    println!("\nWith render cache:");
+    let mut cache = pure::render::RenderCache::new();
+
+    // First render - cold cache
+    let start = Instant::now();
+    let _ = pure::render::render_document_with_cache(
+        &doc,
+        80,
+        0,
+        &[],
+        &[],
+        NO_SENTINELS,
+        Some(&mut cache),
+    );
+    let first_render = start.elapsed();
+
+    // Subsequent renders - warm cache
+    let mut cached_durations = Vec::new();
+    for _ in 0..iterations {
+        let start = Instant::now();
+        let _ = pure::render::render_document_with_cache(
+            &doc,
+            80,
+            0,
+            &[],
+            &[],
+            NO_SENTINELS,
+            Some(&mut cache),
+        );
+        cached_durations.push(start.elapsed());
+    }
+
+    let cached_total: Duration = cached_durations.iter().sum();
+    let cached_avg = cached_total / iterations as u32;
+
+    println!("  First render: {:?}", first_render);
+    println!("  Cached average: {:?}", cached_avg);
+    println!("  Speedup: {:.2}x", first_render.as_secs_f64() / cached_avg.as_secs_f64());
+    println!("  Cache hit rate: {:.1}%", cache.hit_rate() * 100.0);
+}
