@@ -80,7 +80,7 @@ enum PathStep {
 }
 
 impl ParagraphPath {
-    fn new_root(idx: usize) -> Self {
+    pub fn new_root(idx: usize) -> Self {
         Self {
             steps: vec![PathStep::Root(idx)],
         }
@@ -90,22 +90,22 @@ impl ParagraphPath {
         Self { steps }
     }
 
-    fn push_child(&mut self, idx: usize) {
+    pub fn push_child(&mut self, idx: usize) {
         self.steps.push(PathStep::Child(idx));
     }
 
-    fn push_entry(&mut self, entry_index: usize, paragraph_index: usize) {
+    pub fn push_entry(&mut self, entry_index: usize, paragraph_index: usize) {
         self.steps.push(PathStep::Entry {
             entry_index,
             paragraph_index,
         });
     }
 
-    fn push_checklist_item(&mut self, indices: Vec<usize>) {
+    pub fn push_checklist_item(&mut self, indices: Vec<usize>) {
         self.steps.push(PathStep::ChecklistItem { indices });
     }
 
-    fn pop(&mut self) {
+    pub fn pop(&mut self) {
         if self.steps.len() > 1 {
             self.steps.pop();
         }
@@ -128,27 +128,27 @@ impl Default for ParagraphPath {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SpanPath {
-    indices: Vec<usize>,
+    pub indices: Vec<usize>,
 }
 
 impl SpanPath {
-    fn new(indices: Vec<usize>) -> Self {
+    pub fn new(indices: Vec<usize>) -> Self {
         Self { indices }
     }
 
-    fn push(&mut self, idx: usize) {
+    pub fn push(&mut self, idx: usize) {
         self.indices.push(idx);
     }
 
-    fn pop(&mut self) {
+    pub fn pop(&mut self) {
         self.indices.pop();
     }
 
-    fn indices(&self) -> &[usize] {
+    pub fn indices(&self) -> &[usize] {
         &self.indices
     }
 
-    fn is_empty(&self) -> bool {
+    pub fn is_empty(&self) -> bool {
         self.indices.is_empty()
     }
 }

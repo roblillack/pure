@@ -3,7 +3,7 @@ use std::ops::{Deref, DerefMut};
 use ratatui::layout::Rect;
 
 use crate::editor::{CursorPointer, DocumentEditor};
-use crate::render::{CursorVisualPosition, RenderCache, RenderResult, RenderSentinels, render_document_with_cache};
+use crate::render::{CursorVisualPosition, DirectCursorTracking, RenderCache, RenderResult, render_document_direct};
 
 /// EditorDisplay wraps a DocumentEditor and manages all visual/rendering concerns.
 /// This includes cursor movement in visual space, wrapping, and rendering.
@@ -97,31 +97,39 @@ impl EditorDisplay {
         wrap_width: usize,
         left_padding: usize,
         selection: Option<(CursorPointer, CursorPointer)>,
-        cursor_sentinel: char,
-        selection_start_sentinel: char,
-        selection_end_sentinel: char,
+        _cursor_sentinel: char,
+        _selection_start_sentinel: char,
+        _selection_end_sentinel: char,
     ) -> RenderResult {
-        let (clone, markers, reveal_tags, _) = self.editor.clone_with_markers(
-            cursor_sentinel,
-            selection.clone(),
-            selection_start_sentinel,
-            selection_end_sentinel,
-        );
+        // Use direct rendering - no document cloning needed!
+        let cursor_pointer = self.editor.cursor_pointer();
 
-        // Don't use cache when rendering with cursor sentinels
-        // The cursor position changes frequently and caching causes stale cursor positions
-        let result = render_document_with_cache(
-            &clone,
+        // Get reveal tags for reveal codes mode
+        // TODO: Optimize this - we currently need to call clone_with_markers just for reveal_tags
+        // In the future, extract reveal tag generation into a separate non-cloning function
+        let reveal_tags = if self.editor.reveal_codes() {
+            let (_, _, tags, _) = self.editor.clone_with_markers(
+                '\u{F8FF}',
+                None,
+                '\u{F8FE}',
+                '\u{F8FD}',
+            );
+            tags
+        } else {
+            Vec::new()
+        };
+
+        let result = render_document_direct(
+            self.editor.document(),
             wrap_width,
             left_padding,
-            &markers,
             &reveal_tags,
-            RenderSentinels {
-                cursor: cursor_sentinel,
-                selection_start: selection_start_sentinel,
-                selection_end: selection_end_sentinel,
+            DirectCursorTracking {
+                cursor: Some(&cursor_pointer),
+                selection: selection.as_ref().map(|(start, end)| (start, end)),
+                track_all_positions: true, // Track all positions for cursor_map
             },
-            None,  // No cache for cursor renders
+            Some(&mut self.render_cache),
         );
 
         // Update internal state from render result
@@ -607,6 +615,14 @@ mod tests {
 
         let end_offset = display.cursor_pointer().offset;
         assert!(end_offset > initial_offset, "Cursor should have moved to end");
+
+        // The first line is "First line of text" (19 characters)
+        // The cursor should be placed at offset 19 (after the last character)
+        let text = &display.document().paragraphs[0].content()[0].text;
+        let expected_offset = text.len();
+        assert_eq!(end_offset, expected_offset,
+            "Cursor should be at offset {} (after last char '{}'), but is at offset {}. Text: '{}'",
+            expected_offset, text.chars().last().unwrap_or(' '), end_offset, text);
     }
 
     #[test]
@@ -778,4 +794,5 @@ mod tests {
         display.move_cursor_vertical(-1);
         assert_eq!(display.cursor_pointer(), pointers[0], "Should be back at first paragraph");
     }
+
 }

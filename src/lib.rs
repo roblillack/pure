@@ -3,3 +3,4 @@
 
 pub mod render;
 pub mod editor;
+pub mod editor_display;
