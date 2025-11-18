@@ -1373,3 +1373,59 @@ fn converting_quote_children_to_checklist_is_recursive() {
     assert_eq!(checklist.checklist_items()[0].content[0].text, "First");
     assert_eq!(checklist.checklist_items()[1].content[0].text, "Second");
 }
+
+#[test]
+fn cursor_valid_after_nesting_checklist_item() {
+    use crate::editor_display::EditorDisplay;
+
+    // Reproduce issue where cursor position becomes [?,?] after nesting
+    let checklist = Paragraph::new_checklist().with_checklist_items(vec![
+        ChecklistItem::new(false).with_content(vec![Span::new_text("First")]),
+        ChecklistItem::new(false).with_content(vec![Span::new_text("Second")]),
+    ]);
+    let document = Document::new().with_paragraphs(vec![checklist]);
+    let editor = DocumentEditor::new(document);
+    let mut display = EditorDisplay::new(editor);
+
+    // Move to second item
+    let pointer = pointer_to_checklist_item_span(0, 1);
+    assert!(display.move_to_pointer(&pointer));
+
+    // Indent to nest under first item
+    assert!(display.indent_current_paragraph());
+
+    // The cursor should still be valid and point to a segment
+    let cursor = display.cursor_pointer();
+    let segments = &display.segments;
+
+    // Find if cursor points to a valid segment
+    let segment_found = segments.iter().any(|segment| segment.matches(&cursor));
+    assert!(
+        segment_found,
+        "Cursor should point to a valid segment after nesting. Cursor: {:?}",
+        cursor
+    );
+
+    // Additionally verify the cursor path is correct for nested item
+    assert_eq!(cursor.paragraph_path.steps().len(), 2);
+    if let Some(PathStep::ChecklistItem { indices }) = cursor.paragraph_path.steps().last() {
+        assert_eq!(indices, &vec![0usize, 0], "Cursor should point to nested item [0, 0]");
+    } else {
+        panic!("Expected ChecklistItem path step");
+    }
+
+    // Now test rendering to ensure visual position is tracked
+    let result = display.render_document(80, 80, 0, None, ' ', ' ', ' ');
+    assert!(
+        result.cursor.is_some(),
+        "Cursor visual position should be found after nesting. Cursor pointer: {:?}",
+        cursor
+    );
+
+    // Also check that last_cursor_visual is set
+    let last_visual = display.last_cursor_visual();
+    assert!(
+        last_visual.is_some(),
+        "last_cursor_visual should be Some after rendering, not None (which shows as [?,?])"
+    );
+}

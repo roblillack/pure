@@ -9,13 +9,21 @@ use unicode_width::UnicodeWidthChar;
 
 use tdoc::{Document, InlineStyle, Paragraph, ParagraphType, Span as DocSpan};
 
-use crate::editor::{CursorPointer, MarkerRef, RevealTagKind, RevealTagRef, SegmentKind};
+use crate::editor::{CursorPointer, MarkerRef, ParagraphPath, RevealTagKind, RevealTagRef, SegmentKind, SpanPath};
 
 #[derive(Clone, Copy)]
 pub struct RenderSentinels {
     pub cursor: char,
     pub selection_start: char,
     pub selection_end: char,
+}
+
+/// Direct cursor tracking without sentinels
+#[derive(Clone)]
+pub struct DirectCursorTracking<'a> {
+    pub cursor: Option<&'a CursorPointer>,
+    pub selection: Option<(&'a CursorPointer, &'a CursorPointer)>,
+    pub track_all_positions: bool,
 }
 
 /// Cache key for a rendered paragraph
@@ -289,6 +297,26 @@ pub fn render_document_with_cache(
         sentinels,
         markers,
         reveal_tags,
+        cache,
+    );
+    renderer.render_document(document);
+    renderer.finish()
+}
+
+/// Render document with direct cursor tracking (no sentinel cloning needed)
+pub fn render_document_direct(
+    document: &Document,
+    wrap_width: usize,
+    left_padding: usize,
+    reveal_tags: &[RevealTagRef],
+    direct_tracking: DirectCursorTracking,
+    cache: Option<&mut RenderCache>,
+) -> RenderResult {
+    let mut renderer = DirectRenderer::new(
+        wrap_width.max(1),
+        left_padding,
+        reveal_tags,
+        direct_tracking,
         cache,
     );
     renderer.render_document(document);
@@ -766,6 +794,884 @@ impl<'a> Renderer<'a> {
             cursor,
             total_lines,
             cursor_map,
+        }
+    }
+}
+
+/// Direct renderer that tracks cursor positions without sentinels
+struct DirectRenderer<'a> {
+    wrap_width: usize,
+    wrap_limit: usize,
+    left_padding: usize,
+    padding: Option<String>,
+    line_metrics: Vec<LineMetric>,
+    lines: Vec<Line<'static>>,
+    current_line_index: usize,
+    reveal_tags: HashMap<usize, RevealTagRef>,
+    cache: Option<&'a mut RenderCache>,
+
+    // Direct position tracking
+    cursor_pointer: Option<&'a CursorPointer>,
+    selection_start: Option<&'a CursorPointer>,
+    selection_end: Option<&'a CursorPointer>,
+    track_all_positions: bool,
+
+    // Current position during rendering
+    current_paragraph_index: usize,
+    current_paragraph_path: ParagraphPath,
+
+    // Cursor map tracking
+    marker_pending: HashMap<usize, PendingPosition>,
+    cursor_pending: Option<PendingPosition>,
+    next_marker_id: usize,
+    marker_to_pointer: HashMap<usize, CursorPointer>,
+}
+
+impl<'a> DirectRenderer<'a> {
+    #[allow(dead_code)]
+    fn new(
+        wrap_width: usize,
+        left_padding: usize,
+        reveal_tags: &[RevealTagRef],
+        direct_tracking: DirectCursorTracking<'a>,
+        cache: Option<&'a mut RenderCache>,
+    ) -> Self {
+        let wrap_limit = if wrap_width > 1 { wrap_width - 1 } else { 1 };
+        let padding = if left_padding > 0 {
+            Some(" ".repeat(left_padding))
+        } else {
+            None
+        };
+        let reveal_map = reveal_tags
+            .iter()
+            .map(|tag| (tag.id, tag.clone()))
+            .collect::<HashMap<usize, RevealTagRef>>();
+
+        Self {
+            wrap_width,
+            wrap_limit,
+            left_padding,
+            padding,
+            line_metrics: Vec::new(),
+            lines: Vec::new(),
+            current_line_index: 0,
+            reveal_tags: reveal_map,
+            cache,
+            cursor_pointer: direct_tracking.cursor,
+            selection_start: direct_tracking.selection.map(|(start, _)| start),
+            selection_end: direct_tracking.selection.map(|(_, end)| end),
+            track_all_positions: direct_tracking.track_all_positions,
+            current_paragraph_index: 0,
+            current_paragraph_path: ParagraphPath::default(),
+            marker_pending: HashMap::new(),
+            cursor_pending: None,
+            next_marker_id: 0,
+            marker_to_pointer: HashMap::new(),
+        }
+    }
+
+    fn render_document(&mut self, document: &Document) {
+        for (idx, paragraph) in document.paragraphs.iter().enumerate() {
+            if idx > 0 {
+                self.push_plain_line("", false);
+            }
+            self.current_paragraph_index = idx;
+            self.current_paragraph_path = ParagraphPath::new_root(idx);
+            self.render_paragraph_cached(paragraph, idx, "");
+        }
+    }
+
+    fn render_paragraph_cached(&mut self, paragraph: &Paragraph, paragraph_index: usize, prefix: &str) {
+        // For now, don't use cache with direct rendering since we need to track all positions
+        // TODO: Optimize caching for direct rendering
+        self.render_paragraph(paragraph, prefix);
+    }
+
+    fn render_paragraph(&mut self, paragraph: &Paragraph, prefix: &str) {
+        match paragraph.paragraph_type() {
+            ParagraphType::Text => self.render_text_paragraph(paragraph, prefix, prefix),
+            ParagraphType::Header1 => self.render_header(paragraph, prefix, HeaderLevel::One),
+            ParagraphType::Header2 => self.render_header(paragraph, prefix, HeaderLevel::Two),
+            ParagraphType::Header3 => self.render_header(paragraph, prefix, HeaderLevel::Three),
+            ParagraphType::CodeBlock => self.render_code_block(paragraph, prefix),
+            ParagraphType::Quote => self.render_quote(paragraph, prefix),
+            ParagraphType::UnorderedList => self.render_unordered_list(paragraph, prefix),
+            ParagraphType::OrderedList => self.render_ordered_list(paragraph, prefix),
+            ParagraphType::Checklist => self.render_checklist(paragraph, prefix),
+        }
+    }
+
+    fn render_text_paragraph(
+        &mut self,
+        paragraph: &Paragraph,
+        first_prefix: &str,
+        continuation_prefix: &str,
+    ) {
+        let mut fragments = Vec::new();
+        let base_span_path = SpanPath { indices: Vec::new() };
+        self.collect_fragments_direct(
+            paragraph.content(),
+            &base_span_path,
+            Style::default(),
+            &mut fragments,
+        );
+        let fragments = trim_layout_fragments(fragments);
+        let lines = self.wrap_fragments_direct(
+            &fragments,
+            first_prefix,
+            continuation_prefix,
+            self.wrap_limit,
+        );
+        self.consume_lines_direct(lines);
+    }
+
+    fn render_header(&mut self, paragraph: &Paragraph, prefix: &str, level: HeaderLevel) {
+        let mut fragments = Vec::new();
+        let base_span_path = SpanPath { indices: Vec::new() };
+        self.collect_fragments_direct(
+            paragraph.content(),
+            &base_span_path,
+            Style::default(),
+            &mut fragments,
+        );
+        let fragments = trim_layout_fragments(fragments);
+        let mut lines = self.wrap_fragments_direct(&fragments, prefix, prefix, self.wrap_limit);
+
+        match level {
+            HeaderLevel::One => {
+                if let Some(first_line) = lines.first_mut() {
+                    for span in &mut first_line.spans {
+                        span.style = span.style.add_modifier(Modifier::BOLD);
+                    }
+                }
+            }
+            HeaderLevel::Two | HeaderLevel::Three => {
+                for line in &mut lines {
+                    for span in &mut line.spans {
+                        span.style = span.style.add_modifier(Modifier::BOLD);
+                    }
+                }
+            }
+        }
+
+        self.consume_lines_direct(lines);
+
+        if matches!(level, HeaderLevel::Two | HeaderLevel::Three) {
+            let width = self.lines.last().map(|line| line_width(line)).unwrap_or(0);
+            let underline_char = match level {
+                HeaderLevel::Two => '=',
+                HeaderLevel::Three => '-',
+                HeaderLevel::One => '=',
+            };
+            let underline_width = width.saturating_sub(self.left_padding);
+            let underline = underline_string(underline_width, underline_char);
+            self.push_plain_line(&underline, false);
+        }
+    }
+
+    fn render_code_block(&mut self, paragraph: &Paragraph, prefix: &str) {
+        let fence = self.code_block_fence(prefix);
+        self.push_plain_line(&fence, false);
+
+        let mut fragments = Vec::new();
+        let base_span_path = SpanPath { indices: Vec::new() };
+        self.collect_fragments_direct(
+            paragraph.content(),
+            &base_span_path,
+            Style::default(),
+            &mut fragments,
+        );
+        let lines = self.wrap_fragments_direct(&fragments, prefix, prefix, usize::MAX / 4);
+        self.consume_lines_direct(lines);
+
+        self.push_plain_line(&fence, false);
+    }
+
+    fn render_quote(&mut self, paragraph: &Paragraph, prefix: &str) {
+        let quote_prefix = format!("{}| ", prefix);
+        if !paragraph.content().is_empty() {
+            self.render_text_paragraph(paragraph, &quote_prefix, &quote_prefix);
+        }
+        for (idx, child) in paragraph.children().iter().enumerate() {
+            if idx > 0 || !paragraph.content().is_empty() {
+                self.push_plain_line(&quote_prefix, false);
+            }
+            self.render_paragraph(child, &quote_prefix);
+        }
+    }
+
+    fn render_unordered_list(&mut self, paragraph: &Paragraph, prefix: &str) {
+        for (entry_idx, entry) in paragraph.entries().iter().enumerate() {
+            if entry_idx > 0 {
+                self.push_plain_line("", false);
+            }
+            let marker = "• ";
+            let first_prefix = format!("{}{}", prefix, marker);
+            let continuation_prefix = format!("{}{}", prefix, " ".repeat(marker.chars().count()));
+            self.render_list_entry(entry, entry_idx, &first_prefix, &continuation_prefix);
+        }
+    }
+
+    fn render_ordered_list(&mut self, paragraph: &Paragraph, prefix: &str) {
+        for (entry_idx, entry) in paragraph.entries().iter().enumerate() {
+            if entry_idx > 0 {
+                self.push_plain_line("", false);
+            }
+            let number_label = format!("{}. ", entry_idx + 1);
+            let first_prefix = format!("{}{}", prefix, number_label);
+            let continuation_spaces = " ".repeat(
+                first_prefix
+                    .chars()
+                    .count()
+                    .saturating_sub(prefix.chars().count()),
+            );
+            let continuation_prefix = format!("{}{}", prefix, continuation_spaces);
+            self.render_list_entry(entry, entry_idx, &first_prefix, &continuation_prefix);
+        }
+    }
+
+    fn render_checklist(&mut self, paragraph: &Paragraph, prefix: &str) {
+        for (item_idx, item) in paragraph.checklist_items().iter().enumerate() {
+            if item_idx > 0 {
+                self.push_plain_line("", false);
+            }
+            self.render_checklist_item_struct(item, vec![item_idx], prefix);
+        }
+    }
+
+    fn render_checklist_item_struct(&mut self, item: &tdoc::ChecklistItem, indices: Vec<usize>, prefix: &str) {
+        // Update paragraph path for this checklist item with full nested indices
+        // For nested items (indices.len() > 1), we need to replace the parent ChecklistItem step
+        let is_nested = indices.len() > 1;
+        if is_nested {
+            // Pop the parent ChecklistItem step first
+            self.current_paragraph_path.pop();
+        }
+        self.current_paragraph_path.push_checklist_item(indices.clone());
+
+        let marker = if item.checked { "[✓] " } else { "[ ] " };
+        let first_prefix = format!("{}{}", prefix, marker);
+        let continuation_prefix = format!("{}{}", prefix, " ".repeat(marker.chars().count()));
+
+        let mut fragments = Vec::new();
+        let base_span_path = SpanPath { indices: Vec::new() };
+        self.collect_fragments_direct(
+            &item.content,
+            &base_span_path,
+            Style::default(),
+            &mut fragments,
+        );
+        let fragments = trim_layout_fragments(fragments);
+        let lines = self.wrap_fragments_direct(
+            &fragments,
+            &first_prefix,
+            &continuation_prefix,
+            self.wrap_limit,
+        );
+        self.consume_lines_direct(lines);
+
+        // Render nested checklist items with extended indices
+        for (child_idx, child) in item.children.iter().enumerate() {
+            let child_prefix = format!("{}    ", prefix);
+            let mut child_indices = indices.clone();
+            child_indices.push(child_idx);
+            self.render_checklist_item_struct(child, child_indices, &child_prefix);
+        }
+
+        // Restore paragraph path
+        self.current_paragraph_path.pop();
+
+        // If this was a nested item, restore the parent ChecklistItem step
+        if is_nested {
+            let mut parent_indices = indices;
+            parent_indices.pop();
+            self.current_paragraph_path.push_checklist_item(parent_indices);
+        }
+    }
+
+    fn render_list_entry(
+        &mut self,
+        entry: &[Paragraph],
+        entry_idx: usize,
+        first_prefix: &str,
+        continuation_prefix: &str,
+    ) {
+        if entry.is_empty() {
+            self.push_plain_line(first_prefix, false);
+            return;
+        }
+
+        let mut iter = entry.iter().enumerate();
+        if let Some((para_idx, first)) = iter.next() {
+            // Update paragraph path for this entry paragraph
+            self.current_paragraph_path.push_entry(entry_idx, para_idx);
+
+            match first.paragraph_type() {
+                ParagraphType::Text => {
+                    self.render_text_paragraph(first, first_prefix, continuation_prefix);
+                }
+                _ => {
+                    self.push_plain_line(first_prefix, false);
+                    self.render_paragraph(first, continuation_prefix);
+                }
+            }
+
+            // Restore paragraph path
+            self.current_paragraph_path.pop();
+        }
+
+        for (para_idx, rest) in iter {
+            // Update paragraph path for each subsequent paragraph in the entry
+            self.current_paragraph_path.push_entry(entry_idx, para_idx);
+
+            if rest.paragraph_type() == ParagraphType::Text {
+                self.push_plain_line("", false);
+            }
+            self.render_paragraph(rest, continuation_prefix);
+
+            // Restore paragraph path
+            self.current_paragraph_path.pop();
+        }
+    }
+
+    fn collect_fragments_direct(
+        &mut self,
+        spans: &[DocSpan],
+        base_span_path: &SpanPath,
+        base_style: Style,
+        fragments: &mut Vec<FragmentItem>,
+    ) {
+        for (span_index, span) in spans.iter().enumerate() {
+            let mut span_path = base_span_path.clone();
+            span_path.push(span_index);
+            self.collect_single_span_direct(span, &span_path, base_style, fragments);
+        }
+    }
+
+    fn collect_single_span_direct(
+        &mut self,
+        span: &DocSpan,
+        span_path: &SpanPath,
+        base_style: Style,
+        fragments: &mut Vec<FragmentItem>,
+    ) {
+        let style = merge_style(base_style, span.style, span.link_target.as_deref());
+
+        // Insert reveal tag for style start if this span has a style
+        let has_style = span.style != InlineStyle::None;
+        if has_style && !self.reveal_tags.is_empty() {
+            let display = reveal_tag_display(span.style, RevealTagKind::Start);
+            let tag_style = Style::default().fg(Color::Yellow).bg(Color::Blue);
+            let width = visible_width(&display);
+            fragments.push(FragmentItem::Token(Fragment {
+                text: display,
+                style: tag_style,
+                kind: FragmentKind::RevealTag,
+                width,
+                content_width: 0,
+                events: Vec::new(),
+                reveal_kind: Some(RevealTagKind::Start),
+            }));
+        }
+
+        let mut local: Vec<FragmentItem> = Vec::new();
+        if !span.text.is_empty() {
+            self.tokenize_text_direct(&span.text, span_path, style, &mut local);
+        }
+
+        let mut prefix: Vec<FragmentItem> = Vec::new();
+        let mut middle: Vec<FragmentItem> = Vec::new();
+        let mut suffix: Vec<FragmentItem> = Vec::new();
+
+        for item in local.into_iter() {
+            match item {
+                FragmentItem::Token(fragment) if fragment.kind == FragmentKind::RevealTag => {
+                    match fragment.reveal_kind {
+                        Some(RevealTagKind::Start) => prefix.push(FragmentItem::Token(fragment)),
+                        Some(RevealTagKind::End) => suffix.push(FragmentItem::Token(fragment)),
+                        None => middle.push(FragmentItem::Token(fragment)),
+                    }
+                }
+                other => middle.push(other),
+            }
+        }
+
+        fragments.extend(prefix.into_iter());
+        fragments.extend(middle.into_iter());
+
+        for (child_index, child) in span.children.iter().enumerate() {
+            let mut child_span_path = span_path.clone();
+            child_span_path.push(child_index);
+            self.collect_single_span_direct(child, &child_span_path, style, fragments);
+        }
+
+        fragments.extend(suffix.into_iter());
+
+        // Insert reveal tag for style end if this span has a style
+        if has_style && !self.reveal_tags.is_empty() {
+            let display = reveal_tag_display(span.style, RevealTagKind::End);
+            let tag_style = Style::default().fg(Color::Yellow).bg(Color::Blue);
+            let width = visible_width(&display);
+            fragments.push(FragmentItem::Token(Fragment {
+                text: display,
+                style: tag_style,
+                kind: FragmentKind::RevealTag,
+                width,
+                content_width: 0,
+                events: Vec::new(),
+                reveal_kind: Some(RevealTagKind::End),
+            }));
+        }
+    }
+
+    fn tokenize_text_direct(
+        &mut self,
+        text: &str,
+        span_path: &SpanPath,
+        style: Style,
+        fragments: &mut Vec<FragmentItem>,
+    ) {
+        // For each character position in the text, check if we need to track it
+        let mut builder: Option<DirectTokenBuilder> = None;
+        let mut buffer: Vec<char> = Vec::new();
+        let chars: Vec<char> = text.chars().collect();
+
+        for (char_offset, ch) in chars.iter().enumerate() {
+            // Check if this position matches any cursor we're tracking
+            let position_events = self.check_position_match(span_path, char_offset, SegmentKind::Text);
+
+            if ch == &'\r' {
+                continue;
+            }
+            if ch == &'\n' {
+                if let Some(mut token) = builder.take() {
+                    token.add_events(position_events);
+                    let frag = token.finish();
+                    fragments.push(FragmentItem::Token(self.convert_direct_fragment(frag)));
+                } else if !position_events.is_empty() {
+                    let frag = DirectFragment {
+                        text: String::new(),
+                        style,
+                        kind: FragmentKind::Word,
+                        width: 0,
+                        content_width: 0,
+                        events: position_events,
+                        reveal_kind: None,
+                    };
+                    fragments.push(FragmentItem::Token(self.convert_direct_fragment(frag)));
+                }
+                fragments.push(FragmentItem::LineBreak);
+                continue;
+            }
+
+            let expanded: &[char] = if ch == &'\t' {
+                buffer.clear();
+                buffer.extend_from_slice(&[' '; 4]);
+                &buffer
+            } else {
+                buffer.clear();
+                buffer.push(*ch);
+                &buffer
+            };
+
+            for actual in expanded {
+                let is_whitespace = actual.is_whitespace();
+                if builder
+                    .as_ref()
+                    .map(|existing| existing.kind_matches(is_whitespace))
+                    .unwrap_or(false)
+                {
+                    if let Some(current) = builder.as_mut() {
+                        current.add_events(position_events.clone());
+                        current.push_char(*actual);
+                    }
+                } else {
+                    if let Some(existing) = builder.take() {
+                        fragments.push(FragmentItem::Token(self.convert_direct_fragment(existing.finish())));
+                    }
+                    let mut new_builder = DirectTokenBuilder::new(style, is_whitespace);
+                    new_builder.add_events(position_events.clone());
+                    new_builder.push_char(*actual);
+                    builder = Some(new_builder);
+                }
+            }
+        }
+
+        // Check for cursor position at the end of the text (after the last character)
+        let end_position_events = self.check_position_match(span_path, chars.len(), SegmentKind::Text);
+
+        if let Some(mut token) = builder {
+            // If there are events at the end position, add them to the last token
+            if !end_position_events.is_empty() {
+                token.add_events(end_position_events);
+            }
+            fragments.push(FragmentItem::Token(self.convert_direct_fragment(token.finish())));
+        } else if !end_position_events.is_empty() {
+            // If there's no token but there are end position events, create an empty fragment for them
+            let frag = DirectFragment {
+                text: String::new(),
+                style,
+                kind: FragmentKind::Word,
+                width: 0,
+                content_width: 0,
+                events: end_position_events,
+                reveal_kind: None,
+            };
+            fragments.push(FragmentItem::Token(self.convert_direct_fragment(frag)));
+        }
+    }
+
+    fn convert_direct_fragment(&mut self, direct: DirectFragment) -> Fragment {
+        // Convert DirectFragment to Fragment by extracting the relevant events
+        let events: Vec<TextEvent> = direct
+            .events
+            .iter()
+            .map(|e| {
+                let kind = match e.kind {
+                    DirectTextEventKind::Cursor => TextEventKind::Cursor,
+                    DirectTextEventKind::SelectionStart => TextEventKind::SelectionStart,
+                    DirectTextEventKind::SelectionEnd => TextEventKind::SelectionEnd,
+                    DirectTextEventKind::Position => {
+                        // Assign a unique marker ID for this position
+                        let marker_id = self.next_marker_id;
+                        self.next_marker_id += 1;
+                        self.marker_to_pointer.insert(marker_id, e.pointer.clone());
+                        TextEventKind::Marker(marker_id)
+                    }
+                };
+
+                TextEvent {
+                    offset: e.offset,
+                    content_offset: e.content_offset,
+                    offset_hint: None,
+                    content_offset_hint: None,
+                    kind,
+                }
+            })
+            .collect();
+
+        Fragment {
+            text: direct.text,
+            style: direct.style,
+            kind: direct.kind,
+            width: direct.width,
+            content_width: direct.content_width,
+            events,
+            reveal_kind: direct.reveal_kind,
+        }
+    }
+
+    fn check_position_match(
+        &mut self,
+        span_path: &SpanPath,
+        offset: usize,
+        segment_kind: SegmentKind,
+    ) -> Vec<DirectTextEvent> {
+        let mut events = Vec::new();
+
+        // Check cursor
+        if let Some(cursor) = self.cursor_pointer {
+            if cursor.paragraph_path == self.current_paragraph_path
+                && cursor.span_path == *span_path
+                && cursor.offset == offset
+                && cursor.segment_kind == segment_kind
+            {
+                events.push(DirectTextEvent {
+                    offset: 0,
+                    content_offset: 0,
+                    kind: DirectTextEventKind::Cursor,
+                    pointer: cursor.clone(),
+                });
+            }
+        }
+
+        // Check selection start
+        if let Some(sel_start) = self.selection_start {
+            if sel_start.paragraph_path == self.current_paragraph_path
+                && sel_start.span_path == *span_path
+                && sel_start.offset == offset
+                && sel_start.segment_kind == segment_kind
+            {
+                events.push(DirectTextEvent {
+                    offset: 0,
+                    content_offset: 0,
+                    kind: DirectTextEventKind::SelectionStart,
+                    pointer: sel_start.clone(),
+                });
+            }
+        }
+
+        // Check selection end
+        if let Some(sel_end) = self.selection_end {
+            if sel_end.paragraph_path == self.current_paragraph_path
+                && sel_end.span_path == *span_path
+                && sel_end.offset == offset
+                && sel_end.segment_kind == segment_kind
+            {
+                events.push(DirectTextEvent {
+                    offset: 0,
+                    content_offset: 0,
+                    kind: DirectTextEventKind::SelectionEnd,
+                    pointer: sel_end.clone(),
+                });
+            }
+        }
+
+        // If tracking all positions, add a marker event
+        if self.track_all_positions {
+            let marker_id = self.next_marker_id;
+            self.next_marker_id += 1;
+
+            let pointer = CursorPointer {
+                paragraph_path: self.current_paragraph_path.clone(),
+                span_path: span_path.clone(),
+                offset,
+                segment_kind,
+            };
+
+            self.marker_to_pointer.insert(marker_id, pointer);
+
+            events.push(DirectTextEvent {
+                offset: 0,
+                content_offset: 0,
+                kind: DirectTextEventKind::Position,
+                pointer: CursorPointer {
+                    paragraph_path: self.current_paragraph_path.clone(),
+                    span_path: span_path.clone(),
+                    offset,
+                    segment_kind,
+                },
+            });
+        }
+
+        events
+    }
+
+    fn wrap_fragments_direct(
+        &self,
+        fragments: &[FragmentItem],
+        first_prefix: &str,
+        continuation_prefix: &str,
+        width: usize,
+    ) -> Vec<LineOutput> {
+        // Fragments are already converted to Fragment type in tokenize_text_direct,
+        // so we can just call wrap_fragments directly
+        wrap_fragments(fragments, first_prefix, continuation_prefix, width)
+    }
+
+    fn consume_lines_direct(&mut self, outputs: Vec<LineOutput>) {
+        let padding = self.left_padding.min(u16::MAX as usize) as u16;
+        for output in outputs {
+            let mut spans: Vec<Span<'static>> = Vec::with_capacity(output.spans.len());
+            for segment in output.spans {
+                spans.push(Span::styled(segment.text.clone(), segment.style).to_owned());
+            }
+            let spans = self.prepend_padding(spans);
+            let line = Line::from(spans);
+            self.line_metrics.push(LineMetric {
+                counts_as_content: output.has_word,
+            });
+
+            // Process events to update cursor tracking
+            for event in output.events {
+                let pending = PendingPosition {
+                    line: self.current_line_index,
+                    column: event.column.saturating_add(padding),
+                    content_column: event.content_column,
+                };
+                match event.kind {
+                    TextEventKind::Cursor => {
+                        self.cursor_pending = Some(pending);
+                    }
+                    TextEventKind::Marker(id) => {
+                        self.marker_pending.insert(id, pending);
+                    }
+                    TextEventKind::SelectionStart | TextEventKind::SelectionEnd => {
+                        // Selection events are tracked but not added to cursor_map
+                    }
+                }
+            }
+
+            self.lines.push(line);
+            self.current_line_index += 1;
+        }
+    }
+
+    fn prepend_padding(&self, spans: Vec<Span<'static>>) -> Vec<Span<'static>> {
+        if spans.is_empty() {
+            return spans;
+        }
+        let has_content = spans.iter().any(|span| !span.content.is_empty());
+        if !has_content {
+            return spans;
+        }
+        if let Some(padding) = &self.padding {
+            let mut with_padding = Vec::with_capacity(spans.len() + 1);
+            with_padding.push(Span::raw(padding.clone()).to_owned());
+            with_padding.extend(spans);
+            with_padding
+        } else {
+            spans
+        }
+    }
+
+    fn push_plain_line(&mut self, content: &str, counts_as_content: bool) {
+        let mut spans = Vec::new();
+        if !content.is_empty() {
+            spans.push(Span::raw(content.to_string()).to_owned());
+        }
+        let spans = self.prepend_padding(spans);
+        let line = Line::from(spans);
+        self.lines.push(line);
+        self.line_metrics.push(LineMetric { counts_as_content });
+        self.current_line_index += 1;
+    }
+
+    fn code_block_fence(&self, prefix: &str) -> String {
+        const MIN_FENCE_WIDTH: usize = 4;
+        let available_width = self.wrap_width.saturating_sub(prefix.chars().count());
+        let dash_count = available_width.max(MIN_FENCE_WIDTH);
+        format!("{}{}", prefix, "-".repeat(dash_count))
+    }
+
+    fn finish(mut self) -> RenderResult {
+        if self.lines.is_empty() {
+            self.push_plain_line("", false);
+        }
+        let total_lines = self.lines.len();
+
+        let mut content_line_numbers = Vec::with_capacity(self.line_metrics.len());
+        let mut current_content = 0usize;
+        for metric in &self.line_metrics {
+            content_line_numbers.push(current_content);
+            if metric.counts_as_content {
+                current_content += 1;
+            }
+        }
+
+        let cursor = self
+            .cursor_pending
+            .take()
+            .map(|pending| CursorVisualPosition {
+                line: pending.line,
+                column: pending.column,
+                content_line: content_line_numbers
+                    .get(pending.line)
+                    .copied()
+                    .unwrap_or(pending.line),
+                content_column: pending.content_column,
+            });
+
+        // Build cursor map from tracked positions
+        let mut cursor_map = Vec::new();
+        for (marker_id, pending) in self.marker_pending.iter() {
+            if let Some(pointer) = self.marker_to_pointer.get(marker_id) {
+                let content_line = content_line_numbers
+                    .get(pending.line)
+                    .copied()
+                    .unwrap_or(pending.line);
+                let position = CursorVisualPosition {
+                    line: pending.line,
+                    column: pending.column,
+                    content_line,
+                    content_column: pending.content_column,
+                };
+                cursor_map.push((pointer.clone(), position));
+            }
+        }
+
+        RenderResult {
+            lines: self.lines,
+            cursor,
+            total_lines,
+            cursor_map,
+        }
+    }
+}
+
+// Helper types for direct rendering
+#[derive(Clone)]
+struct DirectFragment {
+    text: String,
+    style: Style,
+    kind: FragmentKind,
+    width: usize,
+    content_width: usize,
+    events: Vec<DirectTextEvent>,
+    reveal_kind: Option<RevealTagKind>,
+}
+
+#[derive(Clone)]
+struct DirectTextEvent {
+    offset: usize,
+    content_offset: usize,
+    kind: DirectTextEventKind,
+    pointer: CursorPointer,
+}
+
+#[derive(Clone, Copy)]
+enum DirectTextEventKind {
+    Cursor,
+    SelectionStart,
+    SelectionEnd,
+    Position,
+}
+
+struct DirectTokenBuilder {
+    text: String,
+    style: Style,
+    kind: FragmentKind,
+    width: usize,
+    content_width: usize,
+    events: Vec<DirectTextEvent>,
+}
+
+impl DirectTokenBuilder {
+    fn new(style: Style, is_whitespace: bool) -> Self {
+        Self {
+            text: String::new(),
+            style,
+            kind: if is_whitespace {
+                FragmentKind::Whitespace
+            } else {
+                FragmentKind::Word
+            },
+            width: 0,
+            content_width: 0,
+            events: Vec::new(),
+        }
+    }
+
+    fn kind_matches(&self, is_whitespace: bool) -> bool {
+        matches!(
+            (self.kind, is_whitespace),
+            (FragmentKind::Whitespace, true) | (FragmentKind::Word, false)
+        )
+    }
+
+    fn add_events(&mut self, mut new_events: Vec<DirectTextEvent>) {
+        for event in new_events.iter_mut() {
+            event.offset = self.width;
+            event.content_offset = self.content_width;
+        }
+        self.events.extend(new_events);
+    }
+
+    fn push_char(&mut self, ch: char) {
+        self.text.push(ch);
+        self.width += UnicodeWidthChar::width(ch).unwrap_or(0);
+        self.content_width += UnicodeWidthChar::width(ch).unwrap_or(0);
+    }
+
+    fn finish(self) -> DirectFragment {
+        DirectFragment {
+            text: self.text,
+            style: self.style,
+            kind: self.kind,
+            width: self.width,
+            content_width: self.content_width,
+            events: self.events,
+            reveal_kind: None,
         }
     }
 }
