@@ -151,9 +151,11 @@ fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut A
     let mut last_tick = Instant::now();
 
     while !app.should_quit() {
+        let draw_start = Instant::now();
         terminal
             .draw(|frame| app.draw(frame))
             .context("failed to draw frame")?;
+        let draw_time = draw_start.elapsed();
 
         let timeout = tick_rate
             .checked_sub(last_tick.elapsed())
@@ -161,7 +163,25 @@ fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut A
 
         if event::poll(timeout).context("event poll failed")? {
             let evt = event::read().context("failed to read event")?;
+            let is_page_down = matches!(evt, Event::Key(KeyEvent { code: KeyCode::PageDown, .. }));
+
+            let handle_start = Instant::now();
             app.handle_event(evt)?;
+            let handle_time = handle_start.elapsed();
+
+            // Log timing for PageDown operations
+            if is_page_down {
+                eprintln!("\n=== PageDown Timing (before next draw) ===");
+                eprintln!("  Handle event: {:?}", handle_time);
+                eprintln!("  Draw (before event): {:?}", draw_time);
+
+                // Force immediate redraw to measure post-event draw time
+                let redraw_start = Instant::now();
+                let _ = terminal.draw(|frame| app.draw(frame));
+                let redraw_time = redraw_start.elapsed();
+                eprintln!("  Draw (after event): {:?}", redraw_time);
+                eprintln!("  TOTAL: {:?}", handle_time + redraw_time);
+            }
         }
 
         if last_tick.elapsed() >= tick_rate {
@@ -745,7 +765,12 @@ impl App {
         let text_area = horizontal[0];
         let scrollbar_area = horizontal[1];
 
+        let render_start = Instant::now();
         let render = self.render_document(text_area.width.max(1) as usize);
+        let render_time = render_start.elapsed();
+        if render_time.as_millis() > 10 {
+            eprintln!("  render_document: {:?}", render_time);
+        }
         self.last_text_area = text_area;
         self.last_total_lines = render.total_lines;
 
@@ -1177,8 +1202,11 @@ impl App {
         if direction == 0 {
             return;
         }
+        let start = Instant::now();
         let distance = self.page_jump_distance();
         self.move_cursor_vertical(distance * direction);
+        let elapsed = start.elapsed();
+        eprintln!("  move_page: {:?}", elapsed);
     }
 
     fn move_to_visual_line_start(&mut self) {
