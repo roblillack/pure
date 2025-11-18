@@ -28,10 +28,12 @@ use ratatui::{
 use tdoc::{Document, InlineStyle, ParagraphType, markdown, parse, writer::Writer};
 
 mod editor;
+mod editor_display;
 mod render;
 
 use editor::{CursorPointer, DocumentEditor};
-use render::{CursorVisualPosition, RenderCache, RenderResult, RenderSentinels, render_document, render_document_with_cache};
+use editor_display::{CursorDisplay, EditorDisplay};
+use render::RenderResult;
 
 const CURSOR_SENTINEL: char = '\u{F8FF}';
 const SELECTION_START_SENTINEL: char = '\u{F8FE}';
@@ -63,10 +65,6 @@ impl DocumentFormat {
 
 fn main() -> Result<()> {
     run()
-}
-
-fn column_distance(a: u16, b: u16) -> u16 {
-    if a >= b { a - b } else { b - a }
 }
 
 fn editor_wrap_configuration(width: usize) -> (usize, usize) {
@@ -149,44 +147,63 @@ fn load_document(path: &PathBuf) -> Result<(Document, DocumentFormat, Option<Str
 fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> {
     let tick_rate = Duration::from_millis(250);
     let mut last_tick = Instant::now();
+    let mut needs_redraw = true;
 
     while !app.should_quit() {
-        let draw_start = Instant::now();
-        terminal
-            .draw(|frame| app.draw(frame))
-            .context("failed to draw frame")?;
-        let draw_time = draw_start.elapsed();
+        // Only draw if needed
+        if needs_redraw {
+            terminal
+                .draw(|frame| app.draw(frame))
+                .context("failed to draw frame")?;
+            needs_redraw = false;
+        }
 
         let timeout = tick_rate
             .checked_sub(last_tick.elapsed())
             .unwrap_or_else(|| Duration::from_secs(0));
 
+        // Block waiting for events
         if event::poll(timeout).context("event poll failed")? {
             let evt = event::read().context("failed to read event")?;
-            let is_page_down = matches!(evt, Event::Key(KeyEvent { code: KeyCode::PageDown, .. }));
+
+            // Skip spurious Resize events that don't change size
+            if let Event::Resize(_, _) = evt {
+                // Always redraw on resize to handle terminal size changes
+                needs_redraw = true;
+                continue;
+            }
+
+            let is_page_down = matches!(
+                evt,
+                Event::Key(KeyEvent {
+                    code: KeyCode::PageDown,
+                    ..
+                })
+            );
 
             let handle_start = Instant::now();
             app.handle_event(evt)?;
             let handle_time = handle_start.elapsed();
 
+            // Mark that we need to redraw after handling event
+            needs_redraw = true;
+
             // Log timing for PageDown operations
             if is_page_down {
-                eprintln!("\n=== PageDown Timing (before next draw) ===");
+                eprintln!("\n=== PageDown Timing ===");
                 eprintln!("  Handle event: {:?}", handle_time);
-                eprintln!("  Draw (before event): {:?}", draw_time);
-
-                // Force immediate redraw to measure post-event draw time
-                let redraw_start = Instant::now();
-                let _ = terminal.draw(|frame| app.draw(frame));
-                let redraw_time = redraw_start.elapsed();
-                eprintln!("  Draw (after event): {:?}", redraw_time);
-                eprintln!("  TOTAL: {:?}", handle_time + redraw_time);
             }
         }
 
+        // Handle tick for status message updates
         if last_tick.elapsed() >= tick_rate {
+            let had_message_before = app.has_status_message();
             app.on_tick();
             last_tick = Instant::now();
+            // Only redraw if status message changed (was pruned)
+            if had_message_before && !app.has_status_message() {
+                needs_redraw = true;
+            }
         }
     }
 
@@ -399,11 +416,17 @@ fn build_context_menu_entries(
         entries.push(MenuEntry::Separator);
     }
 
-    entries.extend(default_context_menu_entries(has_selection, allow_paragraph_change));
+    entries.extend(default_context_menu_entries(
+        has_selection,
+        allow_paragraph_change,
+    ));
     entries
 }
 
-fn default_context_menu_entries(has_selection: bool, allow_paragraph_change: bool) -> Vec<MenuEntry> {
+fn default_context_menu_entries(
+    has_selection: bool,
+    allow_paragraph_change: bool,
+) -> Vec<MenuEntry> {
     vec![
         MenuEntry::Section("Paragraph type"),
         MenuEntry::Item(if allow_paragraph_change {
@@ -582,29 +605,21 @@ fn is_context_menu_shortcut(code: KeyCode, modifiers: KeyModifiers) -> bool {
 }
 
 struct App {
-    editor: DocumentEditor,
+    display: EditorDisplay,
     file_path: PathBuf,
     document_format: DocumentFormat,
     scroll_top: usize,
-    last_view_height: usize,
-    last_total_lines: usize,
     should_quit: bool,
     dirty: bool,
     status_message: Option<(String, Instant)>,
-    visual_positions: Vec<CursorDisplay>,
-    last_cursor_visual: Option<CursorVisualPosition>,
-    preferred_column: Option<u16>,
     selection_anchor: Option<CursorPointer>,
     context_menu: Option<ContextMenuState>,
-    last_text_area: Rect,
     last_click_instant: Option<Instant>,
     last_click_position: Option<(u16, u16)>,
     last_click_button: Option<MouseButton>,
     mouse_click_count: u8,
     mouse_drag_anchor: Option<CursorPointer>,
-    cursor_following: bool,
     pending_scroll_restore: Option<ScrollRestore>,
-    render_cache: RenderCache,
 }
 
 impl App {
@@ -616,31 +631,24 @@ impl App {
     ) -> Self {
         let mut editor = DocumentEditor::new(document);
         editor.ensure_cursor_selectable();
+        let display = EditorDisplay::new(editor);
 
         Self {
-            editor,
+            display,
             file_path: path,
             document_format: format,
             scroll_top: 0,
-            last_view_height: 1,
-            last_total_lines: 0,
             should_quit: false,
             dirty: false,
             status_message: initial_status.map(|msg| (msg, Instant::now())),
-            visual_positions: Vec::new(),
-            last_cursor_visual: None,
-            preferred_column: None,
             selection_anchor: None,
             context_menu: None,
-            last_text_area: Rect::default(),
             last_click_instant: None,
             last_click_position: None,
             last_click_button: None,
             mouse_click_count: 0,
             mouse_drag_anchor: None,
-            cursor_following: true,
             pending_scroll_restore: None,
-            render_cache: RenderCache::new(),
         }
     }
 
@@ -648,10 +656,14 @@ impl App {
         self.should_quit
     }
 
+    fn has_status_message(&self) -> bool {
+        self.status_message.is_some()
+    }
+
     fn prepare_selection(&mut self, extend: bool) {
         if extend {
             if self.selection_anchor.is_none() {
-                self.selection_anchor = Some(self.editor.cursor_pointer());
+                self.selection_anchor = Some(self.display.cursor_pointer());
             }
         } else {
             self.selection_anchor = None;
@@ -662,8 +674,8 @@ impl App {
         let Some(anchor) = self.selection_anchor.clone() else {
             return None;
         };
-        let focus = self.editor.cursor_pointer();
-        match self.editor.compare_pointers(&anchor, &focus) {
+        let focus = self.display.cursor_pointer();
+        match self.display.compare_pointers(&anchor, &focus) {
             Some(Ordering::Less) => Some((anchor, focus)),
             Some(Ordering::Equal) => None,
             Some(Ordering::Greater) => Some((focus, anchor)),
@@ -679,13 +691,13 @@ impl App {
             return false;
         };
         if self
-            .editor
+            .display
             .apply_inline_style_to_selection(&selection, style)
         {
             self.mark_dirty();
-            self.preferred_column = None;
+            self.display.set_preferred_column(None);
             self.selection_anchor = None;
-            let _ = self.editor.move_to_pointer(&selection.1);
+            let _ = self.display.move_to_pointer(&selection.1);
             true
         } else {
             false
@@ -693,11 +705,12 @@ impl App {
     }
 
     fn capture_reveal_toggle_snapshot(&self) -> RevealToggleSnapshot {
-        let viewport = self.last_view_height.max(1);
+        let viewport = self.display.last_view_height().max(1);
         let max_scroll = self
-            .last_total_lines
+            .display
+            .last_total_lines()
             .saturating_sub(viewport)
-            .min(self.last_total_lines);
+            .min(self.display.last_total_lines());
         let clamped_scroll = self.scroll_top.min(max_scroll);
         let ratio = if max_scroll == 0 {
             0.0
@@ -706,12 +719,12 @@ impl App {
         };
         RevealToggleSnapshot {
             scroll_ratio: ratio,
-            cursor_pointer: self.editor.cursor_stable_pointer(),
+            cursor_pointer: self.display.cursor_stable_pointer(),
         }
     }
 
     fn restore_view_after_reveal_toggle(&mut self, snapshot: RevealToggleSnapshot) {
-        let _ = self.editor.move_to_pointer(&snapshot.cursor_pointer);
+        let _ = self.display.move_to_pointer(&snapshot.cursor_pointer);
         self.pending_scroll_restore = Some(ScrollRestore {
             ratio: snapshot.scroll_ratio,
             ensure_cursor_visible: true,
@@ -766,28 +779,27 @@ impl App {
         let scrollbar_area = horizontal[1];
 
         let render_start = Instant::now();
-        let render = self.render_document(text_area.width.max(1) as usize);
+        let width = text_area.width.max(1) as usize;
+        let (wrap_width, left_padding) = editor_wrap_configuration(width);
+        let selection = self.current_selection();
+        let render = self.display.render_document(
+            width,
+            wrap_width,
+            left_padding,
+            selection,
+            CURSOR_SENTINEL,
+            SELECTION_START_SENTINEL,
+            SELECTION_END_SENTINEL,
+        );
         let render_time = render_start.elapsed();
         if render_time.as_millis() > 10 {
-            eprintln!("  render_document: {:?}", render_time);
-        }
-        self.last_text_area = text_area;
-        self.last_total_lines = render.total_lines;
-
-        self.visual_positions = render
-            .cursor_map
-            .iter()
-            .cloned()
-            .map(|(pointer, position)| CursorDisplay { pointer, position })
-            .collect();
-        let cursor_visual = render.cursor;
-        self.last_cursor_visual = cursor_visual;
-        if self.preferred_column.is_none() {
-            self.preferred_column = cursor_visual.map(|p| p.column);
+            // eprintln!("  render_document: {:?}", render_time);
         }
 
+        self.display
+            .update_after_render(text_area, render.total_lines);
+        let cursor_visual = self.display.last_cursor_visual();
         let viewport_height = text_area.height as usize;
-        self.last_view_height = viewport_height.max(1);
         self.apply_pending_scroll_restore(&render, viewport_height);
         self.adjust_scroll(&render, viewport_height);
 
@@ -953,11 +965,11 @@ impl App {
     fn open_context_menu(&mut self) {
         let has_selection = self.current_selection().is_some();
         let entries = build_context_menu_entries(
-            self.editor.current_checklist_item_state(),
+            self.display.current_checklist_item_state(),
             has_selection,
-            self.editor.can_indent_more(),
-            self.editor.can_indent_less(),
-            self.editor.can_change_paragraph_type(),
+            self.display.can_indent_more(),
+            self.display.can_indent_less(),
+            self.display.can_change_paragraph_type(),
         );
         self.context_menu = Some(ContextMenuState::new(entries));
     }
@@ -1025,14 +1037,14 @@ impl App {
     fn execute_menu_action(&mut self, action: MenuAction) -> bool {
         match action {
             MenuAction::SetParagraphType(kind) => {
-                if self.editor.set_paragraph_type(kind) {
+                if self.display.set_paragraph_type(kind) {
                     self.mark_dirty();
-                    self.preferred_column = None;
+                    self.display.set_preferred_column(None);
                 }
                 true
             }
             MenuAction::SetChecklistItemChecked(checked) => {
-                if self.editor.set_current_checklist_item_checked(checked) {
+                if self.display.set_current_checklist_item_checked(checked) {
                     self.mark_dirty();
                 }
                 true
@@ -1042,18 +1054,18 @@ impl App {
                 true
             }
             MenuAction::IndentMore => {
-                if self.editor.indent_current_paragraph() {
+                if self.display.indent_current_paragraph() {
                     self.selection_anchor = None;
                     self.mark_dirty();
-                    self.preferred_column = None;
+                    self.display.set_preferred_column(None);
                 }
                 true
             }
             MenuAction::IndentLess => {
-                if self.editor.unindent_current_paragraph() {
+                if self.display.unindent_current_paragraph() {
                     self.selection_anchor = None;
                     self.mark_dirty();
-                    self.preferred_column = None;
+                    self.display.set_preferred_column(None);
                 }
                 true
             }
@@ -1068,7 +1080,7 @@ impl App {
         }
 
         let marker = if self.dirty { "*" } else { "" };
-        let reveal_indicator = if self.editor.reveal_codes() {
+        let reveal_indicator = if self.display.reveal_codes() {
             " | Reveal"
         } else {
             ""
@@ -1100,7 +1112,7 @@ impl App {
         if self.scroll_top > max_scroll {
             self.scroll_top = max_scroll;
         }
-        if self.cursor_following {
+        if self.display.cursor_following() {
             if let Some(cursor) = &render.cursor {
                 self.scroll_top = self.scroll_top_for_cursor(cursor.line, viewport, max_scroll);
             }
@@ -1143,316 +1155,8 @@ impl App {
         scroll.min(max_scroll)
     }
 
-    fn move_cursor_vertical(&mut self, delta: i32) {
-        if self.visual_positions.is_empty() {
-            return;
-        }
-
-        let pointer = self.editor.cursor_pointer();
-        let current_position = self
-            .visual_positions
-            .iter()
-            .find(|entry| entry.pointer == pointer)
-            .map(|entry| entry.position)
-            .or(self.last_cursor_visual);
-
-        let Some(current) = current_position else {
-            return;
-        };
-
-        let desired_column = self.preferred_column.unwrap_or(current.column);
-
-        let max_line = self
-            .visual_positions
-            .iter()
-            .map(|entry| entry.position.line)
-            .max()
-            .unwrap_or(0);
-
-        let mut target_line = current.line as i32 + delta;
-        if target_line < 0 {
-            target_line = 0;
-        } else if target_line > max_line as i32 {
-            target_line = max_line as i32;
-        }
-
-        let target_line_usize = target_line as usize;
-
-        let destination = self
-            .closest_pointer_on_line(target_line_usize, desired_column)
-            .or_else(|| self.search_nearest_line(target_line_usize, delta, desired_column));
-
-        if let Some(dest) = destination {
-            if self.editor.move_to_pointer(&dest.pointer) {
-                self.preferred_column = Some(desired_column);
-                self.last_cursor_visual = Some(dest.position);
-            } else {
-                self.last_cursor_visual = Some(dest.position);
-            }
-        }
-    }
-
-    fn page_jump_distance(&self) -> i32 {
-        let viewport = self.last_view_height.max(1);
-        let approx = ((viewport as f32) * 0.9).round() as usize;
-        approx.max(1) as i32
-    }
-
-    fn move_page(&mut self, direction: i32) {
-        if direction == 0 {
-            return;
-        }
-        let start = Instant::now();
-        let distance = self.page_jump_distance();
-        self.move_cursor_vertical(distance * direction);
-        let elapsed = start.elapsed();
-        eprintln!("  move_page: {:?}", elapsed);
-    }
-
-    fn move_to_visual_line_start(&mut self) {
-        self.preferred_column = None;
-
-        if self.visual_positions.is_empty() {
-            self.editor.move_to_segment_start();
-            return;
-        }
-
-        let pointer = self.editor.cursor_pointer();
-        let current = self
-            .visual_positions
-            .iter()
-            .find(|entry| entry.pointer == pointer)
-            .map(|entry| entry.position)
-            .or(self.last_cursor_visual);
-
-        let Some(current_position) = current else {
-            self.editor.move_to_segment_start();
-            return;
-        };
-
-        let destination = self
-            .visual_positions
-            .iter()
-            .filter(|entry| entry.position.line == current_position.line)
-            .cloned()
-            .min_by_key(|entry| {
-                (
-                    entry.position.content_column as usize,
-                    entry.position.column as usize,
-                    entry.pointer.offset,
-                )
-            });
-
-        if let Some(target) = destination {
-            if self.editor.move_to_pointer(&target.pointer) {
-                self.last_cursor_visual = Some(target.position);
-            } else {
-                self.last_cursor_visual = Some(target.position);
-            }
-        } else {
-            self.editor.move_to_segment_start();
-        }
-    }
-
-    fn move_to_visual_line_end(&mut self) {
-        self.preferred_column = None;
-
-        if self.visual_positions.is_empty() {
-            self.editor.move_to_segment_end();
-            return;
-        }
-
-        let pointer = self.editor.cursor_pointer();
-        let current = self
-            .visual_positions
-            .iter()
-            .find(|entry| entry.pointer == pointer)
-            .map(|entry| entry.position)
-            .or(self.last_cursor_visual);
-
-        let Some(current_position) = current else {
-            self.editor.move_to_segment_end();
-            return;
-        };
-
-        let destination = self
-            .visual_positions
-            .iter()
-            .filter(|entry| entry.position.line == current_position.line)
-            .cloned()
-            .max_by_key(|entry| {
-                (
-                    entry.position.content_column as usize,
-                    entry.position.column as usize,
-                    entry.pointer.offset,
-                )
-            });
-
-        if let Some(target) = destination {
-            if self.editor.move_to_pointer(&target.pointer) {
-                self.last_cursor_visual = Some(target.position);
-            } else {
-                self.last_cursor_visual = Some(target.position);
-            }
-        } else {
-            self.editor.move_to_segment_end();
-        }
-    }
-
-    fn closest_pointer_on_line(&self, line: usize, column: u16) -> Option<CursorDisplay> {
-        self.visual_positions
-            .iter()
-            .filter(|entry| entry.position.line == line)
-            .min_by_key(|entry| column_distance(entry.position.column, column))
-            .cloned()
-    }
-
-    fn search_nearest_line(
-        &self,
-        start_line: usize,
-        delta: i32,
-        column: u16,
-    ) -> Option<CursorDisplay> {
-        if delta == 0 {
-            return None;
-        }
-        let max_line = self
-            .visual_positions
-            .iter()
-            .map(|entry| entry.position.line)
-            .max()
-            .unwrap_or(0);
-
-        let mut distance = 1usize;
-        loop {
-            if delta < 0 {
-                if let Some(line) = start_line.checked_sub(distance) {
-                    if let Some(found) = self.closest_pointer_on_line(line, column) {
-                        return Some(found);
-                    }
-                } else {
-                    break;
-                }
-            } else {
-                let line = start_line + distance;
-                if line > max_line {
-                    break;
-                }
-                if let Some(found) = self.closest_pointer_on_line(line, column) {
-                    return Some(found);
-                }
-            }
-
-            if distance > max_line.saturating_add(1) {
-                break;
-            }
-            distance += 1;
-        }
-
-        None
-    }
-
-    fn closest_pointer_near_line(&self, line: usize, column: u16) -> Option<CursorDisplay> {
-        if self.visual_positions.is_empty() {
-            return None;
-        }
-        if let Some(hit) = self.closest_pointer_on_line(line, column) {
-            return Some(hit);
-        }
-        let max_line = self
-            .visual_positions
-            .iter()
-            .map(|entry| entry.position.line)
-            .max()
-            .unwrap_or(0);
-        let mut distance = 1usize;
-        while line.checked_sub(distance).is_some() || line + distance <= max_line {
-            if let Some(prev) = line.checked_sub(distance) {
-                if let Some(hit) = self.closest_pointer_on_line(prev, column) {
-                    return Some(hit);
-                }
-            }
-            let next = line + distance;
-            if next <= max_line {
-                if let Some(hit) = self.closest_pointer_on_line(next, column) {
-                    return Some(hit);
-                }
-            } else if line.checked_sub(distance).is_none() {
-                break;
-            }
-            distance += 1;
-        }
-        None
-    }
-
-    fn pointer_from_mouse(&self, column: u16, row: u16) -> Option<CursorDisplay> {
-        if self.visual_positions.is_empty() {
-            return None;
-        }
-        let area = self.last_text_area;
-        if area.width == 0 || area.height == 0 {
-            return None;
-        }
-        let max_x = area.x.saturating_add(area.width);
-        let max_y = area.y.saturating_add(area.height);
-        if column < area.x || column >= max_x || row < area.y || row >= max_y {
-            return None;
-        }
-        let line = self.scroll_top.saturating_add((row - area.y) as usize);
-        let relative_column = column.saturating_sub(area.x);
-        self.closest_pointer_near_line(line, relative_column)
-    }
-
-    fn visual_line_boundaries(&self, line: usize) -> Option<(CursorDisplay, CursorDisplay)> {
-        let mut entries: Vec<_> = self
-            .visual_positions
-            .iter()
-            .filter(|entry| entry.position.line == line)
-            .cloned()
-            .collect();
-        if entries.is_empty() {
-            return None;
-        }
-        entries.sort_by_key(|entry| {
-            (
-                entry.position.content_column as usize,
-                entry.position.column as usize,
-                entry.pointer.offset,
-            )
-        });
-        let start = entries.first()?.clone();
-        let end = entries.last()?.clone();
-        Some((start, end))
-    }
-
-    fn focus_display(&mut self, display: &CursorDisplay) {
-        if self.editor.move_to_pointer(&display.pointer) {
-            self.last_cursor_visual = Some(display.position);
-            self.preferred_column = Some(display.position.column);
-            self.cursor_following = true;
-        }
-    }
-
-    fn focus_pointer(&mut self, pointer: &CursorPointer) {
-        if self.editor.move_to_pointer(pointer) {
-            if let Some(display) = self
-                .visual_positions
-                .iter()
-                .find(|entry| &entry.pointer == pointer)
-                .cloned()
-            {
-                self.last_cursor_visual = Some(display.position);
-                self.preferred_column = Some(display.position.column);
-            } else {
-                self.last_cursor_visual = None;
-                self.preferred_column = None;
-            }
-            self.cursor_following = true;
-        }
-    }
-
     fn insert_paragraph_break(&mut self) -> bool {
-        self.editor.insert_paragraph_break()
+        self.display.insert_paragraph_break()
     }
 
     fn register_click(&mut self, button: MouseButton, column: u16, row: u16) -> u8 {
@@ -1483,12 +1187,13 @@ impl App {
         if delta == 0 {
             return;
         }
-        self.cursor_following = false;
-        let viewport = self.last_view_height.max(1);
+        self.display.set_cursor_following(false);
+        let viewport = self.display.last_view_height().max(1);
         let max_scroll = self
-            .last_total_lines
+            .display
+            .last_total_lines()
             .saturating_sub(viewport)
-            .min(self.last_total_lines);
+            .min(self.display.last_total_lines());
         let max_scroll = max_scroll as isize;
         let mut new_scroll = self.scroll_top as isize + delta;
         if new_scroll < 0 {
@@ -1500,7 +1205,7 @@ impl App {
     }
 
     fn detach_cursor_follow(&mut self) {
-        self.cursor_following = false;
+        self.display.detach_cursor_follow();
     }
 
     fn handle_mouse_event(&mut self, event: MouseEvent) {
@@ -1526,7 +1231,10 @@ impl App {
     }
 
     fn handle_mouse_down(&mut self, event: MouseEvent) {
-        let Some(display) = self.pointer_from_mouse(event.column, event.row) else {
+        let Some(display) =
+            self.display
+                .pointer_from_mouse(event.column, event.row, self.scroll_top)
+        else {
             if !event.modifiers.contains(KeyModifiers::SHIFT) {
                 self.selection_anchor = None;
             }
@@ -1546,35 +1254,37 @@ impl App {
     fn handle_single_click(&mut self, display: CursorDisplay, modifiers: KeyModifiers) {
         if modifiers.contains(KeyModifiers::SHIFT) {
             if self.selection_anchor.is_none() {
-                self.selection_anchor = Some(self.editor.cursor_pointer());
+                self.selection_anchor = Some(self.display.cursor_pointer());
             }
             self.mouse_drag_anchor = None;
         } else {
             self.selection_anchor = None;
             self.mouse_drag_anchor = Some(display.pointer.clone());
         }
-        self.focus_display(&display);
+        self.display.focus_display(&display);
     }
 
     fn handle_double_click(&mut self, display: CursorDisplay) {
         self.mouse_drag_anchor = None;
-        if let Some((start, end)) = self.editor.word_boundaries_at(&display.pointer) {
+        if let Some((start, end)) = self.display.word_boundaries_at(&display.pointer) {
             self.selection_anchor = Some(start.clone());
-            self.focus_pointer(&end);
+            self.display.focus_pointer(&end);
         } else {
             self.selection_anchor = None;
-            self.focus_display(&display);
+            self.display.focus_display(&display);
         }
     }
 
     fn handle_triple_click(&mut self, display: CursorDisplay) {
         self.mouse_drag_anchor = None;
-        if let Some((line_start, line_end)) = self.visual_line_boundaries(display.position.line) {
+        if let Some((line_start, line_end)) =
+            self.display.visual_line_boundaries(display.position.line)
+        {
             self.selection_anchor = Some(line_start.pointer.clone());
-            self.focus_display(&line_end);
+            self.display.focus_display(&line_end);
         } else {
             self.selection_anchor = None;
-            self.focus_display(&display);
+            self.display.focus_display(&display);
         }
     }
 
@@ -1582,43 +1292,22 @@ impl App {
         let Some(anchor) = self.mouse_drag_anchor.clone() else {
             return;
         };
-        let Some(display) = self.pointer_from_mouse(event.column, event.row) else {
+        let Some(display) =
+            self.display
+                .pointer_from_mouse(event.column, event.row, self.scroll_top)
+        else {
             return;
         };
         if self.selection_anchor.is_none() {
             self.selection_anchor = Some(anchor);
         }
-        self.focus_display(&display);
+        self.display.focus_display(&display);
     }
 
     fn handle_mouse_up(&mut self, button: MouseButton) {
         if button == MouseButton::Left {
             self.mouse_drag_anchor = None;
         }
-    }
-
-    fn render_document(&mut self, width: usize) -> RenderResult {
-        let (wrap_width, left_padding) = editor_wrap_configuration(width);
-        let selection = self.current_selection();
-        let (clone, markers, reveal_tags, _) = self.editor.clone_with_markers(
-            CURSOR_SENTINEL,
-            selection.clone(),
-            SELECTION_START_SENTINEL,
-            SELECTION_END_SENTINEL,
-        );
-        render_document_with_cache(
-            &clone,
-            wrap_width,
-            left_padding,
-            &markers,
-            &reveal_tags,
-            RenderSentinels {
-                cursor: CURSOR_SENTINEL,
-                selection_start: SELECTION_START_SENTINEL,
-                selection_end: SELECTION_END_SENTINEL,
-            },
-            Some(&mut self.render_cache),
-        )
     }
 
     fn handle_event(&mut self, event: Event) -> Result<()> {
@@ -1646,7 +1335,7 @@ impl App {
                     return Ok(());
                 }
 
-                let previous_cursor = self.editor.cursor_pointer();
+                let previous_cursor = self.display.cursor_pointer();
 
                 match (code, modifiers) {
                     (KeyCode::Char('q'), m) if m.contains(KeyModifiers::CONTROL) => {
@@ -1657,10 +1346,10 @@ impl App {
                     }
                     (KeyCode::F(9), _) => {
                         let snapshot = self.capture_reveal_toggle_snapshot();
-                        let enabled = !self.editor.reveal_codes();
-                        self.editor.set_reveal_codes(enabled);
+                        let enabled = !self.display.reveal_codes();
+                        self.display.set_reveal_codes(enabled);
                         self.restore_view_after_reveal_toggle(snapshot);
-                        self.preferred_column = None;
+                        self.display.set_preferred_column(None);
                         let message = if enabled {
                             "Reveal codes enabled"
                         } else {
@@ -1673,211 +1362,213 @@ impl App {
                     }
                     (KeyCode::Char(']'), m) if m.contains(KeyModifiers::CONTROL) => {
                         self.prepare_selection(false);
-                        if self.editor.indent_current_paragraph() {
+                        if self.display.indent_current_paragraph() {
                             self.selection_anchor = None;
                             self.mark_dirty();
-                            self.preferred_column = None;
+                            self.display.set_preferred_column(None);
                         }
                     }
                     (KeyCode::Char('['), m) if m.contains(KeyModifiers::CONTROL) => {
                         self.prepare_selection(false);
-                        if self.editor.unindent_current_paragraph() {
+                        if self.display.unindent_current_paragraph() {
                             self.selection_anchor = None;
                             self.mark_dirty();
-                            self.preferred_column = None;
+                            self.display.set_preferred_column(None);
                         }
                     }
                     (KeyCode::Left, m)
                         if m.contains(KeyModifiers::SHIFT | KeyModifiers::CONTROL) =>
                     {
                         self.prepare_selection(true);
-                        if self.editor.move_word_left() {
-                            self.preferred_column = None;
+                        if self.display.move_word_left() {
+                            self.display.set_preferred_column(None);
                         }
                     }
                     (KeyCode::Right, m)
                         if m.contains(KeyModifiers::SHIFT | KeyModifiers::CONTROL) =>
                     {
                         self.prepare_selection(true);
-                        if self.editor.move_word_right() {
-                            self.preferred_column = None;
+                        if self.display.move_word_right() {
+                            self.display.set_preferred_column(None);
                         }
                     }
                     (KeyCode::Left, m) if m.contains(KeyModifiers::SHIFT) => {
                         self.prepare_selection(true);
-                        if self.editor.move_left() {
-                            self.preferred_column = None;
+                        if self.display.move_left() {
+                            self.display.set_preferred_column(None);
                         }
                     }
                     (KeyCode::Right, m) if m.contains(KeyModifiers::SHIFT) => {
                         self.prepare_selection(true);
-                        if self.editor.move_right() {
-                            self.preferred_column = None;
+                        if self.display.move_right() {
+                            self.display.set_preferred_column(None);
                         }
                     }
                     (KeyCode::Left, m) if m.contains(KeyModifiers::CONTROL) => {
                         self.prepare_selection(false);
-                        if self.editor.move_word_left() {
-                            self.preferred_column = None;
+                        if self.display.move_word_left() {
+                            self.display.set_preferred_column(None);
                         }
                     }
                     (KeyCode::Right, m) if m.contains(KeyModifiers::CONTROL) => {
                         self.prepare_selection(false);
-                        if self.editor.move_word_right() {
-                            self.preferred_column = None;
+                        if self.display.move_word_right() {
+                            self.display.set_preferred_column(None);
                         }
                     }
                     (KeyCode::Left, _) => {
                         self.prepare_selection(false);
-                        if self.editor.move_left() {
-                            self.preferred_column = None;
+                        if self.display.move_left() {
+                            self.display.set_preferred_column(None);
                         }
                     }
                     (KeyCode::Right, _) => {
                         self.prepare_selection(false);
-                        if self.editor.move_right() {
-                            self.preferred_column = None;
+                        if self.display.move_right() {
+                            self.display.set_preferred_column(None);
                         }
                     }
                     (KeyCode::Home, m) if m.contains(KeyModifiers::SHIFT) => {
                         self.prepare_selection(true);
-                        self.move_to_visual_line_start();
+                        self.display.move_to_visual_line_start();
                     }
                     (KeyCode::End, m) if m.contains(KeyModifiers::SHIFT) => {
                         self.prepare_selection(true);
-                        self.move_to_visual_line_end();
+                        self.display.move_to_visual_line_end();
                     }
                     (KeyCode::Home, _) => {
                         self.prepare_selection(false);
-                        self.move_to_visual_line_start();
+                        self.display.move_to_visual_line_start();
                     }
                     (KeyCode::End, _) => {
                         self.prepare_selection(false);
-                        self.move_to_visual_line_end();
+                        self.display.move_to_visual_line_end();
                     }
                     (KeyCode::Char('a'), m) if m.contains(KeyModifiers::CONTROL) => {
                         self.prepare_selection(false);
-                        self.move_to_visual_line_start();
+                        self.display.move_to_visual_line_start();
                     }
                     (KeyCode::Char('j'), m) if m.contains(KeyModifiers::CONTROL) => {
-                        if self.editor.insert_char('\n') {
+                        if self.display.insert_char('\n') {
                             self.mark_dirty();
-                            self.preferred_column = None;
+                            self.display.set_preferred_column(None);
                         }
                     }
                     (KeyCode::Char('p'), m) if m.contains(KeyModifiers::CONTROL) => {
                         self.prepare_selection(false);
-                        if self.editor.insert_paragraph_break_as_sibling() {
+                        if self.display.insert_paragraph_break_as_sibling() {
                             self.mark_dirty();
-                            self.preferred_column = None;
+                            self.display.set_preferred_column(None);
                         }
                     }
                     (KeyCode::Char('e'), m) if m.contains(KeyModifiers::CONTROL) => {
                         self.prepare_selection(false);
-                        self.move_to_visual_line_end();
+                        self.display.move_to_visual_line_end();
                     }
                     (KeyCode::Char('w'), m) if m.contains(KeyModifiers::CONTROL) => {
-                        if self.editor.delete_word_backward() {
+                        if self.display.delete_word_backward() {
                             self.mark_dirty();
-                            self.preferred_column = None;
+                            self.display.set_preferred_column(None);
                         }
                     }
                     (KeyCode::Backspace, m)
                         if m.contains(KeyModifiers::CONTROL) || m.contains(KeyModifiers::ALT) =>
                     {
-                        if self.editor.delete_word_backward() {
+                        if self.display.delete_word_backward() {
                             self.mark_dirty();
-                            self.preferred_column = None;
+                            self.display.set_preferred_column(None);
                         }
                     }
                     (KeyCode::Backspace, _) => {
-                        if self.editor.backspace() {
+                        if self.display.backspace() {
                             self.mark_dirty();
-                            self.preferred_column = None;
+                            self.display.set_preferred_column(None);
                         }
                     }
                     (KeyCode::Delete, m)
                         if m.contains(KeyModifiers::CONTROL) || m.contains(KeyModifiers::ALT) =>
                     {
-                        if self.editor.delete_word_forward() {
+                        if self.display.delete_word_forward() {
                             self.mark_dirty();
-                            self.preferred_column = None;
+                            self.display.set_preferred_column(None);
                         }
                     }
                     (KeyCode::Delete, _) => {
-                        if self.editor.delete() {
+                        if self.display.delete() {
                             self.mark_dirty();
-                            self.preferred_column = None;
+                            self.display.set_preferred_column(None);
                         }
                     }
                     (KeyCode::Enter, m) => {
                         if m.contains(KeyModifiers::SHIFT) || m.contains(KeyModifiers::CONTROL) {
-                            if self.editor.insert_char('\n') {
+                            if self.display.insert_char('\n') {
                                 self.mark_dirty();
-                                self.preferred_column = None;
+                                self.display.set_preferred_column(None);
                             }
                         } else {
                             if self.insert_paragraph_break() {
                                 self.mark_dirty();
-                                self.preferred_column = None;
+                                self.display.set_preferred_column(None);
                             }
                         }
                     }
                     (KeyCode::Tab, _) => {
-                        if self.editor.insert_char('\t') {
+                        if self.display.insert_char('\t') {
                             self.mark_dirty();
-                            self.preferred_column = None;
+                            self.display.set_preferred_column(None);
                         }
                     }
                     (KeyCode::Char(ch), m)
                         if !m.contains(KeyModifiers::CONTROL) && !m.contains(KeyModifiers::ALT) =>
                     {
-                        if self.editor.insert_char(ch) {
+                        if self.display.insert_char(ch) {
                             self.mark_dirty();
-                            self.preferred_column = None;
+                            self.display.set_preferred_column(None);
                         }
                     }
                     (KeyCode::Up, m) if m.contains(KeyModifiers::SHIFT) => {
                         self.prepare_selection(true);
-                        self.move_cursor_vertical(-1);
+                        self.display.move_cursor_vertical(-1);
                     }
                     (KeyCode::Up, m) if m.contains(KeyModifiers::CONTROL) => {
                         self.prepare_selection(false);
-                        self.scroll_top = self.scroll_top.saturating_sub(self.last_view_height);
+                        self.scroll_top = self
+                            .scroll_top
+                            .saturating_sub(self.display.last_view_height());
                         self.detach_cursor_follow();
                     }
                     (KeyCode::Up, _) => {
                         self.prepare_selection(false);
-                        self.move_cursor_vertical(-1);
+                        self.display.move_cursor_vertical(-1);
                     }
                     (KeyCode::Down, m) if m.contains(KeyModifiers::SHIFT) => {
                         self.prepare_selection(true);
-                        self.move_cursor_vertical(1);
+                        self.display.move_cursor_vertical(1);
                     }
                     (KeyCode::Down, m) if m.contains(KeyModifiers::CONTROL) => {
                         self.prepare_selection(false);
-                        self.scroll_top += self.last_view_height;
+                        self.scroll_top += self.display.last_view_height();
                         self.detach_cursor_follow();
                     }
                     (KeyCode::Down, _) => {
                         self.prepare_selection(false);
-                        self.move_cursor_vertical(1);
+                        self.display.move_cursor_vertical(1);
                     }
                     (KeyCode::PageUp, modifiers) => {
                         let extend_selection = modifiers.contains(KeyModifiers::SHIFT);
                         self.prepare_selection(extend_selection);
-                        self.move_page(-1);
+                        self.display.move_page(-1);
                     }
                     (KeyCode::PageDown, modifiers) => {
                         let extend_selection = modifiers.contains(KeyModifiers::SHIFT);
                         self.prepare_selection(extend_selection);
-                        self.move_page(1);
+                        self.display.move_page(1);
                     }
                     _ => {}
                 }
 
-                if self.editor.cursor_pointer() != previous_cursor {
-                    self.cursor_following = true;
+                if self.display.cursor_pointer() != previous_cursor {
+                    self.display.set_cursor_following(true);
                 }
             }
             Event::Mouse(mouse_event) => {
@@ -1897,14 +1588,14 @@ impl App {
             DocumentFormat::Ftml => {
                 let writer = Writer::new();
                 let contents = writer
-                    .write_to_string(self.editor.document())
+                    .write_to_string(self.display.document())
                     .context("failed to render FTML")?;
                 fs::write(&self.file_path, contents)
                     .with_context(|| format!("failed to write {}", self.file_path.display()))?;
             }
             DocumentFormat::Markdown => {
                 let mut contents = Vec::new();
-                markdown::write(&mut contents, self.editor.document())
+                markdown::write(&mut contents, self.display.document())
                     .context("failed to render Markdown")?;
                 fs::write(&self.file_path, contents)
                     .with_context(|| format!("failed to write {}", self.file_path.display()))?;
@@ -1919,11 +1610,11 @@ impl App {
     fn mark_dirty(&mut self) {
         self.dirty = true;
         // Clear render cache when document changes
-        self.render_cache.clear();
+        self.display.clear_render_cache();
     }
 
     fn cursor_status_text(&self) -> String {
-        let position_text = if let Some(position) = self.last_cursor_visual {
+        let position_text = if let Some(position) = self.display.last_cursor_visual() {
             let line = position.content_line + 1;
             let column = usize::from(position.content_column) + 1;
             format!("[{},{}]", line, column)
@@ -1931,19 +1622,13 @@ impl App {
             "[?,?]".to_string()
         };
         let mut parts = vec![position_text];
-        if let Some(labels) = self.editor.cursor_breadcrumbs() {
+        if let Some(labels) = self.display.cursor_breadcrumbs() {
             if !labels.is_empty() {
                 parts.push(labels.join(" > "));
             }
         }
         parts.join(" ")
     }
-}
-
-#[derive(Clone)]
-struct CursorDisplay {
-    pointer: CursorPointer,
-    position: CursorVisualPosition,
 }
 
 struct ScrollRestore {
