@@ -96,3 +96,56 @@ fn move_word_right_within_checklist_item() {
     assert!(editor.move_word_right());
     assert_eq!(editor.cursor_pointer().offset, 4);
 }
+
+#[test]
+fn vertical_movement_across_paragraph_types() {
+    let document = Document::new().with_paragraphs(vec![
+        Paragraph::new_header1().with_content(vec![Span::new_text("Header 1")]),
+        text_paragraph("A regular text paragraph."),
+        checklist(&["Item 1", "Item 2"]),
+    ]);
+    let mut editor = DocumentEditor::new(document);
+
+    // Start at H1
+    let h1_pointer = pointer_to_root_span(0);
+    assert!(editor.move_to_pointer(&h1_pointer));
+
+    // Move down to text paragraph
+    assert!(editor.move_down(), "Could not move down from H1 to text");
+    let cursor = editor.cursor_pointer();
+    assert_eq!(
+        cursor.paragraph_path,
+        pointer_to_root_span(1).paragraph_path,
+        "Cursor should be on text paragraph"
+    );
+
+    // Move down to checklist
+    assert!(
+        editor.move_down(),
+        "Could not move down from text to checklist"
+    );
+    let cursor = editor.cursor_pointer();
+    assert_eq!(
+        cursor.paragraph_path,
+        pointer_to_checklist_item_span(2, &[0]).paragraph_path,
+        "Cursor should be on checklist item 1"
+    );
+
+    // Move up to text paragraph
+    assert!(editor.move_up(), "Could not move up from checklist to text");
+    let cursor = editor.cursor_pointer();
+    assert_eq!(
+        cursor.paragraph_path,
+        pointer_to_root_span(1).paragraph_path,
+        "Cursor should be on text paragraph"
+    );
+
+    // Move up to H1
+    assert!(editor.move_up(), "Could not move up from text to H1");
+    let cursor = editor.cursor_pointer();
+    assert_eq!(
+        cursor.paragraph_path,
+        pointer_to_root_span(0).paragraph_path,
+        "Cursor should be on H1"
+    );
+}

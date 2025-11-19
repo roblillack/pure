@@ -9,7 +9,9 @@ use unicode_width::UnicodeWidthChar;
 
 use tdoc::{Document, InlineStyle, Paragraph, ParagraphType, Span as DocSpan};
 
-use crate::editor::{CursorPointer, MarkerRef, ParagraphPath, RevealTagKind, RevealTagRef, SegmentKind, SpanPath};
+use crate::editor::{
+    CursorPointer, MarkerRef, ParagraphPath, RevealTagKind, RevealTagRef, SegmentKind, SpanPath,
+};
 
 #[derive(Clone, Copy)]
 pub struct RenderSentinels {
@@ -27,7 +29,7 @@ pub struct DirectCursorTracking<'a> {
 }
 
 /// Cache key for a rendered paragraph
-#[derive(Clone, Hash, Eq, PartialEq)]
+#[derive(Clone, Hash, Eq, PartialEq, Debug)]
 struct ParagraphCacheKey {
     /// Index of the paragraph in the document
     paragraph_index: usize,
@@ -40,15 +42,16 @@ struct ParagraphCacheKey {
 }
 
 /// Cached rendering result for a paragraph
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct CachedParagraphRender {
     /// The rendered lines
     lines: Vec<Line<'static>>,
-    /// Number of content lines (used for line metrics)
-    content_line_count: usize,
+    /// The metrics for each rendered line
+    line_metrics: Vec<LineMetric>,
 }
 
 /// Cache for rendered paragraphs
+#[derive(Debug)]
 pub struct RenderCache {
     cache: HashMap<ParagraphCacheKey, CachedParagraphRender>,
     /// Maximum cache size (number of entries)
@@ -77,7 +80,8 @@ impl RenderCache {
 
     /// Invalidate cache for a specific paragraph index
     pub fn invalidate_paragraph(&mut self, paragraph_index: usize) {
-        self.cache.retain(|key, _| key.paragraph_index != paragraph_index);
+        self.cache
+            .retain(|key, _| key.paragraph_index != paragraph_index);
     }
 
     /// Get cache hit rate (0.0 to 1.0)
@@ -390,7 +394,12 @@ impl<'a> Renderer<'a> {
         }
     }
 
-    fn render_paragraph_cached(&mut self, paragraph: &Paragraph, paragraph_index: usize, prefix: &str) {
+    fn render_paragraph_cached(
+        &mut self,
+        paragraph: &Paragraph,
+        paragraph_index: usize,
+        prefix: &str,
+    ) {
         // We can cache if: prefix is empty and we have a cache
         // The paragraph hash will naturally differ if sentinels are present,
         // so paragraphs with cursors won't match cache and will be rendered fresh.
@@ -408,11 +417,10 @@ impl<'a> Renderer<'a> {
             if let Some(cache) = &mut self.cache {
                 if let Some(cached) = cache.get(&cache_key) {
                     // Cache hit! Use cached lines
-                    for line in &cached.lines {
-                        self.lines.push(line.clone());
-                        self.line_metrics.push(LineMetric { counts_as_content: true });
-                        self.current_line_index += 1;
-                    }
+                    self.lines.extend(cached.lines.iter().cloned());
+                    self.line_metrics
+                        .extend(cached.line_metrics.iter().cloned());
+                    self.current_line_index += cached.lines.len();
                     return;
                 }
             }
@@ -425,10 +433,8 @@ impl<'a> Renderer<'a> {
 
             // Extract the lines we just rendered
             let rendered_lines: Vec<Line<'static>> = self.lines[start_line..].to_vec();
-            let content_line_count = self.line_metrics[start_metric_count..]
-                .iter()
-                .filter(|m| m.counts_as_content)
-                .count();
+            let rendered_metrics: Vec<LineMetric> =
+                self.line_metrics[start_metric_count..].to_vec();
 
             // Store in cache
             if let Some(cache) = &mut self.cache {
@@ -436,7 +442,7 @@ impl<'a> Renderer<'a> {
                     cache_key,
                     CachedParagraphRender {
                         lines: rendered_lines,
-                        content_line_count,
+                        line_metrics: rendered_metrics,
                     },
                 );
             }
@@ -881,10 +887,79 @@ impl<'a> DirectRenderer<'a> {
         }
     }
 
-    fn render_paragraph_cached(&mut self, paragraph: &Paragraph, paragraph_index: usize, prefix: &str) {
-        // For now, don't use cache with direct rendering since we need to track all positions
-        // TODO: Optimize caching for direct rendering
+    fn is_paragraph_active(&self, paragraph_index: usize) -> bool {
+        let check = |p: Option<&'a CursorPointer>| -> bool {
+            p.map_or(false, |ptr| {
+                ptr.paragraph_path.root_index() == Some(paragraph_index)
+            })
+        };
+
+        check(self.cursor_pointer) || check(self.selection_start) || check(self.selection_end)
+    }
+
+    fn render_paragraph_cached(
+        &mut self,
+        paragraph: &Paragraph,
+        paragraph_index: usize,
+        prefix: &str,
+    ) {
+        if self.cache.is_none() || !prefix.is_empty() {
+            self.render_paragraph(paragraph, prefix);
+            return;
+        }
+
+        let paragraph_is_active = self.is_paragraph_active(paragraph_index);
+
+        let content_hash = hash_paragraph(paragraph);
+        let cache_key = ParagraphCacheKey {
+            paragraph_index,
+            content_hash,
+            wrap_width: self.wrap_width,
+            left_padding: self.left_padding,
+        };
+
+        if !paragraph_is_active {
+            if let Some(cache) = &mut self.cache {
+                if let Some(cached) = cache.get(&cache_key) {
+                    // Cache hit on non-active paragraph, so we can use it
+                    self.lines.extend(cached.lines.iter().cloned());
+                    self.line_metrics
+                        .extend(cached.line_metrics.iter().cloned());
+                    self.current_line_index += cached.lines.len();
+                    return;
+                }
+            }
+        }
+
+        // Active paragraph, or cache miss on non-active paragraph.
+        if paragraph_is_active {
+            if let Some(cache) = &mut self.cache {
+                // We don't check the cache, just record a miss because it needs re-rendering anyway.
+                cache.misses += 1;
+            }
+            self.render_paragraph(paragraph, prefix);
+            return; // Don't cache rendering of active paragraph (contains cursor styles)
+        }
+
+        // This path is for non-active paragraphs that were a cache miss.
+        // `cache.get` was already called above and recorded the miss.
+        let start_line = self.lines.len();
+        let start_metric_count = self.line_metrics.len();
+
         self.render_paragraph(paragraph, prefix);
+
+        let rendered_lines: Vec<Line<'static>> = self.lines[start_line..].iter().cloned().collect();
+        let rendered_metrics: Vec<LineMetric> = self.line_metrics[start_metric_count..].to_vec();
+
+        if let Some(cache) = &mut self.cache {
+            cache.insert(
+                cache_key,
+                CachedParagraphRender {
+                    lines: rendered_lines,
+                    line_metrics: rendered_metrics,
+                },
+            );
+        }
     }
 
     fn render_paragraph(&mut self, paragraph: &Paragraph, prefix: &str) {
@@ -908,7 +983,9 @@ impl<'a> DirectRenderer<'a> {
         continuation_prefix: &str,
     ) {
         let mut fragments = Vec::new();
-        let base_span_path = SpanPath { indices: Vec::new() };
+        let base_span_path = SpanPath {
+            indices: Vec::new(),
+        };
         self.collect_fragments_direct(
             paragraph.content(),
             &base_span_path,
@@ -927,7 +1004,9 @@ impl<'a> DirectRenderer<'a> {
 
     fn render_header(&mut self, paragraph: &Paragraph, prefix: &str, level: HeaderLevel) {
         let mut fragments = Vec::new();
-        let base_span_path = SpanPath { indices: Vec::new() };
+        let base_span_path = SpanPath {
+            indices: Vec::new(),
+        };
         self.collect_fragments_direct(
             paragraph.content(),
             &base_span_path,
@@ -974,7 +1053,9 @@ impl<'a> DirectRenderer<'a> {
         self.push_plain_line(&fence, false);
 
         let mut fragments = Vec::new();
-        let base_span_path = SpanPath { indices: Vec::new() };
+        let base_span_path = SpanPath {
+            indices: Vec::new(),
+        };
         self.collect_fragments_direct(
             paragraph.content(),
             &base_span_path,
@@ -1039,7 +1120,12 @@ impl<'a> DirectRenderer<'a> {
         }
     }
 
-    fn render_checklist_item_struct(&mut self, item: &tdoc::ChecklistItem, indices: Vec<usize>, prefix: &str) {
+    fn render_checklist_item_struct(
+        &mut self,
+        item: &tdoc::ChecklistItem,
+        indices: Vec<usize>,
+        prefix: &str,
+    ) {
         // Update paragraph path for this checklist item with full nested indices
         // For nested items (indices.len() > 1), we need to replace the parent ChecklistItem step
         let is_nested = indices.len() > 1;
@@ -1047,14 +1133,17 @@ impl<'a> DirectRenderer<'a> {
             // Pop the parent ChecklistItem step first
             self.current_paragraph_path.pop();
         }
-        self.current_paragraph_path.push_checklist_item(indices.clone());
+        self.current_paragraph_path
+            .push_checklist_item(indices.clone());
 
         let marker = if item.checked { "[✓] " } else { "[ ] " };
         let first_prefix = format!("{}{}", prefix, marker);
         let continuation_prefix = format!("{}{}", prefix, " ".repeat(marker.chars().count()));
 
         let mut fragments = Vec::new();
-        let base_span_path = SpanPath { indices: Vec::new() };
+        let base_span_path = SpanPath {
+            indices: Vec::new(),
+        };
         self.collect_fragments_direct(
             &item.content,
             &base_span_path,
@@ -1085,7 +1174,8 @@ impl<'a> DirectRenderer<'a> {
         if is_nested {
             let mut parent_indices = indices;
             parent_indices.pop();
-            self.current_paragraph_path.push_checklist_item(parent_indices);
+            self.current_paragraph_path
+                .push_checklist_item(parent_indices);
         }
     }
 
@@ -1238,7 +1328,8 @@ impl<'a> DirectRenderer<'a> {
 
         for (char_offset, ch) in chars.iter().enumerate() {
             // Check if this position matches any cursor we're tracking
-            let position_events = self.check_position_match(span_path, char_offset, SegmentKind::Text);
+            let position_events =
+                self.check_position_match(span_path, char_offset, SegmentKind::Text);
 
             if ch == &'\r' {
                 continue;
@@ -1287,7 +1378,9 @@ impl<'a> DirectRenderer<'a> {
                     }
                 } else {
                     if let Some(existing) = builder.take() {
-                        fragments.push(FragmentItem::Token(self.convert_direct_fragment(existing.finish())));
+                        fragments.push(FragmentItem::Token(
+                            self.convert_direct_fragment(existing.finish()),
+                        ));
                     }
                     let mut new_builder = DirectTokenBuilder::new(style, is_whitespace);
                     new_builder.add_events(position_events.clone());
@@ -1298,14 +1391,17 @@ impl<'a> DirectRenderer<'a> {
         }
 
         // Check for cursor position at the end of the text (after the last character)
-        let end_position_events = self.check_position_match(span_path, chars.len(), SegmentKind::Text);
+        let end_position_events =
+            self.check_position_match(span_path, chars.len(), SegmentKind::Text);
 
         if let Some(mut token) = builder {
             // If there are events at the end position, add them to the last token
             if !end_position_events.is_empty() {
                 token.add_events(end_position_events);
             }
-            fragments.push(FragmentItem::Token(self.convert_direct_fragment(token.finish())));
+            fragments.push(FragmentItem::Token(
+                self.convert_direct_fragment(token.finish()),
+            ));
         } else if !end_position_events.is_empty() {
             // If there's no token but there are end position events, create an empty fragment for them
             let frag = DirectFragment {
@@ -2512,6 +2608,7 @@ struct PendingPosition {
     content_column: u16,
 }
 
+#[derive(Clone, Copy, Debug)]
 struct LineMetric {
     counts_as_content: bool,
 }
@@ -2946,5 +3043,65 @@ mod tests {
             !editor.move_left(),
             "cursor should not move left past the start of the paragraph"
         );
+    }
+
+    #[test]
+    fn direct_renderer_uses_cache() {
+        let document = ftml! {
+            p { "Paragraph 1" }
+            p { "Paragraph 2" }
+            p { "Paragraph 3" }
+        };
+        let mut editor = DocumentEditor::new(document.clone());
+        editor.ensure_cursor_selectable(); // cursor at P1 (index 0)
+
+        let mut cache = RenderCache::new();
+
+        // --- First render ---
+        // Everything is a miss, populating the cache.
+        let tracking1 = DirectCursorTracking {
+            cursor: Some(&editor.cursor_pointer()),
+            selection: None,
+            track_all_positions: false,
+        };
+        let _ = render_document_direct(&document, 80, 0, &[], tracking1, Some(&mut cache));
+
+        assert_eq!(cache.misses, 3);
+        assert_eq!(cache.hits, 0);
+
+        // --- Second render, cursor hasn't moved ---
+        // P1 is active (miss), P2/P3 from cache (2 hits).
+        cache.hits = 0;
+        cache.misses = 0;
+        let tracking2 = DirectCursorTracking {
+            cursor: Some(&editor.cursor_pointer()),
+            selection: None,
+            track_all_positions: false,
+        };
+        let _ = render_document_direct(&document, 80, 0, &[], tracking2, Some(&mut cache));
+
+        assert_eq!(
+            cache.misses, 1,
+            "only active paragraph should be a cache miss"
+        );
+        assert_eq!(cache.hits, 2, "inactive paragraphs should be cache hits");
+
+        // --- Third render, move cursor to P2 ---
+        assert!(editor.move_down(), "failed to move cursor down to P2");
+        cache.hits = 0;
+        cache.misses = 0;
+        let tracking3 = DirectCursorTracking {
+            cursor: Some(&editor.cursor_pointer()),
+            selection: None,
+            track_all_positions: false,
+        };
+        let _ = render_document_direct(&document, 80, 0, &[], tracking3, Some(&mut cache));
+
+        // P1 is active (miss), P0 is a miss because it's being cached for the first time, P2 is a hit
+        assert_eq!(
+            cache.misses, 2,
+            "P1 (active) and P0 (first time cache) should be misses"
+        );
+        assert_eq!(cache.hits, 1, "P2 should be a hit");
     }
 }

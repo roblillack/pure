@@ -3,10 +3,13 @@ use std::ops::{Deref, DerefMut};
 use ratatui::layout::Rect;
 
 use crate::editor::{CursorPointer, DocumentEditor};
-use crate::render::{CursorVisualPosition, DirectCursorTracking, RenderCache, RenderResult, render_document_direct};
+use crate::render::{
+    CursorVisualPosition, DirectCursorTracking, RenderCache, RenderResult, render_document_direct,
+};
 
 /// EditorDisplay wraps a DocumentEditor and manages all visual/rendering concerns.
 /// This includes cursor movement in visual space, wrapping, and rendering.
+#[derive(Debug)]
 pub struct EditorDisplay {
     editor: DocumentEditor,
     render_cache: RenderCache,
@@ -108,12 +111,9 @@ impl EditorDisplay {
         // TODO: Optimize this - we currently need to call clone_with_markers just for reveal_tags
         // In the future, extract reveal tag generation into a separate non-cloning function
         let reveal_tags = if self.editor.reveal_codes() {
-            let (_, _, tags, _) = self.editor.clone_with_markers(
-                '\u{F8FF}',
-                None,
-                '\u{F8FE}',
-                '\u{F8FD}',
-            );
+            let (_, _, tags, _) = self
+                .editor
+                .clone_with_markers('\u{F8FF}', None, '\u{F8FE}', '\u{F8FD}');
             tags
         } else {
             Vec::new()
@@ -403,7 +403,12 @@ impl EditorDisplay {
     }
 
     /// Convert mouse coordinates to a cursor pointer
-    pub fn pointer_from_mouse(&self, column: u16, row: u16, scroll_top: usize) -> Option<CursorDisplay> {
+    pub fn pointer_from_mouse(
+        &self,
+        column: u16,
+        row: u16,
+        scroll_top: usize,
+    ) -> Option<CursorDisplay> {
         if self.visual_positions.is_empty() {
             return None;
         }
@@ -487,7 +492,7 @@ impl DerefMut for EditorDisplay {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct CursorDisplay {
     pub pointer: CursorPointer,
     pub position: CursorVisualPosition,
@@ -505,15 +510,16 @@ mod tests {
 
     fn create_test_display() -> EditorDisplay {
         let mut doc = Document::new();
-        doc.paragraphs.push(Paragraph::new_text().with_content(vec![
-            tdoc::Span::new_text("First line of text"),
-        ]));
-        doc.paragraphs.push(Paragraph::new_text().with_content(vec![
-            tdoc::Span::new_text("Second line with more content that might wrap"),
-        ]));
-        doc.paragraphs.push(Paragraph::new_text().with_content(vec![
-            tdoc::Span::new_text("Third line"),
-        ]));
+        doc.paragraphs.push(
+            Paragraph::new_text().with_content(vec![tdoc::Span::new_text("First line of text")]),
+        );
+        doc.paragraphs.push(
+            Paragraph::new_text().with_content(vec![tdoc::Span::new_text(
+                "Second line with more content that might wrap",
+            )]),
+        );
+        doc.paragraphs
+            .push(Paragraph::new_text().with_content(vec![tdoc::Span::new_text("Third line")]));
 
         let mut editor = DocumentEditor::new(doc);
         editor.ensure_cursor_selectable();
@@ -525,13 +531,7 @@ mod tests {
         let mut display = create_test_display();
 
         // Render to populate visual positions
-        let _render = display.render_document(
-            80, 80, 0,
-            None,
-            '\u{F8FF}',
-            '\u{F8FE}',
-            '\u{F8FD}',
-        );
+        let _render = display.render_document(80, 80, 0, None, '\u{F8FF}', '\u{F8FE}', '\u{F8FD}');
 
         // Get initial cursor position
         let initial_pointer = display.cursor_pointer();
@@ -548,13 +548,7 @@ mod tests {
         let mut display = create_test_display();
 
         // Render to populate visual positions
-        let _render = display.render_document(
-            80, 80, 0,
-            None,
-            '\u{F8FF}',
-            '\u{F8FE}',
-            '\u{F8FD}',
-        );
+        let _render = display.render_document(80, 80, 0, None, '\u{F8FF}', '\u{F8FE}', '\u{F8FD}');
 
         // Move to second paragraph first
         display.move_cursor_vertical(1);
@@ -572,13 +566,7 @@ mod tests {
         let mut display = create_test_display();
 
         // Render to populate visual positions
-        let _render = display.render_document(
-            80, 80, 0,
-            None,
-            '\u{F8FF}',
-            '\u{F8FE}',
-            '\u{F8FD}',
-        );
+        let _render = display.render_document(80, 80, 0, None, '\u{F8FF}', '\u{F8FE}', '\u{F8FD}');
 
         // Move cursor to the middle of the line
         for _ in 0..5 {
@@ -600,13 +588,7 @@ mod tests {
         let mut display = create_test_display();
 
         // Render to populate visual positions
-        let _render = display.render_document(
-            80, 80, 0,
-            None,
-            '\u{F8FF}',
-            '\u{F8FE}',
-            '\u{F8FD}',
-        );
+        let _render = display.render_document(80, 80, 0, None, '\u{F8FF}', '\u{F8FE}', '\u{F8FD}');
 
         let initial_offset = display.cursor_pointer().offset;
 
@@ -614,15 +596,24 @@ mod tests {
         display.move_to_visual_line_end();
 
         let end_offset = display.cursor_pointer().offset;
-        assert!(end_offset > initial_offset, "Cursor should have moved to end");
+        assert!(
+            end_offset > initial_offset,
+            "Cursor should have moved to end"
+        );
 
         // The first line is "First line of text" (19 characters)
         // The cursor should be placed at offset 19 (after the last character)
         let text = &display.document().paragraphs[0].content()[0].text;
         let expected_offset = text.len();
-        assert_eq!(end_offset, expected_offset,
+        assert_eq!(
+            end_offset,
+            expected_offset,
             "Cursor should be at offset {} (after last char '{}'), but is at offset {}. Text: '{}'",
-            expected_offset, text.chars().last().unwrap_or(' '), end_offset, text);
+            expected_offset,
+            text.chars().last().unwrap_or(' '),
+            end_offset,
+            text
+        );
     }
 
     #[test]
@@ -631,7 +622,10 @@ mod tests {
         display.last_view_height = 20;
 
         let distance = display.page_jump_distance();
-        assert_eq!(distance, 18, "Page jump should be 90% of viewport (20 * 0.9 = 18)");
+        assert_eq!(
+            distance, 18,
+            "Page jump should be 90% of viewport (20 * 0.9 = 18)"
+        );
     }
 
     #[test]
@@ -640,13 +634,7 @@ mod tests {
         display.last_view_height = 10;
 
         // Render to populate visual positions
-        let _render = display.render_document(
-            80, 80, 0,
-            None,
-            '\u{F8FF}',
-            '\u{F8FE}',
-            '\u{F8FD}',
-        );
+        let _render = display.render_document(80, 80, 0, None, '\u{F8FF}', '\u{F8FE}', '\u{F8FD}');
 
         let initial_pointer = display.cursor_pointer();
 
@@ -666,13 +654,7 @@ mod tests {
         let mut display = create_test_display();
 
         // Render to populate visual positions
-        let _render = display.render_document(
-            80, 80, 0,
-            None,
-            '\u{F8FF}',
-            '\u{F8FE}',
-            '\u{F8FD}',
-        );
+        let _render = display.render_document(80, 80, 0, None, '\u{F8FF}', '\u{F8FE}', '\u{F8FD}');
 
         // Move to the middle of the line
         for _ in 0..5 {
@@ -685,20 +667,33 @@ mod tests {
 
         // Move vertically - preferred column should be used
         display.move_cursor_vertical(1);
-        assert_eq!(display.preferred_column(), Some(5), "Preferred column should be preserved");
+        assert_eq!(
+            display.preferred_column(),
+            Some(5),
+            "Preferred column should be preserved"
+        );
     }
 
     #[test]
     fn test_cursor_following_toggle() {
         let mut display = create_test_display();
 
-        assert!(display.cursor_following(), "Cursor following should start as true");
+        assert!(
+            display.cursor_following(),
+            "Cursor following should start as true"
+        );
 
         display.detach_cursor_follow();
-        assert!(!display.cursor_following(), "Cursor following should be false after detach");
+        assert!(
+            !display.cursor_following(),
+            "Cursor following should be false after detach"
+        );
 
         display.set_cursor_following(true);
-        assert!(display.cursor_following(), "Cursor following should be true after set");
+        assert!(
+            display.cursor_following(),
+            "Cursor following should be true after set"
+        );
     }
 
     #[test]
@@ -706,13 +701,7 @@ mod tests {
         let mut display = create_test_display();
 
         // Render to populate visual positions
-        let _render = display.render_document(
-            80, 80, 0,
-            None,
-            '\u{F8FF}',
-            '\u{F8FE}',
-            '\u{F8FD}',
-        );
+        let _render = display.render_document(80, 80, 0, None, '\u{F8FF}', '\u{F8FE}', '\u{F8FD}');
 
         // Get boundaries of first visual line
         if let Some((start, end)) = display.visual_line_boundaries(0) {
@@ -728,71 +717,44 @@ mod tests {
     }
 
     #[test]
-    fn test_vertical_movement_multi_paragraph() {
+    fn move_down_from_h2_to_checklist() {
+        use crate::editor::{ParagraphPath, SegmentKind, SpanPath};
         use tdoc::parse;
+        let content = std::fs::read_to_string("test.ftml").unwrap();
+        let doc = parse(std::io::Cursor::new(content)).unwrap();
+        let mut display = EditorDisplay::new(DocumentEditor::new(doc));
 
-        // Create a multi-paragraph document using FTML
-        let input = r#"
-<p>First paragraph with some text.</p>
-<p>Second paragraph with more content.</p>
-<p>Third paragraph here.</p>
-<p>Fourth paragraph at the bottom.</p>
-"#;
-        let doc = parse(std::io::Cursor::new(input)).expect("Failed to parse FTML");
-        let mut editor = DocumentEditor::new(doc);
-        editor.ensure_cursor_selectable();
-        let mut display = EditorDisplay::new(editor);
+        // Render to populate visual_positions
+        let _ = display.render_document(80, 80, 0, None, '\0', '\0', '\0');
 
-        // Render to populate visual positions
-        let _render = display.render_document(
-            80, 80, 0,
-            None,
-            '\u{F8FF}',
-            '\u{F8FE}',
-            '\u{F8FD}',
+        // Find the H2 "Todos"
+        let h2_path = ParagraphPath::new_root(1); // H1 is 0, H2 is 1
+        let h2_pointer = CursorPointer {
+            paragraph_path: h2_path.clone(),
+            span_path: SpanPath::new(vec![0]),
+            offset: 0,
+            segment_kind: SegmentKind::Text,
+        };
+        assert!(display.move_to_pointer(&h2_pointer), "Could not move to H2");
+
+        // Check we are where we think we are
+        let cursor = display.cursor_pointer();
+        assert_eq!(cursor.paragraph_path, h2_path);
+
+        // Move down
+        display.move_cursor_vertical(1);
+
+        let cursor_after_move = display.cursor_pointer();
+
+        let expected_path = {
+            let mut path = ParagraphPath::new_root(2);
+            path.push_checklist_item(vec![0]);
+            path
+        };
+
+        assert_eq!(
+            cursor_after_move.paragraph_path, expected_path,
+            "Cursor should have moved to the first checklist item"
         );
-
-        // Collect pointers as we move down
-        let mut pointers = vec![];
-
-        // Start at first paragraph
-        pointers.push(display.cursor_pointer());
-
-        // Move down through all paragraphs
-        for i in 0..3 {
-            display.move_cursor_vertical(1);
-            let new_pointer = display.cursor_pointer();
-            assert_ne!(
-                pointers[i], new_pointer,
-                "Cursor should have moved from position {}",
-                i
-            );
-            pointers.push(new_pointer);
-        }
-
-        // We should have 4 different positions
-        assert_eq!(pointers.len(), 4, "Should have 4 distinct cursor positions");
-
-        // All pointers should be different
-        for i in 0..pointers.len() {
-            for j in (i + 1)..pointers.len() {
-                assert_ne!(
-                    pointers[i], pointers[j],
-                    "Pointers at positions {} and {} should be different",
-                    i, j
-                );
-            }
-        }
-
-        // Move back up and verify we can return to previous positions
-        display.move_cursor_vertical(-1);
-        assert_eq!(display.cursor_pointer(), pointers[2], "Should be back at third paragraph");
-
-        display.move_cursor_vertical(-1);
-        assert_eq!(display.cursor_pointer(), pointers[1], "Should be back at second paragraph");
-
-        display.move_cursor_vertical(-1);
-        assert_eq!(display.cursor_pointer(), pointers[0], "Should be back at first paragraph");
     }
-
 }

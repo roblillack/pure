@@ -1,11 +1,5 @@
 use super::{
-    inline_style_label,
-    CursorPointer,
-    ParagraphPath,
-    PathStep,
-    SegmentKind,
-    SegmentRef,
-    SpanPath,
+    CursorPointer, ParagraphPath, PathStep, SegmentKind, SegmentRef, SpanPath, inline_style_label,
 };
 use tdoc::{ChecklistItem, Document, InlineStyle, Paragraph, ParagraphType, Span};
 
@@ -131,7 +125,10 @@ fn collect_inline_labels(paragraph: &Paragraph, span_path: &SpanPath) -> Option<
     Some(labels)
 }
 
-fn collect_inline_labels_from_item(item: &ChecklistItem, span_path: &SpanPath) -> Option<Vec<String>> {
+fn collect_inline_labels_from_item(
+    item: &ChecklistItem,
+    span_path: &SpanPath,
+) -> Option<Vec<String>> {
     let mut labels = Vec::new();
     if span_path.is_empty() {
         return Some(labels);
@@ -193,10 +190,7 @@ pub fn span_path_is_prefix(prefix: &[usize], target: &[usize]) -> bool {
     prefix.len() <= target.len() && target.starts_with(prefix)
 }
 
-pub fn paragraph_ref<'a>(
-    document: &'a Document,
-    path: &ParagraphPath,
-) -> Option<&'a Paragraph> {
+pub fn paragraph_ref<'a>(document: &'a Document, path: &ParagraphPath) -> Option<&'a Paragraph> {
     let mut iter = path.steps().iter();
     let first = iter.next()?;
     let mut paragraph = match first {
@@ -213,8 +207,7 @@ pub fn paragraph_ref<'a>(
                 entry_index,
                 paragraph_index,
             } => match paragraph {
-                Paragraph::OrderedList { entries }
-                | Paragraph::UnorderedList { entries } => {
+                Paragraph::OrderedList { entries } | Paragraph::UnorderedList { entries } => {
                     let entry = entries.get(*entry_index)?;
                     entry.get(*paragraph_index)?
                 }
@@ -472,8 +465,7 @@ mod tests {
 
     #[test]
     fn breadcrumbs_skip_text_for_list_items() {
-        let document = Document::new().with_paragraphs(vec![unordered_list(&["Item"])])
-        ;
+        let document = Document::new().with_paragraphs(vec![unordered_list(&["Item"])]);
         let pointer = pointer_to_entry_span(0, 0, 0);
         let breadcrumbs = breadcrumbs_for_pointer(&document, &pointer).unwrap();
         assert_eq!(breadcrumbs, vec!["Unordered List".to_string()]);
@@ -511,6 +503,9 @@ mod tests {
 
         let nested_pointer = pointer_to_checklist_item_span(0, vec![0, 0]);
         let nested_breadcrumbs = breadcrumbs_for_pointer(&document, &nested_pointer).unwrap();
-        assert_eq!(nested_breadcrumbs, vec!["Checklist".to_string(), "Checklist".to_string()]);
+        assert_eq!(
+            nested_breadcrumbs,
+            vec!["Checklist".to_string(), "Checklist".to_string()]
+        );
     }
 }

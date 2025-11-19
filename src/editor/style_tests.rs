@@ -43,8 +43,7 @@ fn apply_inline_style_splits_span() {
     end.offset = 5;
 
     assert!(
-        editor
-            .apply_inline_style_to_selection(&(start.clone(), end.clone()), InlineStyle::Bold)
+        editor.apply_inline_style_to_selection(&(start.clone(), end.clone()), InlineStyle::Bold)
     );
 
     let doc = editor.document();
@@ -58,8 +57,8 @@ fn apply_inline_style_splits_span() {
 
 #[test]
 fn apply_inline_style_across_segments() {
-    let paragraph = Paragraph::new_text()
-        .with_content(vec![Span::new_text("hello "), Span::new_text("world")]);
+    let paragraph =
+        Paragraph::new_text().with_content(vec![Span::new_text("hello "), Span::new_text("world")]);
     let document = Document::new().with_paragraphs(vec![paragraph]);
     let mut editor = DocumentEditor::new(document);
 
@@ -95,8 +94,7 @@ fn clear_inline_style_resets_to_plain() {
     end.offset = 6;
 
     assert!(
-        editor
-            .apply_inline_style_to_selection(&(start.clone(), end.clone()), InlineStyle::Code)
+        editor.apply_inline_style_to_selection(&(start.clone(), end.clone()), InlineStyle::Code)
     );
     assert!(editor.apply_inline_style_to_selection(&(start, end), InlineStyle::None));
 
