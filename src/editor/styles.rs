@@ -1,12 +1,7 @@
 use super::content::{apply_style_to_span_path, prune_and_merge_spans};
 use super::{
-    checklist_item_mut,
+    CursorPointer, DocumentEditor, ParagraphPath, SegmentKind, SegmentRef, checklist_item_mut,
     paragraph_mut,
-    CursorPointer,
-    DocumentEditor,
-    ParagraphPath,
-    SegmentKind,
-    SegmentRef,
 };
 use tdoc::InlineStyle;
 
@@ -29,7 +24,10 @@ impl DocumentEditor {
         let mut start = selection.0.clone();
         let mut end = selection.1.clone();
 
-        if matches!(self.compare_pointers(&start, &end), Some(std::cmp::Ordering::Greater)) {
+        if matches!(
+            self.compare_pointers(&start, &end),
+            Some(std::cmp::Ordering::Greater)
+        ) {
             std::mem::swap(&mut start, &mut end);
         }
 

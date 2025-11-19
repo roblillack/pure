@@ -3,62 +3,31 @@ const MARKER_REVEAL_PREFIX: &str = "1337;R";
 use std::cmp::Ordering;
 use tdoc::{ChecklistItem, Document, InlineStyle, Paragraph, ParagraphType, Span};
 
-use content::{
-    insert_char_at,
-    prune_and_merge_spans,
-    remove_char_at,
-};
+use content::{insert_char_at, prune_and_merge_spans, remove_char_at};
 
-pub mod inspect;
-pub mod cursor;
 pub mod content;
-mod styles;
+pub mod cursor;
+pub mod inspect;
 mod structure;
+mod styles;
 
 pub(crate) use styles::inline_style_label;
 
 use inspect::{checklist_item_ref, paragraph_ref, span_ref, span_ref_from_item};
 use structure::{
-    ensure_document_initialized,
-    paragraph_mut,
-    checklist_item_mut,
-    extract_checklist_item_context,
-    span_mut,
-    span_mut_from_item,
-    paragraph_is_empty,
-    is_single_paragraph_entry,
-    ParentRelation,
-    determine_parent_scope,
-    promote_single_child_into_parent,
-    break_list_entry_for_non_list_target,
-    extract_entry_context,
-    merge_adjacent_lists,
-    is_list_type,
-    find_list_ancestor_path,
-    update_existing_list_type,
-    convert_paragraph_into_list,
-    update_paragraph_type,
-    split_paragraph_break,
-    parent_paragraph_path,
-    IndentTargetKind,
-    find_indent_target,
-    find_container_indent_target,
-    append_paragraph_to_quote,
-    append_paragraph_to_list,
-    list_entry_append_target,
-    append_paragraph_to_entry,
-    entry_has_multiple_paragraphs,
-    indent_paragraph_within_entry,
-    indent_list_entry_into_entry,
-    promote_list_entry_to_parent,
-    indent_list_entry_into_foreign_list,
-    indent_checklist_item_into_item,
-    append_paragraph_as_checklist_child,
-    take_checklist_item_at,
-    take_paragraph_at,
-    insert_paragraph_after_parent,
-    remove_paragraph_by_path,
-    unindent_checklist_item,
+    IndentTargetKind, ParentRelation, append_paragraph_as_checklist_child,
+    append_paragraph_to_entry, append_paragraph_to_list, append_paragraph_to_quote,
+    break_list_entry_for_non_list_target, checklist_item_mut, convert_paragraph_into_list,
+    determine_parent_scope, ensure_document_initialized, entry_has_multiple_paragraphs,
+    extract_checklist_item_context, extract_entry_context, find_container_indent_target,
+    find_indent_target, find_list_ancestor_path, indent_checklist_item_into_item,
+    indent_list_entry_into_entry, indent_list_entry_into_foreign_list,
+    indent_paragraph_within_entry, insert_paragraph_after_parent, is_list_type,
+    is_single_paragraph_entry, list_entry_append_target, merge_adjacent_lists, paragraph_is_empty,
+    paragraph_mut, parent_paragraph_path, promote_list_entry_to_parent,
+    promote_single_child_into_parent, remove_paragraph_by_path, span_mut, span_mut_from_item,
+    split_paragraph_break, take_checklist_item_at, take_paragraph_at, unindent_checklist_item,
+    update_existing_list_type, update_paragraph_type,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -117,6 +86,14 @@ impl ParagraphPath {
 
     fn is_empty(&self) -> bool {
         self.steps.is_empty()
+    }
+
+    pub fn root_index(&self) -> Option<usize> {
+        if let Some(PathStep::Root(idx)) = self.steps.first() {
+            Some(*idx)
+        } else {
+            None
+        }
     }
 }
 
@@ -252,6 +229,7 @@ pub enum SegmentKind {
     RevealEnd(InlineStyle),
 }
 
+#[derive(Debug)]
 pub struct DocumentEditor {
     document: Document,
     segments: Vec<SegmentRef>,
@@ -344,7 +322,8 @@ impl DocumentEditor {
                         from_checklist: true,
                     });
                 } else {
-                    let Some(paragraph) = paragraph_ref(&self.document, &segment.paragraph_path) else {
+                    let Some(paragraph) = paragraph_ref(&self.document, &segment.paragraph_path)
+                    else {
                         continue;
                     };
                     let Some(span) = span_ref(paragraph, &segment.span_path) else {
@@ -849,7 +828,6 @@ impl DocumentEditor {
         let treat_as_singular_entry =
             is_single_paragraph_entry(&self.document, &current_pointer.paragraph_path);
 
-
         if !in_checklist_context {
             if let Some(scope) = determine_parent_scope(&self.document, &operation_path) {
                 operation_path = scope.parent_path.clone();
@@ -981,7 +959,6 @@ impl DocumentEditor {
 
         true
     }
-
 
     pub fn insert_paragraph_break(&mut self) -> bool {
         if !self.cursor.is_valid() {
@@ -1158,7 +1135,9 @@ impl DocumentEditor {
                 *last_mut -= 1;
             }
             let mut steps = ctx.checklist_path.steps().to_vec();
-            steps.push(PathStep::ChecklistItem { indices: prev_indices });
+            steps.push(PathStep::ChecklistItem {
+                indices: prev_indices,
+            });
             Some(ParagraphPath::from_steps(steps))
         });
 
@@ -1188,8 +1167,7 @@ impl DocumentEditor {
             .segments
             .iter()
             .filter(|segment| {
-                matches!(segment.kind, SegmentKind::Text)
-                    && segment.paragraph_path == target_path
+                matches!(segment.kind, SegmentKind::Text) && segment.paragraph_path == target_path
             })
             .map(|segment| segment.len)
             .sum();
@@ -1254,10 +1232,12 @@ impl DocumentEditor {
                 prune_and_merge_spans(spans);
 
                 if !children.is_empty() {
-                    let child_paragraph =
-                        Paragraph::new_checklist().with_checklist_items(children);
-                    let _ =
-                        insert_paragraph_after_parent(&mut self.document, &target_path, child_paragraph);
+                    let child_paragraph = Paragraph::new_checklist().with_checklist_items(children);
+                    let _ = insert_paragraph_after_parent(
+                        &mut self.document,
+                        &target_path,
+                        child_paragraph,
+                    );
                 }
             }
             MergeTargetKind::ChecklistItem => {
@@ -1627,7 +1607,6 @@ impl DocumentEditor {
 
         true
     }
-
 
     pub fn compare_pointers(&self, a: &CursorPointer, b: &CursorPointer) -> Option<Ordering> {
         let key_a = self.pointer_key(a)?;

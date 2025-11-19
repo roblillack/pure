@@ -1,7 +1,7 @@
 use tdoc::ftml;
 
-use super::*;
 use super::structure;
+use super::*;
 
 fn pointer_to_root_span(root_index: usize) -> CursorPointer {
     CursorPointer {
@@ -59,10 +59,7 @@ fn pointer_to_checklist_item_span(root_index: usize, item_index: usize) -> Curso
     pointer_to_nested_checklist_item_span(root_index, vec![item_index])
 }
 
-fn pointer_to_nested_checklist_item_span(
-    root_index: usize,
-    indices: Vec<usize>,
-) -> CursorPointer {
+fn pointer_to_nested_checklist_item_span(root_index: usize, indices: Vec<usize>) -> CursorPointer {
     let mut path = ParagraphPath::new_root(root_index);
     path.push_checklist_item(indices);
     CursorPointer {
@@ -96,9 +93,7 @@ fn ordered_list(items: &[&str]) -> Paragraph {
 fn checklist(items: &[&str]) -> Paragraph {
     let checklist_items = items
         .iter()
-        .map(|text| {
-            ChecklistItem::new(false).with_content(vec![Span::new_text(*text)])
-        })
+        .map(|text| ChecklistItem::new(false).with_content(vec![Span::new_text(*text)]))
         .collect::<Vec<_>>();
     Paragraph::new_checklist().with_checklist_items(checklist_items)
 }
@@ -418,7 +413,6 @@ fn indent_list_item() {
             }
         }
     );
-
 }
 
 #[test]
@@ -449,7 +443,6 @@ fn indent_more_from_middle_of_list() {
         }
     );
 }
-
 
 #[test]
 fn indent_checklist_item_into_previous_item() {
@@ -515,10 +508,8 @@ fn indent_nested_checklist_child() {
 
 #[test]
 fn indent_text_paragraph_into_checklist_item() {
-    let document = Document::new().with_paragraphs(vec![
-        checklist(&["Parent"]),
-        text_paragraph("Child"),
-    ]);
+    let document =
+        Document::new().with_paragraphs(vec![checklist(&["Parent"]), text_paragraph("Child")]);
     let mut editor = DocumentEditor::new(document);
 
     let pointer = pointer_to_root_span(1);
@@ -585,7 +576,10 @@ fn backspace_merges_checklist_item_into_previous_paragraph() {
 
     let second_entry = &entries[1];
     assert_eq!(second_entry.len(), 2);
-    let Paragraph::OrderedList { entries: inner_entries } = &second_entry[1] else {
+    let Paragraph::OrderedList {
+        entries: inner_entries,
+    } = &second_entry[1]
+    else {
         panic!("expected nested ordered list");
     };
     assert_eq!(inner_entries.len(), 2);
@@ -612,8 +606,7 @@ fn backspace_merges_checklist_item_into_previous_checklist_item() {
     let first_item = ChecklistItem::new(false)
         .with_content(vec![Span::new_text("First item")])
         .with_children(vec![existing_child]);
-    let second_child =
-        ChecklistItem::new(false).with_content(vec![Span::new_text("Second child")]);
+    let second_child = ChecklistItem::new(false).with_content(vec![Span::new_text("Second child")]);
     let second_item = ChecklistItem::new(false)
         .with_content(vec![Span::new_text("Second item")])
         .with_children(vec![second_child]);
@@ -807,7 +800,9 @@ fn convert_nested_checklist_item_to_text_is_forbidden() {
     let checklist = Paragraph::new_checklist().with_checklist_items(vec![
         ChecklistItem::new(false)
             .with_content(vec![Span::new_text("Parent")])
-            .with_children(vec![ChecklistItem::new(false).with_content(vec![Span::new_text("Child")])]),
+            .with_children(vec![
+                ChecklistItem::new(false).with_content(vec![Span::new_text("Child")]),
+            ]),
     ]);
     let document = Document::new().with_paragraphs(vec![checklist]);
     let mut editor = DocumentEditor::new(document.clone());
@@ -823,7 +818,9 @@ fn convert_checklist_item_with_children_to_text() {
     let checklist = Paragraph::new_checklist().with_checklist_items(vec![
         ChecklistItem::new(false)
             .with_content(vec![Span::new_text("Parent")])
-            .with_children(vec![ChecklistItem::new(false).with_content(vec![Span::new_text("Child")])]),
+            .with_children(vec![
+                ChecklistItem::new(false).with_content(vec![Span::new_text("Child")]),
+            ]),
     ]);
     let mut editor = DocumentEditor::new(Document::new().with_paragraphs(vec![checklist]));
     let pointer = pointer_to_checklist_item_span(0, 0);
@@ -843,7 +840,9 @@ fn convert_checklist_item_with_children_to_quote() {
     let checklist = Paragraph::new_checklist().with_checklist_items(vec![
         ChecklistItem::new(false)
             .with_content(vec![Span::new_text("Parent")])
-            .with_children(vec![ChecklistItem::new(false).with_content(vec![Span::new_text("Child")])]),
+            .with_children(vec![
+                ChecklistItem::new(false).with_content(vec![Span::new_text("Child")]),
+            ]),
     ]);
     let mut editor = DocumentEditor::new(Document::new().with_paragraphs(vec![checklist]));
     let pointer = pointer_to_checklist_item_span(0, 0);
@@ -867,7 +866,9 @@ fn convert_checklist_item_with_children_to_unordered_list() {
     let checklist = Paragraph::new_checklist().with_checklist_items(vec![
         ChecklistItem::new(false)
             .with_content(vec![Span::new_text("Parent")])
-            .with_children(vec![ChecklistItem::new(false).with_content(vec![Span::new_text("Child")])]),
+            .with_children(vec![
+                ChecklistItem::new(false).with_content(vec![Span::new_text("Child")]),
+            ]),
     ]);
     let mut editor = DocumentEditor::new(Document::new().with_paragraphs(vec![checklist]));
     let pointer = pointer_to_checklist_item_span(0, 0);
@@ -1077,8 +1078,7 @@ fn clear_inline_style_resets_to_plain() {
     end.offset = 6;
 
     assert!(
-        editor
-            .apply_inline_style_to_selection(&(start.clone(), end.clone()), InlineStyle::Code)
+        editor.apply_inline_style_to_selection(&(start.clone(), end.clone()), InlineStyle::Code)
     );
     assert!(editor.apply_inline_style_to_selection(&(start, end), InlineStyle::None));
 
@@ -1208,11 +1208,8 @@ fn unordered_list_item_conversion_splits_list() {
     let first = text_paragraph("First");
     let second = text_paragraph("Second");
     let third = text_paragraph("Third");
-    let list = Paragraph::new_unordered_list().with_entries(vec![
-        vec![first],
-        vec![second],
-        vec![third],
-    ]);
+    let list =
+        Paragraph::new_unordered_list().with_entries(vec![vec![first], vec![second], vec![third]]);
     let document = Document::new().with_paragraphs(vec![list]);
 
     let mut editor = DocumentEditor::new(document);
@@ -1263,7 +1260,10 @@ fn nested_list_item_conversion_inside_quote() {
         ParagraphType::UnorderedList
     );
     assert_eq!(quote.children()[0].entries().len(), 1);
-    assert_eq!(quote.children()[0].entries()[0][0].content()[0].text, "Alpha");
+    assert_eq!(
+        quote.children()[0].entries()[0][0].content()[0].text,
+        "Alpha"
+    );
 
     assert_eq!(quote.children()[1].paragraph_type(), ParagraphType::Text);
     assert_eq!(quote.children()[1].content()[0].text, "Beta");
@@ -1361,10 +1361,8 @@ fn converting_list_with_children_to_checklist_is_recursive() {
 
 #[test]
 fn converting_quote_children_to_checklist_is_recursive() {
-    let mut quote = Paragraph::new_quote().with_children(vec![
-        text_paragraph("First"),
-        unordered_list(&["Second"]),
-    ]);
+    let mut quote = Paragraph::new_quote()
+        .with_children(vec![text_paragraph("First"), unordered_list(&["Second"])]);
     structure::apply_paragraph_type_in_place(&mut quote, ParagraphType::Checklist);
 
     let checklist = quote;
@@ -1409,7 +1407,11 @@ fn cursor_valid_after_nesting_checklist_item() {
     // Additionally verify the cursor path is correct for nested item
     assert_eq!(cursor.paragraph_path.steps().len(), 2);
     if let Some(PathStep::ChecklistItem { indices }) = cursor.paragraph_path.steps().last() {
-        assert_eq!(indices, &vec![0usize, 0], "Cursor should point to nested item [0, 0]");
+        assert_eq!(
+            indices,
+            &vec![0usize, 0],
+            "Cursor should point to nested item [0, 0]"
+        );
     } else {
         panic!("Expected ChecklistItem path step");
     }

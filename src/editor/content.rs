@@ -1,10 +1,4 @@
-use super::{
-    checklist_item_mut,
-    paragraph_mut,
-    span_mut,
-    span_mut_from_item,
-    CursorPointer,
-};
+use super::{CursorPointer, checklist_item_mut, paragraph_mut, span_mut, span_mut_from_item};
 use tdoc::{ChecklistItem, Document, InlineStyle, Span};
 
 pub(crate) fn insert_char_at(
@@ -160,9 +154,7 @@ pub fn next_word_boundary(text: &str, offset: usize) -> usize {
 }
 
 pub(crate) fn skip_leading_whitespace(text: &str) -> usize {
-    text.chars()
-        .take_while(|ch| ch.is_whitespace())
-        .count()
+    text.chars().take_while(|ch| ch.is_whitespace()).count()
 }
 
 pub(crate) fn apply_style_to_span_path(

@@ -1,6 +1,6 @@
+use pure::render::RenderSentinels;
 use std::time::{Duration, Instant};
 use tdoc::{Document, InlineStyle, Paragraph, ParagraphType, Span};
-use pure::render::RenderSentinels;
 
 /// Performance benchmark suite for Pure editor operations
 ///
@@ -31,11 +31,47 @@ fn create_test_document(num_paragraphs: usize, avg_words_per_para: usize) -> Doc
     let mut doc = Document::new();
 
     let sample_words = vec![
-        "Lorem", "ipsum", "dolor", "sit", "amet", "consectetur", "adipiscing", "elit",
-        "sed", "do", "eiusmod", "tempor", "incididunt", "ut", "labore", "et", "dolore",
-        "magna", "aliqua", "Ut", "enim", "ad", "minim", "veniam", "quis", "nostrud",
-        "exercitation", "ullamco", "laboris", "nisi", "ut", "aliquip", "ex", "ea",
-        "commodo", "consequat", "Duis", "aute", "irure", "in", "reprehenderit",
+        "Lorem",
+        "ipsum",
+        "dolor",
+        "sit",
+        "amet",
+        "consectetur",
+        "adipiscing",
+        "elit",
+        "sed",
+        "do",
+        "eiusmod",
+        "tempor",
+        "incididunt",
+        "ut",
+        "labore",
+        "et",
+        "dolore",
+        "magna",
+        "aliqua",
+        "Ut",
+        "enim",
+        "ad",
+        "minim",
+        "veniam",
+        "quis",
+        "nostrud",
+        "exercitation",
+        "ullamco",
+        "laboris",
+        "nisi",
+        "ut",
+        "aliquip",
+        "ex",
+        "ea",
+        "commodo",
+        "consequat",
+        "Duis",
+        "aute",
+        "irure",
+        "in",
+        "reprehenderit",
     ];
 
     for i in 0..num_paragraphs {
@@ -55,8 +91,7 @@ fn create_test_document(num_paragraphs: usize, avg_words_per_para: usize) -> Doc
             text.push_str(sample_words[j % sample_words.len()]);
         }
 
-        let paragraph = Paragraph::new(paragraph_type)
-            .with_content(vec![Span::new_text(&text)]);
+        let paragraph = Paragraph::new(paragraph_type).with_content(vec![Span::new_text(&text)]);
         doc.add_paragraph(paragraph);
     }
 
@@ -68,15 +103,16 @@ fn create_styled_document(num_paragraphs: usize) -> Document {
     let mut doc = Document::new();
 
     for i in 0..num_paragraphs {
-        let text = format!("This is paragraph {} with some bold and italic text and maybe some code.", i);
+        let text = format!(
+            "This is paragraph {} with some bold and italic text and maybe some code.",
+            i
+        );
 
         // Create spans with different styles
         let span = if i % 15 == 0 {
             // Both bold and italic (nested)
             Span::new_styled(InlineStyle::Bold)
-                .with_children(vec![
-                    Span::new_styled(InlineStyle::Italic).with_text(&text)
-                ])
+                .with_children(vec![Span::new_styled(InlineStyle::Italic).with_text(&text)])
         } else if i % 3 == 0 {
             Span::new_styled(InlineStyle::Bold).with_text(&text)
         } else if i % 5 == 0 {
@@ -111,7 +147,10 @@ impl BenchmarkResult {
         println!("Average:        {:?}", self.avg_duration);
         println!("Min:            {:?}", self.min_duration);
         println!("Max:            {:?}", self.max_duration);
-        println!("Ops/sec:        {:.2}", 1_000_000.0 / self.avg_duration.as_micros() as f64);
+        println!(
+            "Ops/sec:        {:.2}",
+            1_000_000.0 / self.avg_duration.as_micros() as f64
+        );
 
         // Highlight if performance is concerning
         if self.avg_duration.as_millis() > 100 {
@@ -162,23 +201,39 @@ fn bench_rendering_performance() {
     println!("╚════════════════════════════════════════════════════════════════╝");
 
     let docs = vec![
-        ("Small (10 paras)", create_test_document(SMALL_DOC_PARAGRAPHS, 20)),
-        ("Medium (100 paras)", create_test_document(MEDIUM_DOC_PARAGRAPHS, 20)),
-        ("Large (1000 paras)", create_test_document(LARGE_DOC_PARAGRAPHS, 20)),
-        ("Huge (10000 paras)", create_test_document(HUGE_DOC_PARAGRAPHS, 20)),
+        (
+            "Small (10 paras)",
+            create_test_document(SMALL_DOC_PARAGRAPHS, 20),
+        ),
+        (
+            "Medium (100 paras)",
+            create_test_document(MEDIUM_DOC_PARAGRAPHS, 20),
+        ),
+        (
+            "Large (1000 paras)",
+            create_test_document(LARGE_DOC_PARAGRAPHS, 20),
+        ),
+        (
+            "Huge (10000 paras)",
+            create_test_document(HUGE_DOC_PARAGRAPHS, 20),
+        ),
     ];
 
     for (name, doc) in docs {
         let result = benchmark(
             &format!("render_document - {}", name),
-            if name.contains("Huge") { 10 } else { ITERATIONS },
+            if name.contains("Huge") {
+                10
+            } else {
+                ITERATIONS
+            },
             || {
                 let _ = pure::render::render_document(
                     &doc,
                     80,  // wrap_width
                     0,   // left_padding
-                    &[],  // markers
-                    &[],  // reveal_tags
+                    &[], // markers
+                    &[], // reveal_tags
                     NO_SENTINELS,
                 );
             },
@@ -194,10 +249,22 @@ fn bench_rendering_with_cache() {
     println!("╚════════════════════════════════════════════════════════════════╝");
 
     let docs = vec![
-        ("Small (10 paras)", create_test_document(SMALL_DOC_PARAGRAPHS, 20)),
-        ("Medium (100 paras)", create_test_document(MEDIUM_DOC_PARAGRAPHS, 20)),
-        ("Large (1000 paras)", create_test_document(LARGE_DOC_PARAGRAPHS, 20)),
-        ("Huge (10000 paras)", create_test_document(HUGE_DOC_PARAGRAPHS, 20)),
+        (
+            "Small (10 paras)",
+            create_test_document(SMALL_DOC_PARAGRAPHS, 20),
+        ),
+        (
+            "Medium (100 paras)",
+            create_test_document(MEDIUM_DOC_PARAGRAPHS, 20),
+        ),
+        (
+            "Large (1000 paras)",
+            create_test_document(LARGE_DOC_PARAGRAPHS, 20),
+        ),
+        (
+            "Huge (10000 paras)",
+            create_test_document(HUGE_DOC_PARAGRAPHS, 20),
+        ),
     ];
 
     for (name, doc) in docs {
@@ -209,8 +276,8 @@ fn bench_rendering_with_cache() {
             &doc,
             80,  // wrap_width
             0,   // left_padding
-            &[],  // markers
-            &[],  // reveal_tags
+            &[], // markers
+            &[], // reveal_tags
             NO_SENTINELS,
             Some(&mut cache),
         );
@@ -244,11 +311,16 @@ fn bench_rendering_with_cache() {
         println!("  Cached renders (avg):      {:?}", avg_cached);
         println!("  Cached renders (min):      {:?}", min_cached);
         println!("  Cached renders (max):      {:?}", max_cached);
-        println!("  Speedup:                   {:.2}x",
-            first_render.as_secs_f64() / avg_cached.as_secs_f64());
+        println!(
+            "  Speedup:                   {:.2}x",
+            first_render.as_secs_f64() / avg_cached.as_secs_f64()
+        );
         println!("  Cache hits:                {}", cache.hits);
         println!("  Cache misses:              {}", cache.misses);
-        println!("  Cache hit rate:            {:.1}%", cache.hit_rate() * 100.0);
+        println!(
+            "  Cache hit rate:            {:.1}%",
+            cache.hit_rate() * 100.0
+        );
     }
 }
 
@@ -259,26 +331,24 @@ fn bench_rendering_with_styles() {
     println!("╚════════════════════════════════════════════════════════════════╝");
 
     let docs = vec![
-        ("Small styled (10 paras)", create_styled_document(SMALL_DOC_PARAGRAPHS)),
-        ("Medium styled (100 paras)", create_styled_document(MEDIUM_DOC_PARAGRAPHS)),
-        ("Large styled (1000 paras)", create_styled_document(LARGE_DOC_PARAGRAPHS)),
+        (
+            "Small styled (10 paras)",
+            create_styled_document(SMALL_DOC_PARAGRAPHS),
+        ),
+        (
+            "Medium styled (100 paras)",
+            create_styled_document(MEDIUM_DOC_PARAGRAPHS),
+        ),
+        (
+            "Large styled (1000 paras)",
+            create_styled_document(LARGE_DOC_PARAGRAPHS),
+        ),
     ];
 
     for (name, doc) in docs {
-        let result = benchmark(
-            &format!("render_document - {}", name),
-            ITERATIONS,
-            || {
-                let _ = pure::render::render_document(
-                    &doc,
-                    80,
-                    0,
-                    &[],
-                    &[],
-                    NO_SENTINELS,
-                );
-            },
-        );
+        let result = benchmark(&format!("render_document - {}", name), ITERATIONS, || {
+            let _ = pure::render::render_document(&doc, 80, 0, &[], &[], NO_SENTINELS);
+        });
         result.print();
     }
 }
@@ -291,26 +361,20 @@ fn bench_rendering_reveal_codes() {
 
     let doc = create_styled_document(MEDIUM_DOC_PARAGRAPHS);
 
-    let result_normal = benchmark(
-        "render_document - reveal_codes OFF",
-        ITERATIONS,
-        || {
-            let _ = pure::render::render_document(&doc, 80, 0, &[], &[], NO_SENTINELS);
-        },
-    );
+    let result_normal = benchmark("render_document - reveal_codes OFF", ITERATIONS, || {
+        let _ = pure::render::render_document(&doc, 80, 0, &[], &[], NO_SENTINELS);
+    });
     result_normal.print();
 
-    let result_reveal = benchmark(
-        "render_document - reveal_codes ON",
-        ITERATIONS,
-        || {
-            let _ = pure::render::render_document(&doc, 80, 0, &[], &[], NO_SENTINELS);
-        },
-    );
+    let result_reveal = benchmark("render_document - reveal_codes ON", ITERATIONS, || {
+        let _ = pure::render::render_document(&doc, 80, 0, &[], &[], NO_SENTINELS);
+    });
     result_reveal.print();
 
     let overhead_pct = ((result_reveal.avg_duration.as_micros() as f64
-                        / result_normal.avg_duration.as_micros() as f64) - 1.0) * 100.0;
+        / result_normal.avg_duration.as_micros() as f64)
+        - 1.0)
+        * 100.0;
     println!("\nReveal codes overhead: {:.1}%", overhead_pct);
 }
 
@@ -321,16 +385,32 @@ fn bench_segment_collection() {
     println!("╚════════════════════════════════════════════════════════════════╝");
 
     let docs = vec![
-        ("Small (10 paras)", create_test_document(SMALL_DOC_PARAGRAPHS, 20)),
-        ("Medium (100 paras)", create_test_document(MEDIUM_DOC_PARAGRAPHS, 20)),
-        ("Large (1000 paras)", create_test_document(LARGE_DOC_PARAGRAPHS, 20)),
-        ("Huge (10000 paras)", create_test_document(HUGE_DOC_PARAGRAPHS, 20)),
+        (
+            "Small (10 paras)",
+            create_test_document(SMALL_DOC_PARAGRAPHS, 20),
+        ),
+        (
+            "Medium (100 paras)",
+            create_test_document(MEDIUM_DOC_PARAGRAPHS, 20),
+        ),
+        (
+            "Large (1000 paras)",
+            create_test_document(LARGE_DOC_PARAGRAPHS, 20),
+        ),
+        (
+            "Huge (10000 paras)",
+            create_test_document(HUGE_DOC_PARAGRAPHS, 20),
+        ),
     ];
 
     for (name, doc) in docs {
         let result = benchmark(
             &format!("collect_segments - {}", name),
-            if name.contains("Huge") { 10 } else { ITERATIONS },
+            if name.contains("Huge") {
+                10
+            } else {
+                ITERATIONS
+            },
             || {
                 let _ = pure::editor::inspect::collect_segments(&doc, false);
             },
@@ -349,22 +429,14 @@ fn bench_segment_collection_with_reveal() {
 
     let doc = create_styled_document(MEDIUM_DOC_PARAGRAPHS);
 
-    let result_normal = benchmark(
-        "collect_segments - reveal_codes OFF",
-        ITERATIONS,
-        || {
-            let _ = pure::editor::inspect::collect_segments(&doc, false);
-        },
-    );
+    let result_normal = benchmark("collect_segments - reveal_codes OFF", ITERATIONS, || {
+        let _ = pure::editor::inspect::collect_segments(&doc, false);
+    });
     result_normal.print();
 
-    let result_reveal = benchmark(
-        "collect_segments - reveal_codes ON",
-        ITERATIONS,
-        || {
-            let _ = pure::editor::inspect::collect_segments(&doc, true);
-        },
-    );
+    let result_reveal = benchmark("collect_segments - reveal_codes ON", ITERATIONS, || {
+        let _ = pure::editor::inspect::collect_segments(&doc, true);
+    });
     result_reveal.print();
 }
 
@@ -408,7 +480,10 @@ fn bench_word_boundary_detection() {
     let medium = "lorem ipsum dolor sit amet consectetur adipiscing elit ".repeat(6);
     let long = "lorem ipsum dolor sit amet consectetur adipiscing elit ".repeat(25);
     let text_samples = vec![
-        ("Short (10 words)", "lorem ipsum dolor sit amet consectetur adipiscing elit sed do"),
+        (
+            "Short (10 words)",
+            "lorem ipsum dolor sit amet consectetur adipiscing elit sed do",
+        ),
         ("Medium (50 words)", medium.as_str()),
         ("Long (200 words)", long.as_str()),
     ];
@@ -456,19 +531,15 @@ fn bench_full_edit_cycle() {
     for (name, size) in doc_sizes {
         let iterations = if name.contains("Huge") { 10 } else { 100 };
 
-        let result = benchmark(
-            &format!("Full edit cycle - {}", name),
-            iterations,
-            || {
-                let doc = create_test_document(size, 20);
-                let mut editor = pure::editor::DocumentEditor::new(doc);
+        let result = benchmark(&format!("Full edit cycle - {}", name), iterations, || {
+            let doc = create_test_document(size, 20);
+            let mut editor = pure::editor::DocumentEditor::new(doc);
 
-                // Simulate typing 10 characters
-                for _ in 0..10 {
-                    editor.insert_char('x');
-                }
-            },
-        );
+            // Simulate typing 10 characters
+            for _ in 0..10 {
+                editor.insert_char('x');
+            }
+        });
         result.print();
 
         // Calculate per-character cost
@@ -540,7 +611,9 @@ mod summary {
         println!("\nTo run all benchmarks:");
         println!("  cargo test --release --bench performance -- --nocapture --test-threads=1");
         println!("\nTo run a specific benchmark:");
-        println!("  cargo test --release --bench performance bench_rendering_performance -- --nocapture");
+        println!(
+            "  cargo test --release --bench performance bench_rendering_performance -- --nocapture"
+        );
         println!("\nKey metrics to watch:");
         println!("  • Full edit cycle time (should be < 5ms per character)");
         println!("  • Segment collection time (runs on EVERY keystroke)");
@@ -561,10 +634,10 @@ fn bench_user_guide_rendering() {
     println!("╚════════════════════════════════════════════════════════════════╝");
 
     // Load the actual USER-GUIDE.md
-    let content = std::fs::read_to_string("USER-GUIDE.md")
-        .expect("Failed to read USER-GUIDE.md");
+    let content = std::fs::read_to_string("USER-GUIDE.md").expect("Failed to read USER-GUIDE.md");
 
-    let doc = tdoc::markdown::parse(std::io::Cursor::new(&content)).expect("Failed to parse markdown");
+    let doc =
+        tdoc::markdown::parse(std::io::Cursor::new(&content)).expect("Failed to parse markdown");
 
     println!("\nDocument stats:");
     println!("  Paragraphs: {}", doc.paragraphs.len());
@@ -577,14 +650,7 @@ fn bench_user_guide_rendering() {
 
     for _ in 0..iterations {
         let start = Instant::now();
-        let _ = pure::render::render_document(
-            &doc,
-            80,
-            0,
-            &[],
-            &[],
-            NO_SENTINELS,
-        );
+        let _ = pure::render::render_document(&doc, 80, 0, &[], &[], NO_SENTINELS);
         durations.push(start.elapsed());
     }
 
@@ -643,7 +709,10 @@ fn bench_user_guide_rendering() {
 
     println!("  First render: {:?}", first_render);
     println!("  Cached average: {:?}", cached_avg);
-    println!("  Speedup: {:.2}x", first_render.as_secs_f64() / cached_avg.as_secs_f64());
+    println!(
+        "  Speedup: {:.2}x",
+        first_render.as_secs_f64() / cached_avg.as_secs_f64()
+    );
     println!("  Cache hit rate: {:.1}%", cache.hit_rate() * 100.0);
 }
 
@@ -658,10 +727,9 @@ fn bench_real_world_render_flow() {
     println!("  3. Clone the rendered lines (for widget)");
 
     // Load actual USER-GUIDE.md
-    let content = std::fs::read_to_string("USER-GUIDE.md")
-        .expect("Failed to read USER-GUIDE.md");
-    let doc = tdoc::markdown::parse(std::io::Cursor::new(&content))
-        .expect("Failed to parse markdown");
+    let content = std::fs::read_to_string("USER-GUIDE.md").expect("Failed to read USER-GUIDE.md");
+    let doc =
+        tdoc::markdown::parse(std::io::Cursor::new(&content)).expect("Failed to parse markdown");
 
     let mut editor = pure::editor::DocumentEditor::new(doc);
     let mut cache = pure::render::RenderCache::new();
@@ -681,12 +749,8 @@ fn bench_real_world_render_flow() {
 
         // Step 1: Clone document with markers (THIS IS THE KILLER)
         let clone_start = Instant::now();
-        let (clone, markers, reveal_tags, _) = editor.clone_with_markers(
-            '\u{F8FF}',
-            None,
-            '\u{F8FE}',
-            '\u{F8FD}',
-        );
+        let (clone, markers, reveal_tags, _) =
+            editor.clone_with_markers('\u{F8FF}', None, '\u{F8FE}', '\u{F8FD}');
         clone_times.push(clone_start.elapsed());
 
         // Step 2: Render the cloned document
@@ -720,12 +784,21 @@ fn bench_real_world_render_flow() {
     let line_clone_avg: Duration = line_clone_times.iter().sum::<Duration>() / iterations as u32;
 
     println!("\n📊 Performance Breakdown:");
-    println!("  Document clone:       {:>8?}  ({:>5.1}%)", clone_avg,
-        clone_avg.as_secs_f64() / total_avg.as_secs_f64() * 100.0);
-    println!("  Render (cached):      {:>8?}  ({:>5.1}%)", render_avg,
-        render_avg.as_secs_f64() / total_avg.as_secs_f64() * 100.0);
-    println!("  Clone render lines:   {:>8?}  ({:>5.1}%)", line_clone_avg,
-        line_clone_avg.as_secs_f64() / total_avg.as_secs_f64() * 100.0);
+    println!(
+        "  Document clone:       {:>8?}  ({:>5.1}%)",
+        clone_avg,
+        clone_avg.as_secs_f64() / total_avg.as_secs_f64() * 100.0
+    );
+    println!(
+        "  Render (cached):      {:>8?}  ({:>5.1}%)",
+        render_avg,
+        render_avg.as_secs_f64() / total_avg.as_secs_f64() * 100.0
+    );
+    println!(
+        "  Clone render lines:   {:>8?}  ({:>5.1}%)",
+        line_clone_avg,
+        line_clone_avg.as_secs_f64() / total_avg.as_secs_f64() * 100.0
+    );
     println!("  ─────────────────────────────────────");
     println!("  TOTAL per frame:      {:>8?}  (100.0%)", total_avg);
 
@@ -733,10 +806,18 @@ fn bench_real_world_render_flow() {
     println!("  Cache hits:     {}", cache.hits);
     println!("  Cache misses:   {}", cache.misses);
     println!("  Hit rate:       {:.1}%", cache.hit_rate() * 100.0);
-    println!("  Expected hits:  {} (if only 1 para with cursor changes per frame)",
-        iterations * (editor.document().paragraphs.len() - 1));
-    println!("  Expected misses: {} (1 para with cursor per frame)", iterations);
-    println!("  Actual misses/iter: {:.1} paragraphs", cache.misses as f64 / iterations as f64);
+    println!(
+        "  Expected hits:  {} (if only 1 para with cursor changes per frame)",
+        iterations * (editor.document().paragraphs.len() - 1)
+    );
+    println!(
+        "  Expected misses: {} (1 para with cursor per frame)",
+        iterations
+    );
+    println!(
+        "  Actual misses/iter: {:.1} paragraphs",
+        cache.misses as f64 / iterations as f64
+    );
 
     println!("\n🔍 Analysis:");
     if clone_avg.as_secs_f64() / total_avg.as_secs_f64() > 0.5 {

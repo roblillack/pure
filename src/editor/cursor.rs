@@ -1,26 +1,11 @@
-use super::content::{
-    next_word_boundary,
-    previous_word_boundary,
-    skip_leading_whitespace,
-};
+use super::content::{next_word_boundary, previous_word_boundary, skip_leading_whitespace};
 use super::inspect::{
-    breadcrumbs_for_pointer,
-    checklist_item_ref,
-    collect_segments,
-    paragraph_path_is_prefix,
-    paragraph_ref,
-    span_path_is_prefix,
-    span_ref,
-    span_ref_from_item,
+    breadcrumbs_for_pointer, checklist_item_ref, collect_segments, paragraph_path_is_prefix,
+    paragraph_ref, span_path_is_prefix, span_ref, span_ref_from_item,
 };
 use super::{
+    CursorPointer, DocumentEditor, ParagraphPath, PointerKey, SegmentKind, SegmentRef,
     select_text_in_paragraph,
-    CursorPointer,
-    DocumentEditor,
-    ParagraphPath,
-    PointerKey,
-    SegmentKind,
-    SegmentRef,
 };
 use tdoc::{Paragraph, Span};
 
@@ -312,7 +297,11 @@ impl DocumentEditor {
         self.cursor.offset = self.current_segment_len();
     }
 
-    pub(crate) fn fallback_move_to_text(&mut self, pointer: &CursorPointer, prefer_trailing: bool) -> bool {
+    pub(crate) fn fallback_move_to_text(
+        &mut self,
+        pointer: &CursorPointer,
+        prefer_trailing: bool,
+    ) -> bool {
         if let Some((index, segment)) = self.segments.iter().enumerate().find(|(_, segment)| {
             segment.paragraph_path == pointer.paragraph_path
                 && segment.span_path == pointer.span_path
@@ -481,7 +470,10 @@ impl DocumentEditor {
             .unwrap_or(0)
     }
 
-    pub(crate) fn find_previous_text_segment_in_paragraph(&self, start_idx: usize) -> Option<usize> {
+    pub(crate) fn find_previous_text_segment_in_paragraph(
+        &self,
+        start_idx: usize,
+    ) -> Option<usize> {
         if self.segments.is_empty() || start_idx == 0 {
             return None;
         }
@@ -674,7 +666,11 @@ impl DocumentEditor {
         None
     }
 
-    pub(crate) fn count_backward_steps(&self, target_segment: usize, target_offset: usize) -> usize {
+    pub(crate) fn count_backward_steps(
+        &self,
+        target_segment: usize,
+        target_offset: usize,
+    ) -> usize {
         if self.segments.is_empty() {
             return 0;
         }
@@ -765,7 +761,7 @@ impl DocumentEditor {
         let new_segments = super::inspect::collect_segments_for_paragraph_tree(
             &self.document,
             root_path,
-            self.reveal_codes
+            self.reveal_codes,
         );
 
         // Replace the old segment range with new segments
@@ -792,7 +788,8 @@ impl DocumentEditor {
     fn find_paragraph_segment_range(&self, root_path: &ParagraphPath) -> (usize, usize) {
         use super::inspect::paragraph_path_is_prefix;
 
-        let start = self.segments
+        let start = self
+            .segments
             .iter()
             .position(|seg| paragraph_path_is_prefix(root_path, &seg.paragraph_path))
             .unwrap_or(self.segments.len());
@@ -838,7 +835,10 @@ impl DocumentEditor {
         }
     }
 
-    pub(crate) fn nearest_text_pointer_for(&self, pointer: &CursorPointer) -> Option<CursorPointer> {
+    pub(crate) fn nearest_text_pointer_for(
+        &self,
+        pointer: &CursorPointer,
+    ) -> Option<CursorPointer> {
         let index = self
             .segments
             .iter()
