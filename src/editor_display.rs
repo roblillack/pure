@@ -158,6 +158,12 @@ impl EditorDisplay {
     /// Move cursor vertically by delta lines
     pub fn move_cursor_vertical(&mut self, delta: i32) {
         if self.visual_positions.is_empty() {
+            // Fallback to logical cursor movement when visual positions aren't available
+            if delta < 0 {
+                self.editor.move_up();
+            } else if delta > 0 {
+                self.editor.move_down();
+            }
             return;
         }
 
@@ -170,6 +176,12 @@ impl EditorDisplay {
             .or(self.last_cursor_visual);
 
         let Some(current) = current_position else {
+            // Fallback to logical cursor movement when current position is not found
+            if delta < 0 {
+                self.editor.move_up();
+            } else if delta > 0 {
+                self.editor.move_down();
+            }
             return;
         };
 
@@ -196,11 +208,37 @@ impl EditorDisplay {
             .or_else(|| self.search_nearest_line(target_line_usize, delta, desired_column));
 
         if let Some(dest) = destination {
-            if self.editor.move_to_pointer(&dest.pointer) {
+            // Check if destination is the same as current position
+            let is_same_position = dest.pointer == pointer;
+
+            if is_same_position {
+                // Destination is same as current - fall back to logical movement
+                if delta < 0 {
+                    self.editor.move_up();
+                } else if delta > 0 {
+                    self.editor.move_down();
+                }
+                self.preferred_column = None;
+            } else if self.editor.move_to_pointer(&dest.pointer) {
                 self.preferred_column = Some(desired_column);
                 self.last_cursor_visual = Some(dest.position);
             } else {
                 self.last_cursor_visual = Some(dest.position);
+            }
+        } else {
+            // Fallback: If visual-based movement failed, try logical cursor movement
+            // This handles cases where visual positions might not be complete or up-to-date
+            let moved = if delta < 0 {
+                self.editor.move_up()
+            } else if delta > 0 {
+                self.editor.move_down()
+            } else {
+                false
+            };
+
+            if moved {
+                // Clear preferred column since we fell back to logical movement
+                self.preferred_column = None;
             }
         }
     }
@@ -721,7 +759,7 @@ mod tests {
         use crate::editor::{ParagraphPath, SegmentKind, SpanPath};
         use tdoc::parse;
         let content = std::fs::read_to_string("test.ftml").unwrap();
-        let doc = parse(std::io::Cursor::new(content)).unwrap();
+        let doc = parse(std::io::Cursor::new(content.clone())).unwrap();
         let mut display = EditorDisplay::new(DocumentEditor::new(doc));
 
         // Render to populate visual_positions
@@ -755,6 +793,136 @@ mod tests {
         assert_eq!(
             cursor_after_move.paragraph_path, expected_path,
             "Cursor should have moved to the first checklist item"
+        );
+    }
+
+    #[test]
+    fn test_initial_cursor_navigation_in_test_ftml() {
+        use crate::editor::{ParagraphPath, SegmentKind, SpanPath};
+        use tdoc::parse;
+
+        let content = std::fs::read_to_string("test.ftml").unwrap();
+        let doc = parse(std::io::Cursor::new(content)).unwrap();
+        let mut display = EditorDisplay::new(DocumentEditor::new(doc));
+
+        // Render to populate visual_positions
+        let _ = display.render_document(80, 80, 0, None, '\0', '\0', '\0');
+
+        // Check initial position
+        let initial = display.cursor_pointer();
+        eprintln!("\n=== Initial cursor ===");
+        eprintln!("Path: {:?}", initial.paragraph_path);
+
+        // Try to navigate down to reach the checklist
+        eprintln!("\n=== Pressing down (1st time) ===");
+        display.move_cursor_vertical(1);
+        let pos1 = display.cursor_pointer();
+        eprintln!("Path: {:?}", pos1.paragraph_path);
+
+        eprintln!("\n=== Pressing down (2nd time) ===");
+        display.move_cursor_vertical(1);
+        let pos2 = display.cursor_pointer();
+        eprintln!("Path: {:?}", pos2.paragraph_path);
+
+        eprintln!("\n=== Pressing down (3rd time) ===");
+        display.move_cursor_vertical(1);
+        let pos3 = display.cursor_pointer();
+        eprintln!("Path: {:?}", pos3.paragraph_path);
+
+        // Check if we reached a checklist item by looking at the debug representation
+        let path_str = format!("{:?}", pos3.paragraph_path);
+        let has_checklist = path_str.contains("ChecklistItem");
+
+        eprintln!("\nReached checklist item: {}", has_checklist);
+        assert!(
+            has_checklist,
+            "Should reach a checklist item after 3 down presses from initial position"
+        );
+    }
+
+    #[test]
+    fn regression_fallback_when_destination_equals_current() {
+        // Regression test for bug where cursor couldn't move down when visual search
+        // returned the same position (e.g., when at max_line with target beyond viewport)
+        //
+        // Bug scenario: User at H2 "Todos" presses down, but checklist items are beyond
+        // visual_positions coverage. Visual search finds H2 again (same position), and
+        // without fallback to logical movement, cursor stays stuck.
+        //
+        // This test verifies the fallback logic works: when destination == current position,
+        // use logical cursor movement instead.
+        use crate::editor::{ParagraphPath, SegmentKind, SpanPath};
+        use tdoc::{ChecklistItem, Document, Paragraph, Span as DocSpan};
+
+        let doc = Document::new().with_paragraphs(vec![
+            Paragraph::new_header2().with_content(vec![DocSpan::new_text("Heading")]),
+            Paragraph::new_checklist().with_checklist_items(vec![
+                ChecklistItem::new(false).with_content(vec![DocSpan::new_text("Task")]),
+            ]),
+        ]);
+
+        let mut display = EditorDisplay::new(DocumentEditor::new(doc));
+
+        // Move to H2 without rendering (empty visual_positions)
+        // This forces fallback to logical movement
+        let h2_pointer = CursorPointer {
+            paragraph_path: ParagraphPath::new_root(0),
+            span_path: SpanPath::new(vec![0]),
+            offset: 0,
+            segment_kind: SegmentKind::Text,
+        };
+        assert!(display.move_to_pointer(&h2_pointer));
+
+        // Try to move down with empty visual_positions
+        // Should use fallback to move_down()
+        display.move_cursor_vertical(1);
+
+        let after = display.cursor_pointer();
+
+        // Should have moved to checklist using logical movement
+        let path_str = format!("{:?}", after.paragraph_path);
+        assert!(
+            path_str.contains("ChecklistItem"),
+            "Should have used logical fallback to reach checklist, got: {:?}",
+            after.paragraph_path
+        );
+    }
+
+    #[test]
+    fn fallback_to_logical_movement_when_visual_positions_incomplete() {
+        use crate::editor::{ParagraphPath, SegmentKind, SpanPath};
+        use tdoc::{ChecklistItem, Document, Paragraph, Span as DocSpan};
+
+        // Create a document with heading and checklist
+        let doc = Document::new().with_paragraphs(vec![
+            Paragraph::new_header2().with_content(vec![DocSpan::new_text("Heading")]),
+            Paragraph::new_checklist().with_checklist_items(vec![
+                ChecklistItem::new(false).with_content(vec![DocSpan::new_text("Item 1")]),
+            ]),
+        ]);
+
+        let mut display = EditorDisplay::new(DocumentEditor::new(doc));
+
+        // Move to the heading
+        let h2_pointer = CursorPointer {
+            paragraph_path: ParagraphPath::new_root(0),
+            span_path: SpanPath::new(vec![0]),
+            offset: 0,
+            segment_kind: SegmentKind::Text,
+        };
+        assert!(display.move_to_pointer(&h2_pointer));
+
+        // Try to move down WITHOUT rendering (visual_positions will be empty)
+        // This should fall back to logical cursor movement
+        display.move_cursor_vertical(1);
+
+        let cursor_after_move = display.cursor_pointer();
+        let mut expected_path = ParagraphPath::new_root(1);
+        expected_path.push_checklist_item(vec![0]);
+
+        assert_eq!(
+            cursor_after_move.paragraph_path, expected_path,
+            "Cursor should have used logical movement fallback to reach checklist item"
         );
     }
 }
