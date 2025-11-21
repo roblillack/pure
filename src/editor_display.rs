@@ -93,6 +93,13 @@ impl EditorDisplay {
         self.render_cache.clear();
     }
 
+    /// Set reveal codes mode and clear cache
+    /// This overrides the Deref implementation to ensure cache is cleared
+    pub fn set_reveal_codes(&mut self, enabled: bool) {
+        self.editor.set_reveal_codes(enabled);
+        self.render_cache.clear();
+    }
+
     /// Render the document at the given width and update internal state
     pub fn render_document(
         &mut self,
