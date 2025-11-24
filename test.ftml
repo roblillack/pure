@@ -5,12 +5,15 @@
 <ul>
   <li><input type="checkbox" checked /> Jumping by word</li>
   <li>
-    <input type="checkbox" /> Checklists: Moving downwards by adding Enter in front should move "checked"
+    <input type="checkbox" checked /> Checklists: Moving downwards by adding Enter in front should move "checked"
     state with the item
   </li>
-  <li><input type="checkbox" /> Performance of moving the cursor</li>
+  <li><input type="checkbox" checked /> Performance of moving the cursor</li>
+  <li><input type="checkbox" /> Performance of inserting text</li>
   <li><input type="checkbox" checked /> Styling for checklist items</li>
   <li><input type="checkbox" /> Number child paragraphs of lists</li>
+  <li><input type="checkbox" /> Lag when scrolling with mouse wheel</li>
+  <li><input type="checkbox" /> Styling: Center level 1 headings</li>
   <li>
     <input type="checkbox" /> Separate inline styles from paragraph styles in status bar
   </li>
