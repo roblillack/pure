@@ -109,7 +109,6 @@ fn collect_paragraph_labels<'a>(
                 current_item = checklist_item_ref(document, &current_path);
                 continue;
             }
-            PathStep::Root(_) => return None,
         };
         let current_path = ParagraphPath::from_steps(traversed.clone());
         let hide_label = text_effective_relation(document, &current_path).is_some();
@@ -268,7 +267,7 @@ pub fn checklist_item_ref<'a>(
 pub fn span_ref<'a>(paragraph: &'a Paragraph, path: &SpanPath) -> Option<&'a Span> {
     let mut iter = path.indices().iter();
     let first = iter.next()?;
-    let mut spans = paragraph.content();
+    let spans = paragraph.content();
     let mut span = spans.get(*first)?;
     for idx in iter {
         span = span.children.get(*idx)?;

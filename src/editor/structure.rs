@@ -544,9 +544,7 @@ pub(crate) fn break_list_entry_for_non_list_target(
     };
 
     let list_path = ParagraphPath::from_steps(prefix.to_vec());
-    let Some(list_paragraph) = paragraph_ref(document, &list_path) else {
-        return None;
-    };
+    let list_paragraph = paragraph_ref(document, &list_path)?;
     if !is_list_type(list_paragraph.paragraph_type()) {
         return None;
     }
@@ -582,7 +580,7 @@ pub(crate) fn break_list_entry_for_non_list_target(
             match target {
                 ParagraphType::Quote => {
                     let mut quote_children = Vec::new();
-                    let mut text_paragraph =
+                    let text_paragraph =
                         checklist_item_content_to_paragraph(content, ParagraphType::Text);
                     quote_children.push(text_paragraph);
                     if !children.is_empty() {
@@ -1218,10 +1216,10 @@ pub(crate) fn find_list_ancestor_path(
     let mut steps = path.steps().to_vec();
     while !steps.is_empty() {
         let candidate = ParagraphPath::from_steps(steps.clone());
-        if let Some(paragraph) = paragraph_ref(document, &candidate) {
-            if is_list_type(paragraph.paragraph_type()) {
-                return Some(candidate);
-            }
+        if let Some(paragraph) = paragraph_ref(document, &candidate)
+            && is_list_type(paragraph.paragraph_type())
+        {
+            return Some(candidate);
         }
         steps.pop();
     }
@@ -1780,16 +1778,16 @@ fn previous_sibling_path(path: &ParagraphPath) -> Option<ParagraphPath> {
             Some(ParagraphPath::from_steps(new_steps))
         }
         PathStep::ChecklistItem { ref indices } => {
-            if let Some((last, head)) = indices.split_last() {
-                if *last > 0 {
-                    let mut new_indices = head.to_vec();
-                    new_indices.push(*last - 1);
-                    let mut new_steps = prefix.to_vec();
-                    new_steps.push(PathStep::ChecklistItem {
-                        indices: new_indices,
-                    });
-                    return Some(ParagraphPath::from_steps(new_steps));
-                }
+            if let Some((last, head)) = indices.split_last()
+                && *last > 0
+            {
+                let mut new_indices = head.to_vec();
+                new_indices.push(*last - 1);
+                let mut new_steps = prefix.to_vec();
+                new_steps.push(PathStep::ChecklistItem {
+                    indices: new_indices,
+                });
+                return Some(ParagraphPath::from_steps(new_steps));
             }
             None
         }
@@ -1817,12 +1815,12 @@ pub(crate) fn find_indent_target(
 ) -> Option<IndentTarget> {
     let prev_path = previous_sibling_path(path)?;
     let target = determine_indent_target(document, &prev_path)?;
-    if let IndentTargetKind::ListEntry { entry_index } = target.kind {
-        if let Some(ctx) = extract_entry_context(path) {
-            if ctx.list_path == target.path && ctx.entry_index == entry_index {
-                return None;
-            }
-        }
+    if let IndentTargetKind::ListEntry { entry_index } = target.kind
+        && let Some(ctx) = extract_entry_context(path)
+        && ctx.list_path == target.path
+        && ctx.entry_index == entry_index
+    {
+        return None;
     }
     Some(target)
 }
@@ -1833,10 +1831,10 @@ pub(crate) fn find_container_indent_target(
 ) -> Option<IndentTarget> {
     let mut current = path.clone();
     loop {
-        if let Some(prev_path) = previous_sibling_path(&current) {
-            if let Some(target) = determine_indent_target(document, &prev_path) {
-                return Some(target);
-            }
+        if let Some(prev_path) = previous_sibling_path(&current)
+            && let Some(target) = determine_indent_target(document, &prev_path)
+        {
+            return Some(target);
         }
 
         if let Some(parent) = parent_paragraph_path(&current) {
@@ -2050,7 +2048,7 @@ pub(crate) fn indent_paragraph_within_entry(
         _ => return None,
     };
 
-    let mut nested_list = if list_type == ParagraphType::OrderedList {
+    let nested_list = if list_type == ParagraphType::OrderedList {
         Paragraph::OrderedList {
             entries: vec![nested_entry],
         }
@@ -2429,7 +2427,7 @@ fn convert_paragraph_to_checklist_entry(paragraph: Paragraph) -> (Vec<Paragraph>
         content
     };
 
-    let mut item = Paragraph::new_text().with_content(content);
+    let item = Paragraph::new_text().with_content(content);
     let mut entry = vec![item];
 
     // If the original paragraph had children or entries, preserve them

@@ -77,12 +77,10 @@ pub fn char_to_byte_idx(text: &str, char_idx: usize) -> usize {
     if char_idx == 0 {
         return 0;
     }
-    let mut count = 0;
-    for (byte_idx, _) in text.char_indices() {
+    for (count, (byte_idx, _)) in text.char_indices().enumerate() {
         if count == char_idx {
             return byte_idx;
         }
-        count += 1;
     }
     text.len()
 }

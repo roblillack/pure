@@ -78,19 +78,13 @@ impl DocumentEditor {
                 InlineStyleScope::None => {}
                 InlineStyleScope::Paragraph => {
                     changed = true;
-                    if !touched_paragraphs
-                        .iter()
-                        .any(|path| *path == segment.paragraph_path)
-                    {
+                    if !touched_paragraphs.contains(&segment.paragraph_path) {
                         touched_paragraphs.push(segment.paragraph_path.clone());
                     }
                 }
                 InlineStyleScope::Checklist => {
                     changed = true;
-                    if !touched_checklists
-                        .iter()
-                        .any(|path| *path == segment.paragraph_path)
-                    {
+                    if !touched_checklists.contains(&segment.paragraph_path) {
                         touched_checklists.push(segment.paragraph_path.clone());
                     }
                 }

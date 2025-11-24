@@ -137,7 +137,7 @@ fn ctrl_p_in_checklist_behaves_like_enter() {
     let checklist = &doc.paragraphs[0];
     assert_eq!(checklist.checklist_items().len(), 2);
     assert_eq!(checklist.checklist_items()[0].content[0].text, "Task");
-    assert_eq!(checklist.checklist_items()[1].checked, false);
+    assert!(!checklist.checklist_items()[1].checked);
 }
 
 #[test]

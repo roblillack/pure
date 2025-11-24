@@ -12,7 +12,6 @@ use tdoc::{Document, InlineStyle, Paragraph, ParagraphType, Span};
 /// - Character insertion/deletion
 /// - Segment rebuilding
 /// - Scrolling operations
-
 const SMALL_DOC_PARAGRAPHS: usize = 10;
 const MEDIUM_DOC_PARAGRAPHS: usize = 100;
 const LARGE_DOC_PARAGRAPHS: usize = 1000;
@@ -509,7 +508,7 @@ fn bench_word_boundary_detection() {
             &format!("previous_word_boundary - {}", name),
             ITERATIONS * 10,
             || {
-                let _ = pure::editor::content::previous_word_boundary(&text, text.len() / 2);
+                let _ = pure::editor::content::previous_word_boundary(text, text.len() / 2);
             },
         );
         result_prev.print();
@@ -518,7 +517,7 @@ fn bench_word_boundary_detection() {
             &format!("next_word_boundary - {}", name),
             ITERATIONS * 10,
             || {
-                let _ = pure::editor::content::next_word_boundary(&text, text.len() / 2);
+                let _ = pure::editor::content::next_word_boundary(text, text.len() / 2);
             },
         );
         result_next.print();
