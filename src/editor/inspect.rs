@@ -20,7 +20,28 @@ pub fn collect_segments_for_paragraph_tree(
     reveal_codes: bool,
 ) -> Vec<SegmentRef> {
     let mut result = Vec::new();
-    if let Some(paragraph) = paragraph_ref(document, root_path) {
+
+    // Check if the path points to a checklist item
+    if let Some(item) = checklist_item_ref(document, root_path) {
+        // Extract the checklist item indices from the path
+        if let Some(PathStep::ChecklistItem { indices }) = root_path
+            .steps()
+            .iter()
+            .find(|s| matches!(s, PathStep::ChecklistItem { .. }))
+        {
+            // Get the parent paragraph path (path up to but not including the ChecklistItem step)
+            let checklist_step_idx = root_path
+                .steps()
+                .iter()
+                .position(|s| matches!(s, PathStep::ChecklistItem { .. }))
+                .unwrap();
+            let parent_path =
+                ParagraphPath::from_steps(root_path.steps()[..checklist_step_idx].to_vec());
+
+            let mut path = parent_path;
+            collect_checklist_item_segments(item, &mut path, indices, reveal_codes, &mut result);
+        }
+    } else if let Some(paragraph) = paragraph_ref(document, root_path) {
         let mut path = root_path.clone();
         collect_paragraph_segments(paragraph, &mut path, reveal_codes, &mut result);
     }
