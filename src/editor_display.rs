@@ -107,9 +107,6 @@ impl EditorDisplay {
         wrap_width: usize,
         left_padding: usize,
         selection: Option<(CursorPointer, CursorPointer)>,
-        _cursor_sentinel: char,
-        _selection_start_sentinel: char,
-        _selection_end_sentinel: char,
     ) -> RenderResult {
         // Use direct rendering - no document cloning needed!
         let cursor_pointer = self.editor.cursor_pointer();
@@ -551,7 +548,7 @@ fn column_distance(a: u16, b: u16) -> u16 {
 mod tests {
     use super::*;
     use crate::editor::DocumentEditor;
-    use tdoc::{Document, Paragraph};
+    use tdoc::{Document, Paragraph, ftml};
 
     fn create_test_display() -> EditorDisplay {
         let mut doc = Document::new();
@@ -576,7 +573,7 @@ mod tests {
         let mut display = create_test_display();
 
         // Render to populate visual positions
-        let _render = display.render_document(80, 80, 0, None, '\u{F8FF}', '\u{F8FE}', '\u{F8FD}');
+        let _render = display.render_document(80, 80, 0, None);
 
         // Get initial cursor position
         let initial_pointer = display.cursor_pointer();
@@ -593,7 +590,7 @@ mod tests {
         let mut display = create_test_display();
 
         // Render to populate visual positions
-        let _render = display.render_document(80, 80, 0, None, '\u{F8FF}', '\u{F8FE}', '\u{F8FD}');
+        let _render = display.render_document(80, 80, 0, None);
 
         // Move to second paragraph first
         display.move_cursor_vertical(1);
@@ -611,7 +608,7 @@ mod tests {
         let mut display = create_test_display();
 
         // Render to populate visual positions
-        let _render = display.render_document(80, 80, 0, None, '\u{F8FF}', '\u{F8FE}', '\u{F8FD}');
+        let _render = display.render_document(80, 80, 0, None);
 
         // Move cursor to the middle of the line
         for _ in 0..5 {
@@ -633,7 +630,7 @@ mod tests {
         let mut display = create_test_display();
 
         // Render to populate visual positions
-        let _render = display.render_document(80, 80, 0, None, '\u{F8FF}', '\u{F8FE}', '\u{F8FD}');
+        let _render = display.render_document(80, 80, 0, None);
 
         let initial_offset = display.cursor_pointer().offset;
 
@@ -679,7 +676,7 @@ mod tests {
         display.last_view_height = 10;
 
         // Render to populate visual positions
-        let _render = display.render_document(80, 80, 0, None, '\u{F8FF}', '\u{F8FE}', '\u{F8FD}');
+        let _render = display.render_document(80, 80, 0, None);
 
         let initial_pointer = display.cursor_pointer();
 
@@ -699,7 +696,7 @@ mod tests {
         let mut display = create_test_display();
 
         // Render to populate visual positions
-        let _render = display.render_document(80, 80, 0, None, '\u{F8FF}', '\u{F8FE}', '\u{F8FD}');
+        let _render = display.render_document(80, 80, 0, None);
 
         // Move to the middle of the line
         for _ in 0..5 {
@@ -746,7 +743,7 @@ mod tests {
         let mut display = create_test_display();
 
         // Render to populate visual positions
-        let _render = display.render_document(80, 80, 0, None, '\u{F8FF}', '\u{F8FE}', '\u{F8FD}');
+        let _render = display.render_document(80, 80, 0, None);
 
         // Get boundaries of first visual line
         if let Some((start, end)) = display.visual_line_boundaries(0) {
@@ -770,7 +767,7 @@ mod tests {
         let mut display = EditorDisplay::new(DocumentEditor::new(doc));
 
         // Render to populate visual_positions
-        let _ = display.render_document(80, 80, 0, None, '\0', '\0', '\0');
+        let _ = display.render_document(80, 80, 0, None);
 
         // Find the H2 "Todos"
         let h2_path = ParagraphPath::new_root(1); // H1 is 0, H2 is 1
@@ -805,7 +802,6 @@ mod tests {
 
     #[test]
     fn test_initial_cursor_navigation_in_test_ftml() {
-        use crate::editor::{ParagraphPath, SegmentKind, SpanPath};
         use tdoc::parse;
 
         let content = std::fs::read_to_string("test.ftml").unwrap();
@@ -813,7 +809,7 @@ mod tests {
         let mut display = EditorDisplay::new(DocumentEditor::new(doc));
 
         // Render to populate visual_positions
-        let _ = display.render_document(80, 80, 0, None, '\0', '\0', '\0');
+        let _ = display.render_document(80, 80, 0, None);
 
         // Check initial position
         let initial = display.cursor_pointer();
