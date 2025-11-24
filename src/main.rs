@@ -35,9 +35,6 @@ use editor::{CursorPointer, DocumentEditor};
 use editor_display::{CursorDisplay, EditorDisplay};
 use render::RenderResult;
 
-const CURSOR_SENTINEL: char = '\u{F8FF}';
-const SELECTION_START_SENTINEL: char = '\u{F8FE}';
-const SELECTION_END_SENTINEL: char = '\u{F8FD}';
 const STATUS_TIMEOUT: Duration = Duration::from_secs(4);
 const DOUBLE_CLICK_TIMEOUT: Duration = Duration::from_millis(400);
 const MOUSE_SCROLL_LINES: usize = 3;
@@ -782,15 +779,9 @@ impl App {
         let width = text_area.width.max(1) as usize;
         let (wrap_width, left_padding) = editor_wrap_configuration(width);
         let selection = self.current_selection();
-        let render = self.display.render_document(
-            width,
-            wrap_width,
-            left_padding,
-            selection,
-            CURSOR_SENTINEL,
-            SELECTION_START_SENTINEL,
-            SELECTION_END_SENTINEL,
-        );
+        let render = self
+            .display
+            .render_document(width, wrap_width, left_padding, selection);
         let render_time = render_start.elapsed();
         if render_time.as_millis() > 10 {
             // eprintln!("  render_document: {:?}", render_time);

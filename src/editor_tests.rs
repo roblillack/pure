@@ -1417,7 +1417,7 @@ fn cursor_valid_after_nesting_checklist_item() {
     }
 
     // Now test rendering to ensure visual position is tracked
-    let result = display.render_document(80, 80, 0, None, ' ', ' ', ' ');
+    let result = display.render_document(80, 80, 0, None);
     assert!(
         result.cursor.is_some(),
         "Cursor visual position should be found after nesting. Cursor pointer: {:?}",
