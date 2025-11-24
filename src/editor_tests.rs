@@ -532,6 +532,63 @@ fn indent_text_paragraph_into_checklist_item() {
 }
 
 #[test]
+fn unindent_nested_checklist_item_moves_trailing_siblings_as_children() {
+    // Create a structure:
+    // - Parent
+    //   - Child A
+    //   - Child B  <- this will be unnested
+    //   - Child C
+    //   - Child D
+    let child_a = ChecklistItem::new(false).with_content(vec![Span::new_text("Child A")]);
+    let child_b = ChecklistItem::new(false).with_content(vec![Span::new_text("Child B")]);
+    let child_c = ChecklistItem::new(false).with_content(vec![Span::new_text("Child C")]);
+    let child_d = ChecklistItem::new(false).with_content(vec![Span::new_text("Child D")]);
+    let parent = ChecklistItem::new(false)
+        .with_content(vec![Span::new_text("Parent")])
+        .with_children(vec![child_a, child_b, child_c, child_d]);
+    let checklist = Paragraph::new_checklist().with_checklist_items(vec![parent]);
+    let document = Document::new().with_paragraphs(vec![checklist]);
+    let mut editor = DocumentEditor::new(document);
+
+    // Position cursor on "Child B" (index 1 of parent's children)
+    let pointer = pointer_to_nested_checklist_item_span(0, vec![0, 1]);
+    assert!(editor.move_to_pointer(&pointer));
+    assert!(editor.can_indent_less());
+    assert!(editor.unindent_current_paragraph());
+
+    // After unnesting, the structure should be:
+    // - Parent
+    //   - Child A
+    // - Child B  <- now at top level
+    //   - Child C  <- moved as child of Child B
+    //   - Child D  <- moved as child of Child B
+    let checklist = &editor.document().paragraphs[0];
+    let items = checklist.checklist_items();
+    assert_eq!(items.len(), 2, "Should have 2 top-level items now");
+
+    // Verify Parent still has Child A
+    let parent = &items[0];
+    assert_eq!(parent.content[0].text, "Parent");
+    assert_eq!(
+        parent.children.len(),
+        1,
+        "Parent should have only Child A left"
+    );
+    assert_eq!(parent.children[0].content[0].text, "Child A");
+
+    // Verify Child B is now at top level with C and D as its children
+    let child_b = &items[1];
+    assert_eq!(child_b.content[0].text, "Child B");
+    assert_eq!(
+        child_b.children.len(),
+        2,
+        "Child B should have Child C and D as children"
+    );
+    assert_eq!(child_b.children[0].content[0].text, "Child C");
+    assert_eq!(child_b.children[1].content[0].text, "Child D");
+}
+
+#[test]
 fn backspace_merges_checklist_item_into_previous_paragraph() {
     let inner_ordered = Paragraph::new_ordered_list().with_entries(vec![
         vec![text_paragraph("Inner first paragraph")],
