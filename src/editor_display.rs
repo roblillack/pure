@@ -546,7 +546,7 @@ fn column_distance(a: u16, b: u16) -> u16 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::editor::DocumentEditor;
+    use crate::editor::{DocumentEditor, SegmentKind};
     use tdoc::{Document, Paragraph, ftml};
 
     fn create_test_display() -> EditorDisplay {
@@ -754,6 +754,170 @@ mod tests {
             );
         } else {
             panic!("Should have visual line boundaries for line 0");
+        }
+    }
+
+    #[test]
+    fn test_moving_into_empty_checklist_items() {
+        let doc = ftml! {
+            h1 { "My Document" }
+            checklist {
+                done { "Task 1" }
+                todo { }
+            }
+        };
+        let mut display = EditorDisplay::new(DocumentEditor::new(doc));
+
+        // Render to populate visual_positions
+        let _ = display.render_document(80, 0, None);
+
+        // Try to navigate down to reach the checklist
+        display.move_cursor_vertical(1);
+        let pos1 = display.cursor_pointer();
+        assert_eq!(
+            pos1.paragraph_path.numeric_steps(),
+            vec![1, 0],
+            "Should be at 2nd checklist paragraph"
+        );
+        assert_eq!(pos1.offset, 0, "Should be at start of checklist paragraph");
+
+        display.move_cursor_vertical(1);
+        let pos2 = display.cursor_pointer();
+        assert_eq!(
+            pos2.paragraph_path.numeric_steps(),
+            vec![1, 1],
+            "Should be at checklist paragraph"
+        );
+        assert_eq!(pos2.offset, 0, "Should be at start of checklist paragraph");
+    }
+
+    #[test]
+    fn test_editing_empty_checklist_item() {
+        let doc = ftml! {
+            h1 { "My Document" }
+            checklist {
+                done { "Task 1" }
+                todo { }
+            }
+        };
+        let mut display = EditorDisplay::new(DocumentEditor::new(doc));
+
+        // Render to populate visual_positions
+        let _ = display.render_document(80, 0, None);
+
+        // Try to navigate down to reach the checklist
+        display.move_cursor_vertical(1);
+        let pos1 = display.cursor_pointer();
+        assert_eq!(
+            pos1.paragraph_path.numeric_steps(),
+            vec![1, 0],
+            "Should be at 1st item"
+        );
+
+        display.move_cursor_vertical(1);
+        let pos2 = display.cursor_pointer();
+        assert_eq!(
+            pos2.paragraph_path.numeric_steps(),
+            vec![1, 1],
+            "Should be at 2nd item"
+        );
+
+        assert!(display.insert_char('T'));
+        assert!(display.insert_char('e'));
+        assert!(display.insert_char('s'));
+        assert!(display.insert_char('t'));
+        let pos3 = display.cursor_pointer();
+        assert_eq!(pos3.offset, 4, "Should be at end of item's text");
+    }
+
+    #[test]
+    fn test_moving_into_empty_bullet_items() {
+        let doc = ftml! {
+            h1 { "My Document" }
+            ul {
+                li { p { "Task 1" } }
+                li { }
+            }
+        };
+        let mut display = EditorDisplay::new(DocumentEditor::new(doc));
+
+        // Render to populate visual_positions
+        let _ = display.render_document(80, 0, None);
+
+        // Try to navigate down to reach the checklist
+        display.move_cursor_vertical(1);
+        let pos1 = display.cursor_pointer();
+        assert_eq!(
+            pos1.paragraph_path.numeric_steps(),
+            vec![1, 0, 0],
+            "Should be at 1st bullet paragraph's first child"
+        );
+        assert_eq!(pos1.offset, 0, "Should be at start of bullet paragraph");
+
+        display.move_cursor_vertical(1);
+        let pos2 = display.cursor_pointer();
+        assert_eq!(
+            pos2.paragraph_path.numeric_steps(),
+            vec![1, 1],
+            "Should be at 2nd bullet paragraph"
+        );
+        assert_eq!(pos2.offset, 0, "Should be at start of bullet paragraph");
+    }
+
+    #[test]
+    fn test_editing_empty_bullet_paragraph() {
+        let doc = ftml! {
+            h1 { "My Document" }
+            ul {
+                li { p { "Task 1" } }
+                li { }
+            }
+        };
+        let mut display = EditorDisplay::new(DocumentEditor::new(doc));
+
+        // Render to populate visual_positions
+        let _ = display.render_document(80, 0, None);
+
+        // Try to navigate down to reach the checklist
+        display.move_cursor_vertical(1);
+        let pos1 = display.cursor_pointer();
+        assert_eq!(
+            pos1.paragraph_path.numeric_steps(),
+            vec![1, 0, 0],
+            "Should be at 1st bullet paragraph's first child"
+        );
+
+        display.move_cursor_vertical(1);
+        let pos2 = display.cursor_pointer();
+        assert_eq!(
+            pos2.paragraph_path.numeric_steps(),
+            vec![1, 1],
+            "Should be at 2nd bullet paragraph"
+        );
+
+        assert!(display.insert_char('T'));
+        assert!(display.insert_char('e'));
+        assert!(display.insert_char('s'));
+        assert!(display.insert_char('t'));
+        let pos3 = display.cursor_pointer();
+        assert_eq!(pos3.offset, 4, "Should be at end of bullet paragraph");
+    }
+
+    #[test]
+    fn test_empty_doc_has_cursor() {
+        let doc = ftml! { p {} };
+        let mut display = EditorDisplay::new(DocumentEditor::new(doc));
+        let _ = display.render_document(80, 0, None);
+        let pos1 = display.cursor_pointer();
+        assert_eq!(pos1.paragraph_path.numeric_steps(), vec![0]);
+        assert_eq!(pos1.span_path.indices(), vec![0]);
+        assert_eq!(pos1.offset, 0);
+
+        if let Some(vis1) = display.last_cursor_visual() {
+            assert_eq!(vis1.line, 0);
+            assert_eq!(vis1.column, 0);
+        } else {
+            panic!("No visible cursor")
         }
     }
 

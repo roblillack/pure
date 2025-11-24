@@ -1408,6 +1408,80 @@ fn empty_text_paragraph() -> Paragraph {
     Paragraph::new_text().with_content(vec![Span::new_text("")])
 }
 
+/// Ensures that a list entry at the given path has at least one paragraph.
+/// If the entry is empty, adds an empty text paragraph to it.
+/// Returns true if a paragraph was added, false if the entry already had paragraphs or doesn't exist.
+pub(crate) fn ensure_list_entry_has_paragraph(
+    document: &mut Document,
+    path: &ParagraphPath,
+) -> bool {
+    let steps_vec: Vec<PathStep> = path.steps().to_vec();
+    let (last_step, prefix) = match steps_vec.split_last() {
+        Some(pair) => pair,
+        None => return false,
+    };
+
+    // Handle both Entry steps and Child steps (cursor navigation uses Child for empty list items)
+    let (entry_index, paragraph_index) = match last_step {
+        PathStep::Entry {
+            entry_index,
+            paragraph_index,
+        } => (*entry_index, *paragraph_index),
+        PathStep::Child(idx) => {
+            // Child steps in lists represent list entries (when empty, cursor uses Child instead of Entry)
+            (*idx, 0)
+        }
+        _ => return false,
+    };
+
+    // Get the parent paragraph (the list)
+    let parent_path = ParagraphPath::from_steps(prefix.to_vec());
+    let parent = match paragraph_mut(document, &parent_path) {
+        Some(p) => p,
+        None => return false,
+    };
+
+    // Get the entry
+    let entry = match parent {
+        Paragraph::OrderedList { entries } | Paragraph::UnorderedList { entries } => {
+            match entries.get_mut(entry_index) {
+                Some(e) => e,
+                None => return false,
+            }
+        }
+        _ => return false,
+    };
+
+    // If entry is empty and we're trying to access paragraph 0, add an empty text paragraph
+    if entry.is_empty() && paragraph_index == 0 {
+        entry.push(empty_text_paragraph());
+        return true;
+    }
+
+    false
+}
+
+/// Ensures that a checklist item at the given path has at least one span in its content.
+/// If the item's content is empty, adds an empty text span to it.
+/// Returns true if a span was added, false if the item already had content or doesn't exist.
+pub(crate) fn ensure_checklist_item_has_content(
+    document: &mut Document,
+    path: &ParagraphPath,
+) -> bool {
+    let item = match checklist_item_mut(document, path) {
+        Some(item) => item,
+        None => return false,
+    };
+
+    // If the item's content is empty, add an empty text span
+    if item.content.is_empty() {
+        item.content.push(Span::new_text(""));
+        return true;
+    }
+
+    false
+}
+
 pub(crate) fn split_paragraph_break(
     document: &mut Document,
     pointer: &CursorPointer,
