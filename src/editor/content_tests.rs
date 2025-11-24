@@ -165,3 +165,64 @@ fn insert_char_on_reveal_end_marker_in_checklist_with_nested_bold_span_appends_t
     assert_eq!(item.content[0].text, "Hello ");
     assert_eq!(item.content[1].children[0].text, "World dear");
 }
+
+fn pointer_to_nested_checklist_item_span(root_index: usize, indices: Vec<usize>) -> CursorPointer {
+    let mut path = ParagraphPath::new_root(root_index);
+    path.push_checklist_item(indices);
+    CursorPointer {
+        paragraph_path: path,
+        span_path: SpanPath::new(vec![0]),
+        offset: 0,
+        segment_kind: SegmentKind::Text,
+    }
+}
+
+#[test]
+fn insert_paragraph_break_in_nested_checklist_creates_sibling() {
+    // Create a checklist with a nested item structure:
+    // - Parent item
+    //   - Nested item 1
+    //   - Nested item 2
+    let mut parent_item = ChecklistItem::new(false).with_content(vec![Span::new_text("Parent")]);
+    parent_item.children = vec![
+        ChecklistItem::new(false).with_content(vec![Span::new_text("Nested 1")]),
+        ChecklistItem::new(false).with_content(vec![Span::new_text("Nested 2")]),
+    ];
+    let checklist = Paragraph::new_checklist().with_checklist_items(vec![parent_item]);
+    let document = Document::new().with_paragraphs(vec![checklist]);
+    let mut editor = DocumentEditor::new(document);
+
+    // Position cursor at the end of "Nested 1" (indices [0, 0] = first child of first parent)
+    let mut pointer = pointer_to_nested_checklist_item_span(0, vec![0, 0]);
+    pointer.offset = 8; // After "Nested 1"
+    assert!(editor.move_to_pointer(&pointer));
+
+    // Insert a paragraph break
+    assert!(editor.insert_paragraph_break());
+
+    // Verify the structure: should have a new sibling at the same nesting level
+    let doc = editor.document();
+    let checklist = &doc.paragraphs[0];
+    let items = checklist.checklist_items();
+    assert_eq!(items.len(), 1, "Should still have one parent item");
+
+    let parent = &items[0];
+    assert_eq!(parent.content[0].text, "Parent");
+    assert_eq!(
+        parent.children.len(),
+        3,
+        "Should now have 3 nested items (was 2, added 1)"
+    );
+
+    // Verify the first nested item was split correctly
+    assert_eq!(parent.children[0].content[0].text, "Nested 1");
+
+    // The new item should be at index 1 (between old items 0 and 1)
+    assert_eq!(
+        parent.children[1].content[0].text, "",
+        "New item should be empty"
+    );
+
+    // The old second item should now be at index 2
+    assert_eq!(parent.children[2].content[0].text, "Nested 2");
+}

@@ -1645,42 +1645,90 @@ pub(crate) fn split_paragraph_break(
             })
         }
         PathStep::ChecklistItem { indices } => {
-            let item_index = *indices.first()?;
-            let parent_path = ParagraphPath::from_steps(prefix.to_vec());
-            let parent = paragraph_mut(document, &parent_path)?;
+            // Handle nested checklist items correctly
+            if indices.len() > 1 {
+                // For nested items, navigate to the parent item and insert into its children
+                let parent_item_indices = &indices[..indices.len() - 1];
+                let current_index = *indices.last()?;
 
-            let Paragraph::Checklist { items } = parent else {
-                return None;
-            };
+                // Build the path to the parent item
+                let mut parent_item_path = ParagraphPath::from_steps(prefix.to_vec());
+                parent_item_path.push_checklist_item(parent_item_indices.to_vec());
 
-            if item_index >= items.len() {
-                return None;
+                // Get the parent item
+                let parent_item = checklist_item_mut(document, &parent_item_path)?;
+
+                if current_index >= parent_item.children.len() {
+                    return None;
+                }
+
+                // Ensure the current nested item has content
+                if parent_item.children[current_index].content.is_empty() {
+                    parent_item.children[current_index]
+                        .content
+                        .push(Span::new_text(""));
+                }
+
+                // Insert a new nested checklist item after the current one
+                let insert_idx = (current_index + 1).min(parent_item.children.len());
+                let checked_state = parent_item.children[current_index].checked;
+                let new_item = ChecklistItem::new(checked_state).with_content(right_spans);
+                parent_item.children.insert(insert_idx, new_item);
+
+                // Build the new path for the inserted item
+                let mut new_indices = parent_item_indices.to_vec();
+                new_indices.push(insert_idx);
+                let mut new_steps = prefix.to_vec();
+                new_steps.push(PathStep::ChecklistItem {
+                    indices: new_indices,
+                });
+                let new_path = ParagraphPath::from_steps(new_steps);
+                let span_path = SpanPath::new(vec![0]);
+                Some(CursorPointer {
+                    paragraph_path: new_path,
+                    span_path,
+                    offset: 0,
+                    segment_kind: SegmentKind::Text,
+                })
+            } else {
+                // For top-level items, use the original logic
+                let item_index = *indices.first()?;
+                let parent_path = ParagraphPath::from_steps(prefix.to_vec());
+                let parent = paragraph_mut(document, &parent_path)?;
+
+                let Paragraph::Checklist { items } = parent else {
+                    return None;
+                };
+
+                if item_index >= items.len() {
+                    return None;
+                }
+
+                // Ensure the current item has content
+                if items[item_index].content.is_empty() {
+                    items[item_index].content.push(Span::new_text(""));
+                }
+
+                // Insert a new checklist item after the current one
+                let insert_idx = (item_index + 1).min(items.len());
+
+                let checked_state = items[item_index].checked;
+                let new_item = ChecklistItem::new(checked_state).with_content(right_spans);
+                items.insert(insert_idx, new_item);
+
+                let mut new_steps = prefix.to_vec();
+                new_steps.push(PathStep::ChecklistItem {
+                    indices: vec![insert_idx],
+                });
+                let new_path = ParagraphPath::from_steps(new_steps);
+                let span_path = SpanPath::new(vec![0]);
+                Some(CursorPointer {
+                    paragraph_path: new_path,
+                    span_path,
+                    offset: 0,
+                    segment_kind: SegmentKind::Text,
+                })
             }
-
-            // Ensure the current item has content
-            if items[item_index].content.is_empty() {
-                items[item_index].content.push(Span::new_text(""));
-            }
-
-            // Insert a new checklist item after the current one
-            let insert_idx = (item_index + 1).min(items.len());
-
-            let checked_state = items[item_index].checked;
-            let new_item = ChecklistItem::new(checked_state).with_content(right_spans);
-            items.insert(insert_idx, new_item);
-
-            let mut new_steps = prefix.to_vec();
-            new_steps.push(PathStep::ChecklistItem {
-                indices: vec![insert_idx],
-            });
-            let new_path = ParagraphPath::from_steps(new_steps);
-            let span_path = SpanPath::new(vec![0]);
-            Some(CursorPointer {
-                paragraph_path: new_path,
-                span_path,
-                offset: 0,
-                segment_kind: SegmentKind::Text,
-            })
         }
         _ => None,
     }
