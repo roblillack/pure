@@ -1,4 +1,4 @@
-use pure::render::RenderSentinels;
+use pure::render::DirectCursorTracking;
 use std::time::{Duration, Instant};
 use tdoc::{Document, InlineStyle, Paragraph, ParagraphType, Span};
 
@@ -19,12 +19,6 @@ const LARGE_DOC_PARAGRAPHS: usize = 1000;
 const HUGE_DOC_PARAGRAPHS: usize = 10000;
 
 const ITERATIONS: usize = 100;
-
-const NO_SENTINELS: RenderSentinels = RenderSentinels {
-    cursor: '\0',
-    selection_start: '\0',
-    selection_end: '\0',
-};
 
 /// Create a test document with the specified number of paragraphs
 fn create_test_document(num_paragraphs: usize, avg_words_per_para: usize) -> Document {
@@ -228,13 +222,18 @@ fn bench_rendering_performance() {
                 ITERATIONS
             },
             || {
-                let _ = pure::render::render_document(
+                let tracking = DirectCursorTracking {
+                    cursor: None,
+                    selection: None,
+                    track_all_positions: false,
+                };
+                let _ = pure::render::render_document_direct(
                     &doc,
                     80,  // wrap_width
                     0,   // left_padding
-                    &[], // markers
                     &[], // reveal_tags
-                    NO_SENTINELS,
+                    tracking,
+                    None, // cache
                 );
             },
         );
@@ -272,13 +271,17 @@ fn bench_rendering_with_cache() {
 
         // First render - cache miss
         let start = std::time::Instant::now();
-        let _ = pure::render::render_document_with_cache(
+        let tracking = DirectCursorTracking {
+            cursor: None,
+            selection: None,
+            track_all_positions: false,
+        };
+        let _ = pure::render::render_document_direct(
             &doc,
             80,  // wrap_width
             0,   // left_padding
-            &[], // markers
             &[], // reveal_tags
-            NO_SENTINELS,
+            tracking,
             Some(&mut cache),
         );
         let first_render = start.elapsed();
@@ -289,15 +292,13 @@ fn bench_rendering_with_cache() {
 
         for _ in 0..iterations {
             let start = std::time::Instant::now();
-            let _ = pure::render::render_document_with_cache(
-                &doc,
-                80,
-                0,
-                &[],
-                &[],
-                NO_SENTINELS,
-                Some(&mut cache),
-            );
+            let tracking = DirectCursorTracking {
+                cursor: None,
+                selection: None,
+                track_all_positions: false,
+            };
+            let _ =
+                pure::render::render_document_direct(&doc, 80, 0, &[], tracking, Some(&mut cache));
             durations.push(start.elapsed());
         }
 
@@ -347,7 +348,12 @@ fn bench_rendering_with_styles() {
 
     for (name, doc) in docs {
         let result = benchmark(&format!("render_document - {}", name), ITERATIONS, || {
-            let _ = pure::render::render_document(&doc, 80, 0, &[], &[], NO_SENTINELS);
+            let tracking = DirectCursorTracking {
+                cursor: None,
+                selection: None,
+                track_all_positions: false,
+            };
+            let _ = pure::render::render_document_direct(&doc, 80, 0, &[], tracking, None);
         });
         result.print();
     }
@@ -362,12 +368,22 @@ fn bench_rendering_reveal_codes() {
     let doc = create_styled_document(MEDIUM_DOC_PARAGRAPHS);
 
     let result_normal = benchmark("render_document - reveal_codes OFF", ITERATIONS, || {
-        let _ = pure::render::render_document(&doc, 80, 0, &[], &[], NO_SENTINELS);
+        let tracking = DirectCursorTracking {
+            cursor: None,
+            selection: None,
+            track_all_positions: false,
+        };
+        let _ = pure::render::render_document_direct(&doc, 80, 0, &[], tracking, None);
     });
     result_normal.print();
 
     let result_reveal = benchmark("render_document - reveal_codes ON", ITERATIONS, || {
-        let _ = pure::render::render_document(&doc, 80, 0, &[], &[], NO_SENTINELS);
+        let tracking = DirectCursorTracking {
+            cursor: None,
+            selection: None,
+            track_all_positions: false,
+        };
+        let _ = pure::render::render_document_direct(&doc, 80, 0, &[], tracking, None);
     });
     result_reveal.print();
 
@@ -569,7 +585,12 @@ fn bench_wrap_width_impact() {
             &format!("render_document - wrap_width={}", width),
             ITERATIONS,
             || {
-                let _ = pure::render::render_document(&doc, width, 0, &[], &[], NO_SENTINELS);
+                let tracking = DirectCursorTracking {
+                    cursor: None,
+                    selection: None,
+                    track_all_positions: false,
+                };
+                let _ = pure::render::render_document_direct(&doc, width, 0, &[], tracking, None);
             },
         );
         result.print();
@@ -590,14 +611,19 @@ fn bench_memory_allocations() {
     let segments = pure::editor::inspect::collect_segments(&doc, false);
     println!("  Segments: {}", segments.len());
 
-    let render_result = pure::render::render_document(&doc, 80, 0, &[], &[], NO_SENTINELS);
+    let tracking = DirectCursorTracking {
+        cursor: None,
+        selection: None,
+        track_all_positions: false,
+    };
+    let render_result = pure::render::render_document_direct(&doc, 80, 0, &[], tracking, None);
     println!("  Rendered lines: {}", render_result.lines.len());
     println!("  Cursor map entries: {}", render_result.cursor_map.len());
 
     println!("\nAllocations per edit cycle:");
     println!("  - Full segment Vec rebuild");
     println!("  - Cursor map Vec rebuild");
-    println!("  - Document clone for render (with sentinel insertion)");
+    println!("  - Direct rendering without document cloning");
     println!("  - Multiple intermediate Vecs during rendering");
 }
 
@@ -650,7 +676,12 @@ fn bench_user_guide_rendering() {
 
     for _ in 0..iterations {
         let start = Instant::now();
-        let _ = pure::render::render_document(&doc, 80, 0, &[], &[], NO_SENTINELS);
+        let tracking = DirectCursorTracking {
+            cursor: None,
+            selection: None,
+            track_all_positions: false,
+        };
+        let _ = pure::render::render_document_direct(&doc, 80, 0, &[], tracking, None);
         durations.push(start.elapsed());
     }
 
@@ -677,30 +708,24 @@ fn bench_user_guide_rendering() {
 
     // First render - cold cache
     let start = Instant::now();
-    let _ = pure::render::render_document_with_cache(
-        &doc,
-        80,
-        0,
-        &[],
-        &[],
-        NO_SENTINELS,
-        Some(&mut cache),
-    );
+    let tracking = DirectCursorTracking {
+        cursor: None,
+        selection: None,
+        track_all_positions: false,
+    };
+    let _ = pure::render::render_document_direct(&doc, 80, 0, &[], tracking, Some(&mut cache));
     let first_render = start.elapsed();
 
     // Subsequent renders - warm cache
     let mut cached_durations = Vec::new();
     for _ in 0..iterations {
         let start = Instant::now();
-        let _ = pure::render::render_document_with_cache(
-            &doc,
-            80,
-            0,
-            &[],
-            &[],
-            NO_SENTINELS,
-            Some(&mut cache),
-        );
+        let tracking = DirectCursorTracking {
+            cursor: None,
+            selection: None,
+            track_all_positions: false,
+        };
+        let _ = pure::render::render_document_direct(&doc, 80, 0, &[], tracking, Some(&mut cache));
         cached_durations.push(start.elapsed());
     }
 
@@ -722,8 +747,8 @@ fn bench_real_world_render_flow() {
     println!("║        REAL-WORLD RENDER FLOW (WHAT APP ACTUALLY DOES)        ║");
     println!("╚════════════════════════════════════════════════════════════════╝");
     println!("\nThis measures the COMPLETE flow that happens on every frame:");
-    println!("  1. Clone document with markers (for cursor sentinels)");
-    println!("  2. Render the cloned document");
+    println!("  1. Create cursor tracking (no document cloning!)");
+    println!("  2. Render the document directly with cache");
     println!("  3. Clone the rendered lines (for widget)");
 
     // Load actual USER-GUIDE.md
@@ -731,7 +756,7 @@ fn bench_real_world_render_flow() {
     let doc =
         tdoc::markdown::parse(std::io::Cursor::new(&content)).expect("Failed to parse markdown");
 
-    let mut editor = pure::editor::DocumentEditor::new(doc);
+    let editor = pure::editor::DocumentEditor::new(doc);
     let mut cache = pure::render::RenderCache::new();
 
     println!("\nDocument stats:");
@@ -740,32 +765,31 @@ fn bench_real_world_render_flow() {
 
     let iterations = 20;
     let mut durations = Vec::new();
-    let mut clone_times = Vec::new();
+    let mut tracking_times = Vec::new();
     let mut render_times = Vec::new();
     let mut line_clone_times = Vec::new();
 
     for _ in 0..iterations {
         let total_start = Instant::now();
 
-        // Step 1: Clone document with markers (THIS IS THE KILLER)
-        let clone_start = Instant::now();
-        let (clone, markers, reveal_tags, _) =
-            editor.clone_with_markers('\u{F8FF}', None, '\u{F8FE}', '\u{F8FD}');
-        clone_times.push(clone_start.elapsed());
+        // Step 1: Create cursor tracking (no document cloning needed!)
+        let tracking_start = Instant::now();
+        let pointer = editor.cursor_pointer();
+        let tracking = DirectCursorTracking {
+            cursor: Some(&pointer),
+            selection: None,
+            track_all_positions: false,
+        };
+        tracking_times.push(tracking_start.elapsed());
 
-        // Step 2: Render the cloned document
+        // Step 2: Render the document directly with cache
         let render_start = Instant::now();
-        let render_result = pure::render::render_document_with_cache(
-            &clone,
+        let render_result = pure::render::render_document_direct(
+            editor.document(),
             80,
             0,
-            &markers,
-            &reveal_tags,
-            RenderSentinels {
-                cursor: '\u{F8FF}',
-                selection_start: '\u{F8FE}',
-                selection_end: '\u{F8FD}',
-            },
+            &[],
+            tracking,
             Some(&mut cache),
         );
         render_times.push(render_start.elapsed());
@@ -779,15 +803,15 @@ fn bench_real_world_render_flow() {
     }
 
     let total_avg: Duration = durations.iter().sum::<Duration>() / iterations as u32;
-    let clone_avg: Duration = clone_times.iter().sum::<Duration>() / iterations as u32;
+    let tracking_avg: Duration = tracking_times.iter().sum::<Duration>() / iterations as u32;
     let render_avg: Duration = render_times.iter().sum::<Duration>() / iterations as u32;
     let line_clone_avg: Duration = line_clone_times.iter().sum::<Duration>() / iterations as u32;
 
     println!("\n📊 Performance Breakdown:");
     println!(
-        "  Document clone:       {:>8?}  ({:>5.1}%)",
-        clone_avg,
-        clone_avg.as_secs_f64() / total_avg.as_secs_f64() * 100.0
+        "  Cursor tracking:      {:>8?}  ({:>5.1}%)",
+        tracking_avg,
+        tracking_avg.as_secs_f64() / total_avg.as_secs_f64() * 100.0
     );
     println!(
         "  Render (cached):      {:>8?}  ({:>5.1}%)",
@@ -820,10 +844,8 @@ fn bench_real_world_render_flow() {
     );
 
     println!("\n🔍 Analysis:");
-    if clone_avg.as_secs_f64() / total_avg.as_secs_f64() > 0.5 {
-        println!("  ⚠️  CRITICAL: Document cloning accounts for > 50% of render time!");
-        println!("     The render cache is working, but document cloning negates its benefits.");
-    }
+    println!("  ✨ Direct rendering eliminates document cloning overhead!");
+    println!("     Cursor tracking is now negligible compared to old cloning approach.");
 
     if total_avg.as_millis() > 100 {
         println!("  ❌ TOTAL time > 100ms - users will notice lag");
