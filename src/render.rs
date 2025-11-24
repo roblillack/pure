@@ -1150,6 +1150,25 @@ impl<'a> DirectRenderer<'a> {
             Style::default(),
             &mut fragments,
         );
+
+        // For empty content, ensure we track at least position 0
+        if item.content.is_empty() {
+            let position_events = self.check_position_match(&base_span_path, 0, SegmentKind::Text);
+            if !position_events.is_empty() {
+                // Create a zero-width fragment with the position events
+                let frag = DirectFragment {
+                    text: String::new(),
+                    style: Style::default(),
+                    kind: FragmentKind::Word,
+                    width: 0,
+                    content_width: 0,
+                    events: position_events,
+                    reveal_kind: None,
+                };
+                fragments.push(FragmentItem::Token(self.convert_direct_fragment(frag)));
+            }
+        }
+
         let fragments = trim_layout_fragments(fragments);
         let lines = self.wrap_fragments_direct(
             &fragments,
@@ -1187,7 +1206,42 @@ impl<'a> DirectRenderer<'a> {
         continuation_prefix: &str,
     ) {
         if entry.is_empty() {
-            self.push_plain_line(first_prefix, false);
+            // Update paragraph path for this empty entry
+            self.current_paragraph_path.push_child(entry_idx);
+
+            // Track cursor positions for empty entry
+            let base_span_path = SpanPath::new(Vec::new());
+            let position_events = self.check_position_match(&base_span_path, 0, SegmentKind::Text);
+
+            if !position_events.is_empty() {
+                // Create fragments with position tracking
+                let mut fragments = Vec::new();
+                let frag = DirectFragment {
+                    text: String::new(),
+                    style: Style::default(),
+                    kind: FragmentKind::Word,
+                    width: 0,
+                    content_width: 0,
+                    events: position_events,
+                    reveal_kind: None,
+                };
+                fragments.push(FragmentItem::Token(self.convert_direct_fragment(frag)));
+
+                let fragments = trim_layout_fragments(fragments);
+                let lines = self.wrap_fragments_direct(
+                    &fragments,
+                    first_prefix,
+                    continuation_prefix,
+                    self.wrap_limit,
+                );
+                self.consume_lines_direct(lines);
+            } else {
+                // No position tracking needed, just render plain line
+                self.push_plain_line(first_prefix, false);
+            }
+
+            // Restore paragraph path
+            self.current_paragraph_path.pop();
             return;
         }
 
@@ -1265,9 +1319,8 @@ impl<'a> DirectRenderer<'a> {
         }
 
         let mut local: Vec<FragmentItem> = Vec::new();
-        if !span.text.is_empty() {
-            self.tokenize_text_direct(&span.text, span_path, style, &mut local);
-        }
+        // Always tokenize, even empty text, to track cursor positions
+        self.tokenize_text_direct(&span.text, span_path, style, &mut local);
 
         let mut prefix: Vec<FragmentItem> = Vec::new();
         let mut middle: Vec<FragmentItem> = Vec::new();

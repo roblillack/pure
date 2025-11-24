@@ -278,10 +278,22 @@ fn collect_paragraph_segments(
         path.pop();
     }
     for (entry_index, entry) in paragraph.entries().iter().enumerate() {
-        for (child_index, child) in entry.iter().enumerate() {
-            path.push_entry(entry_index, child_index);
-            collect_paragraph_segments(child, path, reveal_codes, segments);
+        if entry.is_empty() {
+            // For empty list entries, add a zero-length segment so they can be navigated to
+            path.push_child(entry_index);
+            segments.push(SegmentRef {
+                paragraph_path: path.clone(),
+                span_path: SpanPath::new(Vec::new()),
+                len: 0,
+                kind: SegmentKind::Text,
+            });
             path.pop();
+        } else {
+            for (child_index, child) in entry.iter().enumerate() {
+                path.push_entry(entry_index, child_index);
+                collect_paragraph_segments(child, path, reveal_codes, segments);
+                path.pop();
+            }
         }
     }
     if paragraph.paragraph_type() == ParagraphType::Checklist {
@@ -327,9 +339,21 @@ fn collect_span_segments_from_item(
     reveal_codes: bool,
     segments: &mut Vec<SegmentRef>,
 ) {
+    let segments_before = segments.len();
     for (index, span) in item.content.iter().enumerate() {
         let mut span_path = SpanPath::new(vec![index]);
         collect_span_rec(span, path, &mut span_path, reveal_codes, segments);
+    }
+
+    // If no segments were added (empty content), add a zero-length segment
+    // This ensures empty checklist items can still be navigated to
+    if segments.len() == segments_before {
+        segments.push(SegmentRef {
+            paragraph_path: path.clone(),
+            span_path: SpanPath::new(Vec::new()),
+            len: 0,
+            kind: SegmentKind::Text,
+        });
     }
 }
 

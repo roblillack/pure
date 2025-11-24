@@ -18,16 +18,17 @@ use structure::{
     IndentTargetKind, ParentRelation, append_paragraph_as_checklist_child,
     append_paragraph_to_entry, append_paragraph_to_list, append_paragraph_to_quote,
     break_list_entry_for_non_list_target, checklist_item_mut, convert_paragraph_into_list,
-    determine_parent_scope, ensure_document_initialized, entry_has_multiple_paragraphs,
-    extract_checklist_item_context, extract_entry_context, find_container_indent_target,
-    find_indent_target, find_list_ancestor_path, indent_checklist_item_into_item,
-    indent_list_entry_into_entry, indent_list_entry_into_foreign_list,
-    indent_paragraph_within_entry, insert_paragraph_after_parent, is_list_type,
-    is_single_paragraph_entry, list_entry_append_target, merge_adjacent_lists, paragraph_is_empty,
-    paragraph_mut, parent_paragraph_path, promote_list_entry_to_parent,
-    promote_single_child_into_parent, remove_paragraph_by_path, span_mut, span_mut_from_item,
-    split_paragraph_break, take_checklist_item_at, take_paragraph_at, unindent_checklist_item,
-    update_existing_list_type, update_paragraph_type,
+    determine_parent_scope, ensure_checklist_item_has_content, ensure_document_initialized,
+    ensure_list_entry_has_paragraph, entry_has_multiple_paragraphs, extract_checklist_item_context,
+    extract_entry_context, find_container_indent_target, find_indent_target,
+    find_list_ancestor_path, indent_checklist_item_into_item, indent_list_entry_into_entry,
+    indent_list_entry_into_foreign_list, indent_paragraph_within_entry,
+    insert_paragraph_after_parent, is_list_type, is_single_paragraph_entry,
+    list_entry_append_target, merge_adjacent_lists, paragraph_is_empty, paragraph_mut,
+    parent_paragraph_path, promote_list_entry_to_parent, promote_single_child_into_parent,
+    remove_paragraph_by_path, span_mut, span_mut_from_item, split_paragraph_break,
+    take_checklist_item_at, take_paragraph_at, unindent_checklist_item, update_existing_list_type,
+    update_paragraph_type,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -82,6 +83,29 @@ impl ParagraphPath {
 
     fn steps(&self) -> &[PathStep] {
         &self.steps
+    }
+
+    pub fn numeric_steps(&self) -> Vec<usize> {
+        let mut nums = Vec::new();
+        for step in &self.steps {
+            match step {
+                PathStep::Root(idx) => nums.push(*idx),
+                PathStep::Child(idx) => nums.push(*idx),
+                PathStep::Entry {
+                    entry_index,
+                    paragraph_index,
+                } => {
+                    nums.push(*paragraph_index);
+                    nums.push(*entry_index);
+                }
+                PathStep::ChecklistItem { indices } => {
+                    for idx in indices {
+                        nums.push(*idx);
+                    }
+                }
+            }
+        }
+        nums
     }
 
     fn is_empty(&self) -> bool {
@@ -989,6 +1013,28 @@ impl DocumentEditor {
     }
 
     pub fn insert_char(&mut self, ch: char) -> bool {
+        let pointer = self.cursor.clone();
+
+        // Check if we're trying to insert into an empty structure and populate it if needed
+        // This must be done before prepare_cursor_for_text_insertion because that function
+        // expects a valid text segment to exist
+        let mut needs_rebuild = false;
+
+        // Check for empty list entries
+        if ensure_list_entry_has_paragraph(&mut self.document, &pointer.paragraph_path) {
+            needs_rebuild = true;
+        }
+
+        // Check for empty checklist items
+        if ensure_checklist_item_has_content(&mut self.document, &pointer.paragraph_path) {
+            needs_rebuild = true;
+        }
+
+        if needs_rebuild {
+            // Content was added, so we need to rebuild segments
+            self.rebuild_segments();
+        }
+
         if !self.prepare_cursor_for_text_insertion() {
             return false;
         }
@@ -996,6 +1042,7 @@ impl DocumentEditor {
         if !pointer.is_valid() {
             return false;
         }
+
         if insert_char_at(&mut self.document, &pointer, self.cursor.offset, ch) {
             self.cursor.offset += 1;
             // Incremental update: only rebuild segments for the modified paragraph
