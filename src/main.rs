@@ -781,7 +781,7 @@ impl App {
         let selection = self.current_selection();
         let render = self
             .display
-            .render_document(width, wrap_width, left_padding, selection);
+            .render_document(wrap_width, left_padding, selection);
         let render_time = render_start.elapsed();
         if render_time.as_millis() > 10 {
             // eprintln!("  render_document: {:?}", render_time);
