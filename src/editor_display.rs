@@ -921,6 +921,71 @@ mod tests {
         }
     }
 
+    impl EditorDisplay {
+        fn insert_text(&mut self, txt: &str) -> bool {
+            for i in txt.chars() {
+                if !self.insert_char(i) {
+                    return false;
+                }
+            }
+
+            true
+        }
+
+        fn get_pos(&mut self) -> Option<(usize, u16)> {
+            let _ = self.render_document(80, 0, None);
+
+            match self.last_cursor_visual() {
+                Some(v) => Some((v.line, v.column)),
+                None => None,
+            }
+        }
+
+        fn get_txt(&mut self) -> String {
+            let r = self.render_document(80, 0, None);
+            let mut s = String::new();
+            for l in r.lines {
+                for i in l.spans {
+                    s.push_str(&i.content);
+                }
+                s.push('\n');
+            }
+            s
+        }
+    }
+
+    #[test]
+    fn test_adding_two_checklist_items() {
+        let doc = ftml! { p {} };
+        let mut display = EditorDisplay::new(DocumentEditor::new(doc));
+        let _ = display.render_document(80, 0, None);
+
+        assert!(
+            display.set_paragraph_type(tdoc::ParagraphType::Checklist),
+            "Unable to set paragraph type"
+        );
+        assert!(
+            display.insert_text("Test 123"),
+            "unable to insert text in 1st paragraph"
+        );
+        assert_eq!(display.get_txt(), "[ ] Test 123\n");
+        assert_eq!(display.get_pos(), Some((0, 12)));
+
+        assert!(
+            display.insert_paragraph_break(),
+            "unable to insert paragraph break"
+        );
+        assert_eq!(display.get_txt(), "[ ] Test 123\n\n[ ] \n");
+        assert_eq!(display.get_pos(), Some((2, 4)));
+
+        assert!(
+            display.insert_text("Test ABC"),
+            "unable to insert text in 2nd paragraph"
+        );
+        assert_eq!(display.get_txt(), "[ ] Test 123\n\n[ ] Test ABC\n");
+        assert_eq!(display.get_pos(), Some((2, 12)));
+    }
+
     #[test]
     fn move_down_from_h2_to_checklist() {
         use crate::editor::{ParagraphPath, SegmentKind, SpanPath};
