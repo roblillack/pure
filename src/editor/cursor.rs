@@ -532,27 +532,23 @@ impl DocumentEditor {
 
     pub(crate) fn normalize_cursor_after_backward_move(&mut self, crossed_boundary: bool) {
         let pending_boundary = crossed_boundary;
-        loop {
-            let Some(segment) = self.segments.get(self.cursor_segment) else {
-                return;
-            };
-            match segment.kind {
-                SegmentKind::RevealStart(_) | SegmentKind::RevealEnd(_) => {
-                    if self.cursor.offset > 0 {
-                        self.cursor.offset = 0;
-                    }
-                    return;
+        let Some(segment) = self.segments.get(self.cursor_segment) else {
+            return;
+        };
+        match segment.kind {
+            SegmentKind::RevealStart(_) | SegmentKind::RevealEnd(_) => {
+                if self.cursor.offset > 0 {
+                    self.cursor.offset = 0;
                 }
-                SegmentKind::Text => {
-                    if pending_boundary {
-                        if segment.len == 0 {
-                            return;
-                        }
-                        if self.cursor.offset >= segment.len {
-                            self.cursor.offset = segment.len.saturating_sub(1);
-                        }
+            }
+            SegmentKind::Text => {
+                if pending_boundary {
+                    if segment.len == 0 {
+                        return;
                     }
-                    return;
+                    if self.cursor.offset >= segment.len {
+                        self.cursor.offset = segment.len.saturating_sub(1);
+                    }
                 }
             }
         }
@@ -808,10 +804,11 @@ impl DocumentEditor {
             self.document
                 .paragraphs
                 .push(Paragraph::new_text().with_content(vec![Span::new_text("")]));
-        } else if let Some(first) = self.document.paragraphs.get_mut(0) {
-            if first.paragraph_type().is_leaf() && first.content().is_empty() {
-                first.content_mut().push(Span::new_text(""));
-            }
+        } else if let Some(first) = self.document.paragraphs.get_mut(0)
+            && first.paragraph_type().is_leaf()
+            && first.content().is_empty()
+        {
+            first.content_mut().push(Span::new_text(""));
         }
     }
 

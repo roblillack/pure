@@ -359,13 +359,12 @@ impl ContextMenuState {
         modifiers: KeyModifiers,
     ) -> (bool, Option<MenuAction>) {
         for (idx, entry) in self.entries.iter().enumerate() {
-            if let MenuEntry::Item(item) = entry {
-                if let Some(shortcut) = item.shortcut {
-                    if shortcut.matches(code, modifiers) {
-                        self.selected_index = idx;
-                        return (true, item.action);
-                    }
-                }
+            if let MenuEntry::Item(item) = entry
+                && let Some(shortcut) = item.shortcut
+                && shortcut.matches(code, modifiers)
+            {
+                self.selected_index = idx;
+                return (true, item.action);
             }
         }
         (false, None)
@@ -668,9 +667,7 @@ impl App {
     }
 
     fn current_selection(&mut self) -> Option<(CursorPointer, CursorPointer)> {
-        let Some(anchor) = self.selection_anchor.clone() else {
-            return None;
-        };
+        let anchor = self.selection_anchor.clone()?;
         let focus = self.display.cursor_pointer();
         match self.display.compare_pointers(&anchor, &focus) {
             Some(Ordering::Less) => Some((anchor, focus)),
@@ -746,10 +743,10 @@ impl App {
             target = max_scroll;
         }
         self.scroll_top = target;
-        if restore.ensure_cursor_visible {
-            if let Some(cursor) = &render.cursor {
-                self.scroll_top = self.scroll_top_for_cursor(cursor.line, viewport, max_scroll);
-            }
+        if restore.ensure_cursor_visible
+            && let Some(cursor) = &render.cursor
+        {
+            self.scroll_top = self.scroll_top_for_cursor(cursor.line, viewport, max_scroll);
         }
     }
 
@@ -804,15 +801,14 @@ impl App {
         let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight);
         frame.render_stateful_widget(scrollbar, scrollbar_area, &mut scrollbar_state);
 
-        if let Some(cursor) = cursor_visual {
-            if cursor.line >= self.scroll_top
-                && cursor.line < self.scroll_top + viewport_height
-                && text_area.width > 0
-            {
-                let cursor_y = text_area.y + (cursor.line - self.scroll_top) as u16;
-                let cursor_x = text_area.x + cursor.column.min(text_area.width - 1);
-                frame.set_cursor_position(Position::new(cursor_x, cursor_y));
-            }
+        if let Some(cursor) = cursor_visual
+            && cursor.line >= self.scroll_top
+            && cursor.line < self.scroll_top + viewport_height
+            && text_area.width > 0
+        {
+            let cursor_y = text_area.y + (cursor.line - self.scroll_top) as u16;
+            let cursor_x = text_area.x + cursor.column.min(text_area.width - 1);
+            frame.set_cursor_position(Position::new(cursor_x, cursor_y));
         }
 
         let status_text = self.status_line(render.total_lines);
@@ -996,10 +992,9 @@ impl App {
                     .context_menu
                     .as_ref()
                     .and_then(|menu| menu.current_action())
+                    && self.execute_menu_action(action)
                 {
-                    if self.execute_menu_action(action) {
-                        self.close_context_menu();
-                    }
+                    self.close_context_menu();
                 }
                 true
             }
@@ -1011,10 +1006,10 @@ impl App {
                 if let Some(menu) = self.context_menu.as_mut() {
                     let (handled, action) = menu.shortcut_action(code, modifiers);
                     if handled {
-                        if let Some(action) = action {
-                            if self.execute_menu_action(action) {
-                                self.close_context_menu();
-                            }
+                        if let Some(action) = action
+                            && self.execute_menu_action(action)
+                        {
+                            self.close_context_menu();
                         }
                         return true;
                     }
@@ -1087,10 +1082,10 @@ impl App {
     }
 
     fn prune_status_message(&mut self) {
-        if let Some((_, instant)) = &self.status_message {
-            if instant.elapsed() > STATUS_TIMEOUT {
-                self.status_message = None;
-            }
+        if let Some((_, instant)) = &self.status_message
+            && instant.elapsed() > STATUS_TIMEOUT
+        {
+            self.status_message = None;
         }
     }
 
@@ -1496,11 +1491,9 @@ impl App {
                                 self.mark_dirty();
                                 self.display.set_preferred_column(None);
                             }
-                        } else {
-                            if self.insert_paragraph_break() {
-                                self.mark_dirty();
-                                self.display.set_preferred_column(None);
-                            }
+                        } else if self.insert_paragraph_break() {
+                            self.mark_dirty();
+                            self.display.set_preferred_column(None);
                         }
                     }
                     (KeyCode::Tab, _) => {
@@ -1613,10 +1606,10 @@ impl App {
             "[?,?]".to_string()
         };
         let mut parts = vec![position_text];
-        if let Some(labels) = self.display.cursor_breadcrumbs() {
-            if !labels.is_empty() {
-                parts.push(labels.join(" > "));
-            }
+        if let Some(labels) = self.display.cursor_breadcrumbs()
+            && !labels.is_empty()
+        {
+            parts.push(labels.join(" > "));
         }
         parts.join(" ")
     }

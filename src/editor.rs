@@ -31,7 +31,7 @@ use structure::{
     update_paragraph_type,
 };
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub struct ParagraphPath {
     steps: Vec<PathStep>,
 }
@@ -85,6 +85,7 @@ impl ParagraphPath {
         &self.steps
     }
 
+    #[allow(dead_code)]
     pub fn numeric_steps(&self) -> Vec<usize> {
         let mut nums = Vec::new();
         for step in &self.steps {
@@ -121,13 +122,7 @@ impl ParagraphPath {
     }
 }
 
-impl Default for ParagraphPath {
-    fn default() -> Self {
-        Self { steps: Vec::new() }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub struct SpanPath {
     pub indices: Vec<usize>,
 }
@@ -151,14 +146,6 @@ impl SpanPath {
 
     pub fn is_empty(&self) -> bool {
         self.indices.is_empty()
-    }
-}
-
-impl Default for SpanPath {
-    fn default() -> Self {
-        Self {
-            indices: Vec::new(),
-        }
     }
 }
 
@@ -216,18 +203,20 @@ impl SegmentRef {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-struct PointerKey {
-    segment_index: usize,
-    offset: usize,
+pub(crate) struct PointerKey {
+    pub(crate) segment_index: usize,
+    pub(crate) offset: usize,
 }
 
 #[derive(Clone)]
+#[allow(dead_code)]
 pub struct MarkerRef {
     pub id: usize,
     pub pointer: CursorPointer,
 }
 
 #[derive(Clone)]
+#[allow(dead_code)]
 pub struct RevealTagRef {
     pub id: usize,
     pub style: InlineStyle,
@@ -372,6 +361,7 @@ impl DocumentEditor {
                     let len = original_chars.len();
                     let mut rebuilt = String::new();
 
+                    #[allow(clippy::needless_range_loop)]
                     for offset in 0..=len {
                         let id = markers.len();
                         rebuilt.push_str(&format!("\x1b]{}{}\x1b\\", MARKER_POINTER_PREFIX, id));
@@ -586,10 +576,10 @@ impl DocumentEditor {
 
     pub fn indent_current_paragraph(&mut self) -> bool {
         let mut target = find_indent_target(&self.document, &self.cursor.paragraph_path);
-        if target.is_none() {
-            if let Some(ctx) = extract_entry_context(&self.cursor.paragraph_path) {
-                target = find_container_indent_target(&self.document, &ctx.list_path);
-            }
+        if target.is_none()
+            && let Some(ctx) = extract_entry_context(&self.cursor.paragraph_path)
+        {
+            target = find_container_indent_target(&self.document, &ctx.list_path);
         }
         let Some(target) = target else {
             return false;
@@ -607,10 +597,10 @@ impl DocumentEditor {
 
             if let Some(new_pointer) = handled {
                 self.rebuild_segments();
-                if !self.move_to_pointer(&new_pointer) {
-                    if !self.fallback_move_to_text(&new_pointer, false) {
-                        self.ensure_cursor_selectable();
-                    }
+                if !self.move_to_pointer(&new_pointer)
+                    && !self.fallback_move_to_text(&new_pointer, false)
+                {
+                    self.ensure_cursor_selectable();
                 }
                 return true;
             }
@@ -621,10 +611,10 @@ impl DocumentEditor {
                 indent_checklist_item_into_item(&mut self.document, &pointer, &target.path)
             {
                 self.rebuild_segments();
-                if !self.move_to_pointer(&new_pointer) {
-                    if !self.fallback_move_to_text(&new_pointer, false) {
-                        self.ensure_cursor_selectable();
-                    }
+                if !self.move_to_pointer(&new_pointer)
+                    && !self.fallback_move_to_text(&new_pointer, false)
+                {
+                    self.ensure_cursor_selectable();
                 }
                 return true;
             }
@@ -641,33 +631,31 @@ impl DocumentEditor {
             let mut new_pointer = pointer;
             new_pointer.paragraph_path = paragraph_path;
             self.rebuild_segments();
-            if !self.move_to_pointer(&new_pointer) {
-                if !self.fallback_move_to_text(&new_pointer, false) {
-                    self.ensure_cursor_selectable();
-                }
+            if !self.move_to_pointer(&new_pointer)
+                && !self.fallback_move_to_text(&new_pointer, false)
+            {
+                self.ensure_cursor_selectable();
             }
             return true;
         }
 
-        if matches!(target.kind, IndentTargetKind::List) {
-            if let Some(source_ctx) = extract_entry_context(&pointer.paragraph_path) {
-                if !entry_has_multiple_paragraphs(&self.document, &source_ctx) {
-                    if let Some(new_pointer) = indent_list_entry_into_foreign_list(
-                        &mut self.document,
-                        &pointer,
-                        &source_ctx,
-                        &target.path,
-                    ) {
-                        self.rebuild_segments();
-                        if !self.move_to_pointer(&new_pointer) {
-                            if !self.fallback_move_to_text(&new_pointer, false) {
-                                self.ensure_cursor_selectable();
-                            }
-                        }
-                        return true;
-                    }
-                }
+        if matches!(target.kind, IndentTargetKind::List)
+            && let Some(source_ctx) = extract_entry_context(&pointer.paragraph_path)
+            && !entry_has_multiple_paragraphs(&self.document, &source_ctx)
+            && let Some(new_pointer) = indent_list_entry_into_foreign_list(
+                &mut self.document,
+                &pointer,
+                &source_ctx,
+                &target.path,
+            )
+        {
+            self.rebuild_segments();
+            if !self.move_to_pointer(&new_pointer)
+                && !self.fallback_move_to_text(&new_pointer, false)
+            {
+                self.ensure_cursor_selectable();
             }
+            return true;
         }
 
         let Some(paragraph) = take_paragraph_at(&mut self.document, &pointer.paragraph_path) else {
@@ -708,10 +696,8 @@ impl DocumentEditor {
         let mut new_pointer = pointer;
         new_pointer.paragraph_path = paragraph_path;
         self.rebuild_segments();
-        if !self.move_to_pointer(&new_pointer) {
-            if !self.fallback_move_to_text(&new_pointer, false) {
-                self.ensure_cursor_selectable();
-            }
+        if !self.move_to_pointer(&new_pointer) && !self.fallback_move_to_text(&new_pointer, false) {
+            self.ensure_cursor_selectable();
         }
         true
     }
@@ -724,10 +710,10 @@ impl DocumentEditor {
 
         if let Some(new_pointer) = unindent_checklist_item(&mut self.document, &pointer) {
             self.rebuild_segments();
-            if !self.move_to_pointer(&new_pointer) {
-                if !self.fallback_move_to_text(&new_pointer, false) {
-                    self.ensure_cursor_selectable();
-                }
+            if !self.move_to_pointer(&new_pointer)
+                && !self.fallback_move_to_text(&new_pointer, false)
+            {
+                self.ensure_cursor_selectable();
             }
             return true;
         }
@@ -752,10 +738,8 @@ impl DocumentEditor {
         let mut new_pointer = pointer;
         new_pointer.paragraph_path = paragraph_path;
         self.rebuild_segments();
-        if !self.move_to_pointer(&new_pointer) {
-            if !self.fallback_move_to_text(&new_pointer, false) {
-                self.ensure_cursor_selectable();
-            }
+        if !self.move_to_pointer(&new_pointer) && !self.fallback_move_to_text(&new_pointer, false) {
+            self.ensure_cursor_selectable();
         }
         true
     }
@@ -792,28 +776,24 @@ impl DocumentEditor {
             new_pointer.paragraph_path = paragraph_path;
             new_pointer.offset = pointer.offset;
             self.rebuild_segments();
-            if !self.move_to_pointer(&new_pointer) {
-                if !self.fallback_move_to_text(&new_pointer, false) {
-                    self.ensure_cursor_selectable();
-                }
+            if !self.move_to_pointer(&new_pointer)
+                && !self.fallback_move_to_text(&new_pointer, false)
+            {
+                self.ensure_cursor_selectable();
             }
             true
         } else {
-            if let Some(ctx) = extract_entry_context(&pointer.paragraph_path) {
-                if let Some(new_pointer) = promote_list_entry_to_parent(
-                    &mut self.document,
-                    &pointer,
-                    &ctx,
-                    paragraph_index,
-                ) {
-                    self.rebuild_segments();
-                    if !self.move_to_pointer(&new_pointer) {
-                        if !self.fallback_move_to_text(&new_pointer, false) {
-                            self.ensure_cursor_selectable();
-                        }
-                    }
-                    return true;
+            if let Some(ctx) = extract_entry_context(&pointer.paragraph_path)
+                && let Some(new_pointer) =
+                    promote_list_entry_to_parent(&mut self.document, pointer, &ctx, paragraph_index)
+            {
+                self.rebuild_segments();
+                if !self.move_to_pointer(&new_pointer)
+                    && !self.fallback_move_to_text(&new_pointer, false)
+                {
+                    self.ensure_cursor_selectable();
                 }
+                return true;
             }
             let Some(mut new_pointer) = break_list_entry_for_non_list_target(
                 &mut self.document,
@@ -824,10 +804,10 @@ impl DocumentEditor {
             };
             new_pointer.offset = pointer.offset;
             self.rebuild_segments();
-            if !self.move_to_pointer(&new_pointer) {
-                if !self.fallback_move_to_text(&new_pointer, false) {
-                    self.ensure_cursor_selectable();
-                }
+            if !self.move_to_pointer(&new_pointer)
+                && !self.fallback_move_to_text(&new_pointer, false)
+            {
+                self.ensure_cursor_selectable();
             }
             true
         }
@@ -852,25 +832,25 @@ impl DocumentEditor {
         let treat_as_singular_entry =
             is_single_paragraph_entry(&self.document, &current_pointer.paragraph_path);
 
-        if !in_checklist_context {
-            if let Some(scope) = determine_parent_scope(&self.document, &operation_path) {
-                operation_path = scope.parent_path.clone();
-                let needs_promotion = match scope.relation {
-                    ParentRelation::Child(_) => true,
-                    ParentRelation::Entry { .. } => !is_list_type(target),
-                };
+        if !in_checklist_context
+            && let Some(scope) = determine_parent_scope(&self.document, &operation_path)
+        {
+            operation_path = scope.parent_path.clone();
+            let needs_promotion = match scope.relation {
+                ParentRelation::Child(_) => true,
+                ParentRelation::Entry { .. } => !is_list_type(target),
+            };
 
-                if needs_promotion {
-                    if !promote_single_child_into_parent(&mut self.document, &scope) {
-                        return false;
-                    }
-                    pointer_hint = Some(CursorPointer {
-                        paragraph_path: operation_path.clone(),
-                        span_path: current_pointer.span_path.clone(),
-                        offset: current_pointer.offset,
-                        segment_kind: current_pointer.segment_kind,
-                    });
+            if needs_promotion {
+                if !promote_single_child_into_parent(&mut self.document, &scope) {
+                    return false;
                 }
+                pointer_hint = Some(CursorPointer {
+                    paragraph_path: operation_path.clone(),
+                    span_path: current_pointer.span_path.clone(),
+                    offset: current_pointer.offset,
+                    segment_kind: current_pointer.segment_kind,
+                });
             }
         }
 
@@ -888,14 +868,14 @@ impl DocumentEditor {
             }
         }
 
-        if !is_list_type(target) && treat_as_singular_entry {
-            if let Some(pointer) =
+        if !is_list_type(target)
+            && treat_as_singular_entry
+            && let Some(pointer) =
                 break_list_entry_for_non_list_target(&mut self.document, &operation_path, target)
-            {
-                operation_path = pointer.paragraph_path.clone();
-                pointer_hint = Some(pointer);
-                handled_directly = true;
-            }
+        {
+            operation_path = pointer.paragraph_path.clone();
+            pointer_hint = Some(pointer);
+            handled_directly = true;
         }
 
         if !handled_directly && is_list_type(target) {
@@ -975,10 +955,8 @@ impl DocumentEditor {
             current_pointer
         };
 
-        if !self.move_to_pointer(&desired) {
-            if !self.fallback_move_to_text(&desired, false) {
-                self.ensure_cursor_selectable();
-            }
+        if !self.move_to_pointer(&desired) && !self.fallback_move_to_text(&desired, false) {
+            self.ensure_cursor_selectable();
         }
 
         true
@@ -1061,13 +1039,12 @@ impl DocumentEditor {
             SegmentKind::Text => self.cursor.is_valid(),
             SegmentKind::RevealStart(_) => {
                 if let Some(idx) = self.find_previous_text_segment_in_paragraph(self.cursor_segment)
+                    && let Some(segment) = self.segments.get(idx).cloned()
                 {
-                    if let Some(segment) = self.segments.get(idx).cloned() {
-                        self.cursor_segment = idx;
-                        self.cursor.update_from_segment(&segment);
-                        self.cursor.offset = segment.len;
-                        return self.cursor.is_valid();
-                    }
+                    self.cursor_segment = idx;
+                    self.cursor.update_from_segment(&segment);
+                    self.cursor.offset = segment.len;
+                    return self.cursor.is_valid();
                 }
                 let pointer = self.cursor.clone();
                 if !self.fallback_move_to_text(&pointer, false) {
@@ -1093,10 +1070,10 @@ impl DocumentEditor {
         if self.segments.is_empty() {
             return false;
         }
-        if self.current_paragraph_is_empty() {
-            if self.remove_current_paragraph(RemovalDirection::Backward) {
-                return true;
-            }
+        if self.current_paragraph_is_empty()
+            && self.remove_current_paragraph(RemovalDirection::Backward)
+        {
+            return true;
         }
         if self.cursor.offset == 0 {
             if self.try_merge_checklist_item_with_previous_paragraph() {
@@ -1113,19 +1090,19 @@ impl DocumentEditor {
         } else {
             self.cursor.offset -= 1;
         }
-        if let Some(segment) = self.segments.get(self.cursor_segment) {
-            if segment.kind != SegmentKind::Text {
-                if let Some(target_pointer) = self.remove_reveal_tag_segment(self.cursor_segment) {
-                    self.rebuild_segments();
-                    if !self.move_to_pointer(&target_pointer) {
-                        if !self.fallback_move_to_text(&target_pointer, false) {
-                            self.ensure_cursor_selectable();
-                        }
-                    }
-                    return true;
-                } else {
-                    return false;
+        if let Some(segment) = self.segments.get(self.cursor_segment)
+            && segment.kind != SegmentKind::Text
+        {
+            if let Some(target_pointer) = self.remove_reveal_tag_segment(self.cursor_segment) {
+                self.rebuild_segments();
+                if !self.move_to_pointer(&target_pointer)
+                    && !self.fallback_move_to_text(&target_pointer, false)
+                {
+                    self.ensure_cursor_selectable();
                 }
+                return true;
+            } else {
+                return false;
             }
         }
         let pointer = self.cursor.clone();
@@ -1243,12 +1220,11 @@ impl DocumentEditor {
         // If we removed the only item in a top-level checklist, remove the checklist paragraph itself.
         if ctx.indices.len() == 1 {
             let mut remove_checklist = false;
-            if let Some(paragraph) = paragraph_mut(&mut self.document, &ctx.checklist_path) {
-                if let Paragraph::Checklist { items } = paragraph {
-                    if items.is_empty() {
-                        remove_checklist = true;
-                    }
-                }
+            if let Some(paragraph) = paragraph_mut(&mut self.document, &ctx.checklist_path)
+                && let Paragraph::Checklist { items } = paragraph
+                && items.is_empty()
+            {
+                remove_checklist = true;
             }
             if remove_checklist {
                 remove_paragraph_by_path(&mut self.document, &ctx.checklist_path);
@@ -1258,7 +1234,7 @@ impl DocumentEditor {
         let ChecklistItem {
             checked: _,
             mut content,
-            mut children,
+            children,
         } = item;
 
         match target_kind {
@@ -1274,7 +1250,7 @@ impl DocumentEditor {
                     spans.push(Span::new_text(""));
                 }
                 if !content.is_empty() {
-                    spans.extend(content.drain(..));
+                    spans.append(&mut content);
                 }
                 prune_and_merge_spans(spans);
 
@@ -1295,7 +1271,7 @@ impl DocumentEditor {
                     target_item.content.push(Span::new_text(""));
                 }
                 if !content.is_empty() {
-                    target_item.content.extend(content.drain(..));
+                    target_item.content.append(&mut content);
                 }
                 prune_and_merge_spans(&mut target_item.content);
 
@@ -1310,10 +1286,8 @@ impl DocumentEditor {
         if let Some(pointer) =
             self.pointer_at_paragraph_char_offset(&target_path, target_char_count)
         {
-            if !self.move_to_pointer(&pointer) {
-                if !self.fallback_move_to_text(&pointer, false) {
-                    self.ensure_cursor_selectable();
-                }
+            if !self.move_to_pointer(&pointer) && !self.fallback_move_to_text(&pointer, false) {
+                self.ensure_cursor_selectable();
             }
         } else {
             self.ensure_cursor_selectable();
@@ -1347,20 +1321,20 @@ impl DocumentEditor {
         if self.segments.is_empty() {
             return false;
         }
-        if self.current_paragraph_is_empty() {
-            if self.remove_current_paragraph(RemovalDirection::Forward) {
-                return true;
-            }
+        if self.current_paragraph_is_empty()
+            && self.remove_current_paragraph(RemovalDirection::Forward)
+        {
+            return true;
         }
         let current_len = self.current_segment_len();
         if self.cursor.offset < current_len {
             if self.cursor.segment_kind != SegmentKind::Text {
                 if let Some(target_pointer) = self.remove_reveal_tag_segment(self.cursor_segment) {
                     self.rebuild_segments();
-                    if !self.move_to_pointer(&target_pointer) {
-                        if !self.fallback_move_to_text(&target_pointer, false) {
-                            self.ensure_cursor_selectable();
-                        }
+                    if !self.move_to_pointer(&target_pointer)
+                        && !self.fallback_move_to_text(&target_pointer, false)
+                    {
+                        self.ensure_cursor_selectable();
                     }
                     return true;
                 } else {
@@ -1384,10 +1358,10 @@ impl DocumentEditor {
         if next_segment.kind != SegmentKind::Text {
             if let Some(target_pointer) = self.remove_reveal_tag_segment(self.cursor_segment + 1) {
                 self.rebuild_segments();
-                if !self.move_to_pointer(&target_pointer) {
-                    if !self.fallback_move_to_text(&target_pointer, false) {
-                        self.ensure_cursor_selectable();
-                    }
+                if !self.move_to_pointer(&target_pointer)
+                    && !self.fallback_move_to_text(&target_pointer, false)
+                {
+                    self.ensure_cursor_selectable();
                 }
                 return true;
             } else {
@@ -1524,12 +1498,8 @@ impl DocumentEditor {
             SegmentKind::RevealStart(style) | SegmentKind::RevealEnd(style) => style,
             SegmentKind::Text => return None,
         };
-        let Some(paragraph) = paragraph_mut(&mut self.document, &segment.paragraph_path) else {
-            return None;
-        };
-        let Some(span) = span_mut(paragraph, &segment.span_path) else {
-            return None;
-        };
+        let paragraph = paragraph_mut(&mut self.document, &segment.paragraph_path)?;
+        let span = span_mut(paragraph, &segment.span_path)?;
         if span.style != style {
             // Style mismatch indicates the structure changed; treat as no-op.
             return None;
@@ -1640,10 +1610,10 @@ impl DocumentEditor {
             return true;
         }
 
-        if let Some(pointer) = target_pointer {
-            if self.move_to_pointer(&pointer) {
-                return true;
-            }
+        if let Some(pointer) = target_pointer
+            && self.move_to_pointer(&pointer)
+        {
+            return true;
         }
 
         if let Some(segment) = self.segments.first().cloned() {

@@ -39,6 +39,7 @@ impl EditorDisplay {
     }
 
     /// Get the current visual positions
+    #[allow(dead_code)]
     pub fn visual_positions(&self) -> &[CursorDisplay] {
         &self.visual_positions
     }
@@ -49,6 +50,7 @@ impl EditorDisplay {
     }
 
     /// Get the preferred column
+    #[allow(dead_code)]
     pub fn preferred_column(&self) -> Option<u16> {
         self.preferred_column
     }
@@ -84,6 +86,7 @@ impl EditorDisplay {
     }
 
     /// Get last text area
+    #[allow(dead_code)]
     pub fn last_text_area(&self) -> Rect {
         self.last_text_area
     }
@@ -298,11 +301,8 @@ impl EditorDisplay {
             });
 
         if let Some(target) = destination {
-            if self.editor.move_to_pointer(&target.pointer) {
-                self.last_cursor_visual = Some(target.position);
-            } else {
-                self.last_cursor_visual = Some(target.position);
-            }
+            self.editor.move_to_pointer(&target.pointer);
+            self.last_cursor_visual = Some(target.position);
         } else {
             self.editor.move_to_segment_start();
         }
@@ -344,11 +344,8 @@ impl EditorDisplay {
             });
 
         if let Some(target) = destination {
-            if self.editor.move_to_pointer(&target.pointer) {
-                self.last_cursor_visual = Some(target.position);
-            } else {
-                self.last_cursor_visual = Some(target.position);
-            }
+            self.editor.move_to_pointer(&target.pointer);
+            self.last_cursor_visual = Some(target.position);
         } else {
             self.editor.move_to_segment_end();
         }
@@ -425,10 +422,10 @@ impl EditorDisplay {
             .unwrap_or(0);
         let mut distance = 1usize;
         while line.checked_sub(distance).is_some() || line + distance <= max_line {
-            if let Some(prev) = line.checked_sub(distance) {
-                if let Some(hit) = self.closest_pointer_on_line(prev, column) {
-                    return Some(hit);
-                }
+            if let Some(prev) = line.checked_sub(distance)
+                && let Some(hit) = self.closest_pointer_on_line(prev, column)
+            {
+                return Some(hit);
             }
             let next = line + distance;
             if next <= max_line {
@@ -540,13 +537,13 @@ pub struct CursorDisplay {
 }
 
 fn column_distance(a: u16, b: u16) -> u16 {
-    if a >= b { a - b } else { b - a }
+    a.abs_diff(b)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::editor::{DocumentEditor, SegmentKind};
+    use crate::editor::DocumentEditor;
     use tdoc::{Document, Paragraph, ftml};
 
     fn create_test_display() -> EditorDisplay {
@@ -935,10 +932,7 @@ mod tests {
         fn get_pos(&mut self) -> Option<(usize, u16)> {
             let _ = self.render_document(80, 0, None);
 
-            match self.last_cursor_visual() {
-                Some(v) => Some((v.line, v.column)),
-                None => None,
-            }
+            self.last_cursor_visual().map(|v| (v.line, v.column))
         }
 
         fn get_txt(&mut self) -> String {
