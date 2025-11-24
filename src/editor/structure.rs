@@ -2392,7 +2392,25 @@ pub(crate) fn unindent_checklist_item(
         return None;
     }
 
-    let item = take_checklist_item_at(document, &ctx)?;
+    // Take the item to be unnested
+    let mut item = take_checklist_item_at(document, &ctx)?;
+
+    // After taking the item, collect all trailing siblings and move them as children
+    // Note: After taking the item, the indices of siblings shift down, so the item
+    // that was at current_index + 1 is now at current_index
+    let parent_indices = &ctx.indices[..ctx.indices.len().saturating_sub(1)];
+    let current_index = *ctx.indices.last()?;
+    let container = checklist_items_container_mut(document, &ctx.checklist_path, parent_indices)?;
+
+    // Collect all items from current_index onwards (these were the trailing siblings)
+    let mut trailing_siblings = vec![];
+    while current_index < container.len() {
+        trailing_siblings.push(container.remove(current_index));
+    }
+
+    // Move the trailing siblings to become children of the unnested item
+    item.children.extend(trailing_siblings);
+
     let new_path = insert_checklist_item_after_parent(document, &ctx, item)?;
 
     Some(CursorPointer {
