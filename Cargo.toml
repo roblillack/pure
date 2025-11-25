@@ -7,7 +7,7 @@ edition = "2024"
 anyhow = "1.0"
 crossterm = "0.29.0"
 ratatui = "0.29"
-tdoc = { git = "https://github.com/roblillack/tdoc.git", branch = "refactor-document-structure-to-use-enum-paragraphs" }
+tdoc = "0.8.0"
 unicode-width = "0.2.0"
 
 [[bench]]
