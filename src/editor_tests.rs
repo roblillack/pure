@@ -1488,3 +1488,84 @@ fn cursor_valid_after_nesting_checklist_item() {
         "last_cursor_visual should be Some after rendering, not None (which shows as [?,?])"
     );
 }
+
+#[test]
+fn cursor_can_move_into_quote_blocks() {
+    use crate::editor_display::EditorDisplay;
+
+    let doc = ftml! {
+        p { "Before quote" }
+        quote {
+            p { "First line in quote" }
+            p { "Second line in quote" }
+        }
+        p { "After quote" }
+    };
+    let mut display = EditorDisplay::new(DocumentEditor::new(doc));
+
+    // Render to populate visual_positions
+    let _ = display.render_document(80, 0, None);
+
+    // Start at first paragraph, should be at [0]
+    let pos0 = display.cursor_pointer();
+    assert_eq!(
+        pos0.paragraph_path.numeric_steps(),
+        vec![0],
+        "Should start at first paragraph"
+    );
+
+    // Move down - should enter the quote's first child at [1, 0]
+    display.move_cursor_vertical(1);
+    let pos1 = display.cursor_pointer();
+    assert_eq!(
+        pos1.paragraph_path.numeric_steps(),
+        vec![1, 0],
+        "Should be at first child of quote block"
+    );
+
+    // Move down again - should go to quote's second child at [1, 1]
+    display.move_cursor_vertical(1);
+    let pos2 = display.cursor_pointer();
+    assert_eq!(
+        pos2.paragraph_path.numeric_steps(),
+        vec![1, 1],
+        "Should be at second child of quote block"
+    );
+
+    // Move down again - should exit quote and go to "After quote" at [2]
+    display.move_cursor_vertical(1);
+    let pos3 = display.cursor_pointer();
+    assert_eq!(
+        pos3.paragraph_path.numeric_steps(),
+        vec![2],
+        "Should be at 'After quote' paragraph"
+    );
+
+    // Now test moving up from the bottom
+    // Move up - should enter quote's last child at [1, 1]
+    display.move_cursor_vertical(-1);
+    let pos4 = display.cursor_pointer();
+    assert_eq!(
+        pos4.paragraph_path.numeric_steps(),
+        vec![1, 1],
+        "Should be at last child of quote block"
+    );
+
+    // Move up again - should go to quote's first child at [1, 0]
+    display.move_cursor_vertical(-1);
+    let pos5 = display.cursor_pointer();
+    assert_eq!(
+        pos5.paragraph_path.numeric_steps(),
+        vec![1, 0],
+        "Should be at first child of quote block"
+    );
+
+    // Move up again - should exit quote and go to "Before quote" at [0]
+    display.move_cursor_vertical(-1);
+    let pos6 = display.cursor_pointer();
+    assert_eq!(
+        pos6.paragraph_path.numeric_steps(),
+        vec![0],
+        "Should be at 'Before quote' paragraph"
+    );
+}

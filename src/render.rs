@@ -538,7 +538,11 @@ impl<'a> DirectRenderer<'a> {
             if idx > 0 || !paragraph.content().is_empty() {
                 self.push_plain_line(&quote_prefix, false);
             }
+            // Update paragraph path for this child
+            self.current_paragraph_path.push_child(idx);
             self.render_paragraph(child, &quote_prefix);
+            // Restore paragraph path
+            self.current_paragraph_path.pop();
         }
     }
 
