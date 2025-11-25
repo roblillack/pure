@@ -7,6 +7,8 @@ A modern terminal-based word processor for editing FTML and Markdown documents.
 
 Pure brings structured document editing to the command line. Unlike traditional text editors that work with plain text, Pure works with semantic document elements—headings, lists, quotes, code blocks—allowing you to focus on content rather than formatting syntax.
 
+![Demo](demo.gif)
+
 > **Note**: Pure is currently in alpha. While the core functionality is stable and usable for daily work, some features are still under development and you may encounter rough edges. Please report any issues you find!
 
 ## Quick Start
@@ -29,6 +31,7 @@ pure notes.md
 Pure documents are made up of **paragraphs**, each with a specific type:
 
 **Paragraph Types:**
+
 - **Text** - Regular body paragraphs
 - **Headings** (H1, H2, H3) - Section headings at different levels
 - **Quote** - Block quotations
@@ -38,6 +41,7 @@ Pure documents are made up of **paragraphs**, each with a specific type:
 - **Checklist** - Task items with checkboxes (`[ ]` and `[x]`)
 
 **Inline Styles:**
+
 - **Bold** - Strong emphasis
 - **Italic** - Emphasis
 - **Underline** - Underlined text
@@ -121,27 +125,32 @@ pure webpage.html
 ### Essential Keyboard Shortcuts
 
 **Navigation:**
+
 - Arrow keys - Move cursor
 - Ctrl+Left/Right - Jump by word
 - Home/End - Start/end of line
 - PageUp/PageDown - Scroll by page
 
 **Editing:**
+
 - Enter - New paragraph
 - Shift+Enter - Newline within paragraph
 - Backspace/Delete - Remove text
 - Ctrl+W - Delete word backward
 
 **Formatting:**
+
 - Esc - Open context menu
 - 0-9 (in menu) - Change paragraph type
 - b/i/u/s (in menu) - Toggle inline styles
 
 **File Operations:**
+
 - Ctrl+S - Save
 - Ctrl+Q - Quit
 
 **Special Features:**
+
 - F9 - Reveal codes mode
 
 ## What is FTML?
@@ -175,12 +184,14 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for detailed technical documentation.
 Pure is under active development. Current status:
 
 **Core Editing:**
+
 - [x] Text input with full Unicode support
 - [x] Cursor navigation (keyboard and mouse)
 - [x] Text selection (visual selection with mouse and keyboard)
 - [x] Word wrapping with dynamic reflow
 
 **Paragraph Types:**
+
 - [x] Text paragraphs
 - [x] Headings (H1, H2, H3)
 - [x] Ordered lists with nesting
@@ -190,6 +201,7 @@ Pure is under active development. Current status:
 - [x] Code blocks
 
 **Inline Styles:**
+
 - [x] Bold
 - [x] Italic
 - [x] Underline
@@ -199,17 +211,20 @@ Pure is under active development. Current status:
 - [ ] Hyperlinks (displayed but not editable yet)
 
 **File Operations:**
+
 - [x] FTML reading and writing
 - [x] Markdown import and export
 - [x] HTML import (basic)
 
 **User Interface:**
+
 - [x] Context menu (Esc)
 - [x] Reveal codes mode (F9)
 - [x] Mouse support (click, drag, select, scroll)
 - [x] Status bar with document info
 
 **Advanced Features:**
+
 - [ ] Undo/Redo
 - [ ] Find and replace
 - [ ] Multiple documents with tabs
