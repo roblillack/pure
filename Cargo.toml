@@ -2,6 +2,11 @@
 name = "pure-tui"
 version = "0.1.0"
 edition = "2024"
+description = "A modern terminal-based word processor for Markdown and other structured text documents"
+authors = ["Rob Lillack <rob@lillack.net>"]
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/roblillack/pure"
 
 [dependencies]
 anyhow = "1.0"
