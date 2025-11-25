@@ -1,5 +1,5 @@
 [package]
-name = "pure"
+name = "pure-tui"
 version = "0.1.0"
 edition = "2024"
 

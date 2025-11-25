@@ -1,7 +1,7 @@
 # Pure
 
 [![Build Status](https://github.com/roblillack/pure/workflows/build-lint-test/badge.svg)](https://github.com/roblillack/pure/actions)
-[![Crates.io](https://img.shields.io/crates/v/pure.svg)](https://crates.io/crates/pure)
+[![Crates.io](https://img.shields.io/crates/v/pure-tui.svg)](https://crates.io/crates/pure-tui)
 
 A modern terminal-based word processor for editing FTML and Markdown documents.
 
@@ -13,7 +13,7 @@ Pure brings structured document editing to the command line. Unlike traditional 
 
 ```bash
 # Install from crates.io
-cargo install pure
+cargo install pure-tui
 
 # Open or create a document
 pure document.ftml
@@ -84,7 +84,7 @@ See the [User Guide](USER-GUIDE.md) for comprehensive documentation.
 If you have Rust installed:
 
 ```bash
-cargo install pure
+cargo install pure-tui
 ```
 
 ### From Source
