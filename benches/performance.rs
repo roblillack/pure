@@ -1,4 +1,7 @@
-use pure::render::DirectCursorTracking;
+use pure_tui::{
+    editor,
+    render::{self, DirectCursorTracking},
+};
 use std::time::{Duration, Instant};
 use tdoc::{Document, InlineStyle, Paragraph, ParagraphType, Span};
 
@@ -226,7 +229,7 @@ fn bench_rendering_performance() {
                     selection: None,
                     track_all_positions: false,
                 };
-                let _ = pure::render::render_document_direct(
+                let _ = render::render_document_direct(
                     &doc,
                     80,  // wrap_width
                     0,   // left_padding
@@ -266,7 +269,7 @@ fn bench_rendering_with_cache() {
     ];
 
     for (name, doc) in docs {
-        let mut cache = pure::render::RenderCache::new();
+        let mut cache = render::RenderCache::new();
 
         // First render - cache miss
         let start = std::time::Instant::now();
@@ -275,7 +278,7 @@ fn bench_rendering_with_cache() {
             selection: None,
             track_all_positions: false,
         };
-        let _ = pure::render::render_document_direct(
+        let _ = render::render_document_direct(
             &doc,
             80,  // wrap_width
             0,   // left_padding
@@ -296,8 +299,7 @@ fn bench_rendering_with_cache() {
                 selection: None,
                 track_all_positions: false,
             };
-            let _ =
-                pure::render::render_document_direct(&doc, 80, 0, &[], tracking, Some(&mut cache));
+            let _ = render::render_document_direct(&doc, 80, 0, &[], tracking, Some(&mut cache));
             durations.push(start.elapsed());
         }
 
@@ -352,7 +354,7 @@ fn bench_rendering_with_styles() {
                 selection: None,
                 track_all_positions: false,
             };
-            let _ = pure::render::render_document_direct(&doc, 80, 0, &[], tracking, None);
+            let _ = render::render_document_direct(&doc, 80, 0, &[], tracking, None);
         });
         result.print();
     }
@@ -372,7 +374,7 @@ fn bench_rendering_reveal_codes() {
             selection: None,
             track_all_positions: false,
         };
-        let _ = pure::render::render_document_direct(&doc, 80, 0, &[], tracking, None);
+        let _ = render::render_document_direct(&doc, 80, 0, &[], tracking, None);
     });
     result_normal.print();
 
@@ -382,7 +384,7 @@ fn bench_rendering_reveal_codes() {
             selection: None,
             track_all_positions: false,
         };
-        let _ = pure::render::render_document_direct(&doc, 80, 0, &[], tracking, None);
+        let _ = render::render_document_direct(&doc, 80, 0, &[], tracking, None);
     });
     result_reveal.print();
 
@@ -427,7 +429,7 @@ fn bench_segment_collection() {
                 ITERATIONS
             },
             || {
-                let _ = pure::editor::inspect::collect_segments(&doc, false);
+                let _ = editor::inspect::collect_segments(&doc, false);
             },
         );
         result.print();
@@ -445,12 +447,12 @@ fn bench_segment_collection_with_reveal() {
     let doc = create_styled_document(MEDIUM_DOC_PARAGRAPHS);
 
     let result_normal = benchmark("collect_segments - reveal_codes OFF", ITERATIONS, || {
-        let _ = pure::editor::inspect::collect_segments(&doc, false);
+        let _ = editor::inspect::collect_segments(&doc, false);
     });
     result_normal.print();
 
     let result_reveal = benchmark("collect_segments - reveal_codes ON", ITERATIONS, || {
-        let _ = pure::editor::inspect::collect_segments(&doc, true);
+        let _ = editor::inspect::collect_segments(&doc, true);
     });
     result_reveal.print();
 }
@@ -477,7 +479,7 @@ fn bench_char_to_byte_conversion() {
             &format!("char_to_byte_idx (middle of {}) - {}", char_count, name),
             ITERATIONS * 10,
             || {
-                let _ = pure::editor::content::char_to_byte_idx(&text, mid_point);
+                let _ = editor::content::char_to_byte_idx(&text, mid_point);
             },
         );
         result.print();
@@ -508,7 +510,7 @@ fn bench_word_boundary_detection() {
             &format!("previous_word_boundary - {}", name),
             ITERATIONS * 10,
             || {
-                let _ = pure::editor::content::previous_word_boundary(text, text.len() / 2);
+                let _ = editor::content::previous_word_boundary(text, text.len() / 2);
             },
         );
         result_prev.print();
@@ -517,7 +519,7 @@ fn bench_word_boundary_detection() {
             &format!("next_word_boundary - {}", name),
             ITERATIONS * 10,
             || {
-                let _ = pure::editor::content::next_word_boundary(text, text.len() / 2);
+                let _ = editor::content::next_word_boundary(text, text.len() / 2);
             },
         );
         result_next.print();
@@ -548,7 +550,7 @@ fn bench_full_edit_cycle() {
 
         let result = benchmark(&format!("Full edit cycle - {}", name), iterations, || {
             let doc = create_test_document(size, 20);
-            let mut editor = pure::editor::DocumentEditor::new(doc);
+            let mut editor = editor::DocumentEditor::new(doc);
 
             // Simulate typing 10 characters
             for _ in 0..10 {
@@ -589,7 +591,7 @@ fn bench_wrap_width_impact() {
                     selection: None,
                     track_all_positions: false,
                 };
-                let _ = pure::render::render_document_direct(&doc, width, 0, &[], tracking, None);
+                let _ = render::render_document_direct(&doc, width, 0, &[], tracking, None);
             },
         );
         result.print();
@@ -607,7 +609,7 @@ fn bench_memory_allocations() {
     println!("\nDocument stats:");
     println!("  Paragraphs: {}", doc.paragraphs.len());
 
-    let segments = pure::editor::inspect::collect_segments(&doc, false);
+    let segments = editor::inspect::collect_segments(&doc, false);
     println!("  Segments: {}", segments.len());
 
     let tracking = DirectCursorTracking {
@@ -615,7 +617,7 @@ fn bench_memory_allocations() {
         selection: None,
         track_all_positions: false,
     };
-    let render_result = pure::render::render_document_direct(&doc, 80, 0, &[], tracking, None);
+    let render_result = render::render_document_direct(&doc, 80, 0, &[], tracking, None);
     println!("  Rendered lines: {}", render_result.lines.len());
     println!("  Cursor map entries: {}", render_result.cursor_map.len());
 
@@ -680,7 +682,7 @@ fn bench_user_guide_rendering() {
             selection: None,
             track_all_positions: false,
         };
-        let _ = pure::render::render_document_direct(&doc, 80, 0, &[], tracking, None);
+        let _ = render::render_document_direct(&doc, 80, 0, &[], tracking, None);
         durations.push(start.elapsed());
     }
 
@@ -703,7 +705,7 @@ fn bench_user_guide_rendering() {
 
     // Test with cache
     println!("\nWith render cache:");
-    let mut cache = pure::render::RenderCache::new();
+    let mut cache = render::RenderCache::new();
 
     // First render - cold cache
     let start = Instant::now();
@@ -712,7 +714,7 @@ fn bench_user_guide_rendering() {
         selection: None,
         track_all_positions: false,
     };
-    let _ = pure::render::render_document_direct(&doc, 80, 0, &[], tracking, Some(&mut cache));
+    let _ = render::render_document_direct(&doc, 80, 0, &[], tracking, Some(&mut cache));
     let first_render = start.elapsed();
 
     // Subsequent renders - warm cache
@@ -724,7 +726,7 @@ fn bench_user_guide_rendering() {
             selection: None,
             track_all_positions: false,
         };
-        let _ = pure::render::render_document_direct(&doc, 80, 0, &[], tracking, Some(&mut cache));
+        let _ = render::render_document_direct(&doc, 80, 0, &[], tracking, Some(&mut cache));
         cached_durations.push(start.elapsed());
     }
 
@@ -755,8 +757,8 @@ fn bench_real_world_render_flow() {
     let doc =
         tdoc::markdown::parse(std::io::Cursor::new(&content)).expect("Failed to parse markdown");
 
-    let editor = pure::editor::DocumentEditor::new(doc);
-    let mut cache = pure::render::RenderCache::new();
+    let editor = editor::DocumentEditor::new(doc);
+    let mut cache = render::RenderCache::new();
 
     println!("\nDocument stats:");
     println!("  Paragraphs: {}", editor.document().paragraphs.len());
@@ -783,7 +785,7 @@ fn bench_real_world_render_flow() {
 
         // Step 2: Render the document directly with cache
         let render_start = Instant::now();
-        let render_result = pure::render::render_document_direct(
+        let render_result = render::render_document_direct(
             editor.document(),
             80,
             0,

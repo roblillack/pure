@@ -27,13 +27,9 @@ use ratatui::{
 };
 use tdoc::{Document, InlineStyle, ParagraphType, markdown, parse, writer::Writer};
 
-mod editor;
-mod editor_display;
-mod render;
-
-use editor::{CursorPointer, DocumentEditor};
-use editor_display::{CursorDisplay, EditorDisplay};
-use render::RenderResult;
+use pure_tui::editor::{CursorPointer, DocumentEditor};
+use pure_tui::editor_display::{CursorDisplay, EditorDisplay};
+use pure_tui::render::RenderResult;
 
 const STATUS_TIMEOUT: Duration = Duration::from_secs(4);
 const DOUBLE_CLICK_TIMEOUT: Duration = Duration::from_millis(400);
