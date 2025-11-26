@@ -1086,16 +1086,9 @@ mod tests {
         // Render to populate visual_positions
         let _ = display.render_document(80, 0, None);
 
-        // Check initial position
-        let initial = display.cursor_pointer();
-
         // Try to navigate down to reach the checklist
         display.move_cursor_vertical(1);
-        let pos1 = display.cursor_pointer();
-
         display.move_cursor_vertical(1);
-        let pos2 = display.cursor_pointer();
-
         display.move_cursor_vertical(1);
         let pos3 = display.cursor_pointer();
 

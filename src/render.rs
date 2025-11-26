@@ -449,16 +449,16 @@ impl<'a> DirectRenderer<'a> {
         if self.track_all_positions {
             // Extract markers that were added during this paragraph's rendering
             for (marker_id, pending) in self.marker_pending.iter() {
-                if *marker_id >= start_marker_id {
-                    if let Some(pointer) = self.marker_to_pointer.get(marker_id) {
-                        // Convert absolute line to relative line (relative to paragraph start)
-                        let relative_position = CachedPosition {
-                            line: pending.line.saturating_sub(start_line),
-                            column: pending.column,
-                            content_column: pending.content_column,
-                        };
-                        cached_positions.push((pointer.clone(), relative_position));
-                    }
+                if *marker_id >= start_marker_id
+                    && let Some(pointer) = self.marker_to_pointer.get(marker_id)
+                {
+                    // Convert absolute line to relative line (relative to paragraph start)
+                    let relative_position = CachedPosition {
+                        line: pending.line.saturating_sub(start_line),
+                        column: pending.column,
+                        content_column: pending.content_column,
+                    };
+                    cached_positions.push((pointer.clone(), relative_position));
                 }
             }
         }
