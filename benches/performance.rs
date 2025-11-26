@@ -730,6 +730,165 @@ fn bench_scrolling_detailed_analysis() {
     println!("   - Combined time: <8ms (meets <10ms target)");
 }
 
+#[test]
+fn bench_editing_insert_text() {
+    println!("\n\n╔════════════════════════════════════════════════════════════════╗");
+    println!("║       EDITING BENCHMARK: INSERT TEXT (Typing Performance)     ║");
+    println!("╚════════════════════════════════════════════════════════════════╝");
+    println!("\nThis simulates opening USER-GUIDE.md, finding the first text");
+    println!("paragraph, and typing 100 words at the beginning.");
+
+    use pure_tui::editor_display::EditorDisplay;
+    use ratatui::layout::Rect;
+
+    // Load USER-GUIDE.md
+    let content = std::fs::read_to_string("USER-GUIDE.md").expect("Failed to read USER-GUIDE.md");
+    let doc =
+        tdoc::markdown::parse(std::io::Cursor::new(&content)).expect("Failed to parse markdown");
+
+    let editor = editor::DocumentEditor::new(doc);
+    let mut display = EditorDisplay::new(editor);
+
+    // Initial render to populate visual positions
+    let text_area = Rect {
+        x: 0,
+        y: 0,
+        width: 100,
+        height: 30,
+    };
+    let result = display.render_document_with_positions(80, 0, None);
+    display.update_after_render(text_area, result.lines.len());
+
+    println!("\nDocument stats:");
+    println!("  Paragraphs: {}", display.document().paragraphs.len());
+    println!("  Total visual lines: {}", result.lines.len());
+
+    // Find first text paragraph and move cursor there
+    // USER-GUIDE starts with heading paragraphs, so we need to move to first text paragraph
+    for _ in 0..20 {
+        display.move_down();
+        if matches!(
+            display.document().paragraphs.get(display.cursor_pointer().paragraph_path.numeric_steps()[0]),
+            Some(tdoc::Paragraph::Text { .. })
+        ) {
+            break;
+        }
+    }
+
+    println!("  Starting paragraph: {:?}", display.cursor_pointer().paragraph_path.numeric_steps());
+
+    // Prepare text to insert: 100 words
+    let words_to_insert = "Lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod tempor incididunt ut labore et dolore magna aliqua ";
+    let total_chars = words_to_insert.len() * 10; // Repeat to get ~100 words
+
+    println!("  Characters to insert: {}", total_chars);
+
+    // Track timing for each character insertion
+    let mut insert_times = Vec::new();
+    let mut render_times = Vec::new();
+    let overall_start = Instant::now();
+
+    let chars_to_type: Vec<char> = words_to_insert.chars().cycle().take(total_chars).collect();
+
+    for (idx, ch) in chars_to_type.iter().enumerate() {
+        // Time the character insertion
+        let insert_start = Instant::now();
+        display.insert_char(*ch);
+        insert_times.push(insert_start.elapsed());
+
+        // Render after insertion (with position rebuild since document changed)
+        let render_start = Instant::now();
+        let result = display.render_document_with_positions(80, 0, None);
+        render_times.push(render_start.elapsed());
+        display.update_after_render(text_area, result.lines.len());
+
+        // Sample every 100 characters for progress
+        if (idx + 1) % 100 == 0 {
+            println!("  Inserted {} characters...", idx + 1);
+        }
+    }
+
+    let overall_time = overall_start.elapsed();
+
+    // Calculate statistics
+    let total_ops = insert_times.len();
+    let insert_avg: Duration = insert_times.iter().sum::<Duration>() / total_ops as u32;
+    let insert_min = *insert_times.iter().min().unwrap();
+    let insert_max = *insert_times.iter().max().unwrap();
+
+    let render_avg: Duration = render_times.iter().sum::<Duration>() / total_ops as u32;
+    let render_min = *render_times.iter().min().unwrap();
+    let render_max = *render_times.iter().max().unwrap();
+
+    let combined_avg = insert_avg + render_avg;
+
+    // Get cache statistics
+    let cache_info = format!(
+        "Cache - Hits: {}, Misses: {}, Hit rate: {:.1}%",
+        display.render_cache_hits(),
+        display.render_cache_misses(),
+        display.render_cache_hit_rate() * 100.0
+    );
+
+    println!("\n╔════════════════════════════════════════════════════════════════╗");
+    println!("║                         RESULTS                                ║");
+    println!("╚════════════════════════════════════════════════════════════════╝");
+    println!("\n📊 Overall:");
+    println!("  Total characters:   {}", total_ops);
+    println!("  Total time:         {:?}", overall_time);
+    println!("  Avg per keypress:   {:?}", combined_avg);
+    println!();
+    println!("✍️  Character Insertion (insert_char):");
+    println!("  Average:  {:?}", insert_avg);
+    println!("  Min:      {:?}", insert_min);
+    println!("  Max:      {:?}", insert_max);
+    println!();
+    println!("🎨 Rendering (render_document_with_positions):");
+    println!("  Average:  {:?}", render_avg);
+    println!("  Min:      {:?}", render_min);
+    println!("  Max:      {:?}", render_max);
+    println!();
+    println!("⚡ Combined per keypress:");
+    println!("  Average:  {:?}", combined_avg);
+    println!();
+    println!("💾 {}", cache_info);
+
+    // Performance assessment
+    println!("\n🎯 Performance Assessment:");
+    if combined_avg.as_millis() > 10 {
+        println!("  ❌ FAILED: Average > 10ms target ({:.2}ms)", combined_avg.as_secs_f64() * 1000.0);
+        println!("     Users will experience noticeable lag when typing.");
+    } else {
+        println!("  ✅ PASSED: Average < 10ms target ({:.2}ms)", combined_avg.as_secs_f64() * 1000.0);
+        println!("     Typing should feel smooth and responsive.");
+    }
+
+    if combined_avg.as_millis() > 16 {
+        println!("  ⚠️  WARNING: Average > 16ms - will drop below 60 FPS");
+    }
+
+    // Analyze the breakdown
+    println!("\n📈 Performance Breakdown:");
+    let insert_pct = insert_avg.as_secs_f64() / combined_avg.as_secs_f64() * 100.0;
+    let render_pct = render_avg.as_secs_f64() / combined_avg.as_secs_f64() * 100.0;
+    println!("  Insert: {:.1}% of time", insert_pct);
+    println!("  Render: {:.1}% of time", render_pct);
+
+    if insert_avg.as_millis() > 5 {
+        println!("\n  💡 Insertion is slow - potential optimizations:");
+        println!("     - Reduce segment collection overhead");
+        println!("     - Optimize char_to_byte_idx conversions");
+        println!("     - Batch cursor position updates");
+    }
+
+    if render_avg.as_millis() > 5 {
+        println!("\n  💡 Rendering is slow - potential optimizations:");
+        println!("     - This uses render_document_with_positions (full tracking)");
+        println!("     - Consider incremental visual position updates");
+        println!("     - Optimize paragraph hashing for cache invalidation");
+    }
+}
+
 #[cfg(test)]
 mod summary {
     #[test]
@@ -744,11 +903,14 @@ mod summary {
             "  cargo test --release --bench performance bench_rendering_performance -- --nocapture"
         );
         println!("\nKey metrics to watch:");
+        println!("  • Scrolling performance (should be < 10ms per keypress)");
+        println!("  • Editing performance (should be < 10ms per keypress)");
         println!("  • Full edit cycle time (should be < 5ms per character)");
         println!("  • Segment collection time (runs on EVERY keystroke)");
         println!("  • Rendering time for large documents");
         println!("  • char_to_byte_idx performance (called multiple times per edit)");
         println!("\nPerformance targets:");
+        println!("  • < 10ms per keypress = smooth typing/scrolling");
         println!("  • < 16ms per operation = smooth 60 FPS");
         println!("  • < 100ms = user perceives as instantaneous");
         println!("  • > 100ms = noticeable lag");
