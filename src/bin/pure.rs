@@ -20,10 +20,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Position, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{
-        Block, Borders, Clear, List, ListItem, ListState, Paragraph, Scrollbar,
-        ScrollbarOrientation, ScrollbarState, Wrap,
-    },
+    widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap},
 };
 use tdoc::{Document, InlineStyle, ParagraphType, markdown, parse, writer::Writer};
 
@@ -597,6 +594,22 @@ fn is_context_menu_shortcut(code: KeyCode, modifiers: KeyModifiers) -> bool {
     }
 }
 
+#[derive(Clone, Debug)]
+struct ScrollbarGeometry {
+    knob_start: usize,
+    knob_size: usize,
+}
+
+#[derive(Clone, Debug)]
+struct ScrollbarDrag {
+    anchor_within_knob: usize,
+}
+
+#[derive(Clone, Debug)]
+enum DragState {
+    Scrollbar(ScrollbarDrag),
+}
+
 struct App {
     display: EditorDisplay,
     file_path: PathBuf,
@@ -613,6 +626,10 @@ struct App {
     mouse_click_count: u8,
     mouse_drag_anchor: Option<CursorPointer>,
     pending_scroll_restore: Option<ScrollRestore>,
+    drag_state: Option<DragState>,
+    last_viewport_height: usize,
+    last_total_lines: usize,
+    last_scrollbar_column: u16,
 }
 
 impl App {
@@ -642,6 +659,10 @@ impl App {
             mouse_click_count: 0,
             mouse_drag_anchor: None,
             pending_scroll_restore: None,
+            drag_state: None,
+            last_viewport_height: 0,
+            last_total_lines: 0,
+            last_scrollbar_column: 0,
         }
     }
 
@@ -788,15 +809,19 @@ impl App {
         self.apply_pending_scroll_restore(&render, viewport_height);
         self.adjust_scroll(&render, viewport_height);
 
+        // Store viewport and total lines for scrollbar calculations
+        self.last_viewport_height = viewport_height;
+        self.last_total_lines = render.total_lines;
+        self.last_scrollbar_column = scrollbar_area.x;
+
         let paragraph = Paragraph::new(Text::from(render.lines.clone()))
             .wrap(Wrap { trim: false })
             .block(Block::default().borders(Borders::NONE))
             .scroll((self.scroll_top as u16, 0));
         frame.render_widget(paragraph, text_area);
 
-        let mut scrollbar_state = ScrollbarState::new(render.total_lines).position(self.scroll_top);
-        let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight);
-        frame.render_stateful_widget(scrollbar, scrollbar_area, &mut scrollbar_state);
+        // Draw custom scrollbar
+        self.draw_scrollbar(frame, scrollbar_area);
 
         if let Some(cursor) = cursor_visual
             && cursor.line >= self.scroll_top
@@ -815,6 +840,36 @@ impl App {
 
         if self.context_menu.is_some() {
             self.render_context_menu(frame, area);
+        }
+    }
+
+    fn draw_scrollbar(&self, frame: &mut Frame, area: Rect) {
+        if area.height == 0 || self.last_total_lines <= self.last_viewport_height {
+            return;
+        }
+
+        let Some(geometry) = self.scrollbar_geometry() else {
+            return;
+        };
+
+        let knob_start = geometry.knob_start;
+        let knob_size = geometry.knob_size;
+        let knob_end = knob_start.saturating_add(knob_size);
+
+        // Draw scrollbar track and knob
+        for row in 0..self.last_viewport_height.min(area.height as usize) {
+            let y = area.y + row as u16;
+            let x = area.x;
+
+            if row >= knob_start && row < knob_end {
+                // Draw knob with reverse video
+                let span = Span::styled(" ", Style::default().add_modifier(Modifier::REVERSED));
+                frame.render_widget(Paragraph::new(Line::from(span)), Rect::new(x, y, 1, 1));
+            } else {
+                // Draw track (empty space)
+                let span = Span::styled(" ", Style::default());
+                frame.render_widget(Paragraph::new(Line::from(span)), Rect::new(x, y, 1, 1));
+            }
         }
     }
 
@@ -1105,6 +1160,124 @@ impl App {
         }
     }
 
+    fn scrollbar_geometry(&self) -> Option<ScrollbarGeometry> {
+        if self.last_viewport_height == 0 || self.last_total_lines <= self.last_viewport_height {
+            return None;
+        }
+
+        let mut knob_size =
+            (self.last_viewport_height * self.last_viewport_height) / self.last_total_lines;
+        knob_size = knob_size.max(1).min(self.last_viewport_height);
+        let max_scroll = self
+            .last_total_lines
+            .saturating_sub(self.last_viewport_height);
+        let knob_travel = self.last_viewport_height.saturating_sub(knob_size);
+        let knob_start = if max_scroll == 0 || knob_travel == 0 {
+            0
+        } else {
+            (self.scroll_top * knob_travel) / max_scroll
+        };
+
+        Some(ScrollbarGeometry {
+            knob_start,
+            knob_size,
+        })
+    }
+
+    fn scroll_offset_from_knob_start(&self, knob_start: usize, knob_size: usize) -> usize {
+        let max_scroll = self
+            .last_total_lines
+            .saturating_sub(self.last_viewport_height);
+        if max_scroll == 0 {
+            return 0;
+        }
+
+        let knob_travel = self.last_viewport_height.saturating_sub(knob_size);
+        if knob_travel == 0 {
+            return self.scroll_top.min(max_scroll);
+        }
+
+        let clamped_start = knob_start.min(knob_travel);
+        (clamped_start * max_scroll + knob_travel / 2) / knob_travel
+    }
+
+    fn begin_scrollbar_drag(&mut self, pointer_row: usize) -> bool {
+        self.drag_state = None;
+        let Some(geometry) = self.scrollbar_geometry() else {
+            return false;
+        };
+
+        let knob_start = geometry.knob_start;
+        let knob_size = geometry.knob_size;
+        let knob_end = knob_start.saturating_add(knob_size);
+        let knob_travel = self.last_viewport_height.saturating_sub(knob_size);
+
+        let mut anchor = if knob_size <= 1 || pointer_row < knob_start {
+            0
+        } else if pointer_row >= knob_end {
+            knob_size.saturating_sub(1)
+        } else {
+            pointer_row - knob_start
+        };
+        anchor = anchor.min(knob_size.saturating_sub(1));
+
+        let mut new_scroll = self.scroll_top;
+        if pointer_row < knob_start || pointer_row >= knob_end {
+            let desired_anchor = knob_size / 2;
+            anchor = desired_anchor.min(knob_size.saturating_sub(1));
+            let target_start = pointer_row.saturating_sub(anchor).min(knob_travel);
+            new_scroll = self.scroll_offset_from_knob_start(target_start, knob_size);
+        }
+
+        self.drag_state = Some(DragState::Scrollbar(ScrollbarDrag {
+            anchor_within_knob: anchor,
+        }));
+
+        let previous = self.scroll_top;
+        let max_scroll = self
+            .last_total_lines
+            .saturating_sub(self.last_viewport_height);
+        self.scroll_top = new_scroll.min(max_scroll);
+        previous != self.scroll_top
+    }
+
+    fn update_scrollbar_drag(&mut self, pointer_row: usize) -> bool {
+        let anchor = match self.drag_state {
+            Some(DragState::Scrollbar(ref drag)) => drag.anchor_within_knob,
+            _ => return false,
+        };
+
+        let Some(geometry) = self.scrollbar_geometry() else {
+            return false;
+        };
+
+        let knob_size = geometry.knob_size;
+        let knob_travel = self.last_viewport_height.saturating_sub(knob_size);
+        let adjusted_anchor = anchor.min(knob_size.saturating_sub(1));
+        let target_start = pointer_row.saturating_sub(adjusted_anchor).min(knob_travel);
+        let max_scroll = self
+            .last_total_lines
+            .saturating_sub(self.last_viewport_height);
+        let new_scroll = self
+            .scroll_offset_from_knob_start(target_start, knob_size)
+            .min(max_scroll);
+
+        if new_scroll != self.scroll_top {
+            self.scroll_top = new_scroll;
+            true
+        } else {
+            false
+        }
+    }
+
+    fn is_dragging_scrollbar(&self) -> bool {
+        matches!(self.drag_state, Some(DragState::Scrollbar(_)))
+    }
+
+    fn end_drag(&mut self) {
+        self.drag_state = None;
+    }
+
     fn scroll_top_for_cursor(
         &self,
         cursor_line: usize,
@@ -1214,6 +1387,18 @@ impl App {
     }
 
     fn handle_mouse_down(&mut self, event: MouseEvent) {
+        // Check if click is on scrollbar (rightmost column)
+        if event.column == self.last_scrollbar_column
+            && event.row < self.last_viewport_height as u16
+        {
+            // Clicked on scrollbar
+            self.display.set_cursor_following(false);
+            if self.begin_scrollbar_drag(event.row as usize) {
+                // Scroll position changed, no need to redraw as the main loop will handle it
+            }
+            return;
+        }
+
         let Some(display) =
             self.display
                 .pointer_from_mouse(event.column, event.row, self.scroll_top)
@@ -1272,6 +1457,14 @@ impl App {
     }
 
     fn handle_mouse_drag(&mut self, event: MouseEvent) {
+        // Handle scrollbar dragging
+        if self.is_dragging_scrollbar() {
+            if event.row < self.last_viewport_height as u16 {
+                self.update_scrollbar_drag(event.row as usize);
+            }
+            return;
+        }
+
         let Some(anchor) = self.mouse_drag_anchor.clone() else {
             return;
         };
@@ -1290,6 +1483,7 @@ impl App {
     fn handle_mouse_up(&mut self, button: MouseButton) {
         if button == MouseButton::Left {
             self.mouse_drag_anchor = None;
+            self.end_drag();
         }
     }
 
