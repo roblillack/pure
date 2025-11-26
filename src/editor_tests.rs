@@ -1586,10 +1586,7 @@ fn cursor_moves_into_last_wrapped_line_when_moving_up() {
     let _ = display.render_document(30, 0, None);
 
     println!("\n=== Initial Visual Positions ===");
-    println!(
-        "Total visual positions: {}",
-        display.visual_positions().len()
-    );
+    println!("Total visual positions: {}", display.visual_positions().len());
     for (idx, vp) in display.visual_positions().iter().enumerate().take(20) {
         println!(
             "{}: line={}, col={}, path={:?}, offset={}",
@@ -1645,10 +1642,7 @@ fn cursor_moves_into_last_wrapped_line_when_moving_up() {
         .max()
         .expect("Should have positions for first paragraph");
 
-    println!(
-        "\nLast wrapped line of first paragraph: line={}",
-        first_para_last_line
-    );
+    println!("\nLast wrapped line of first paragraph: line={}", first_para_last_line);
 
     // Move up - should land on the last wrapped line of the first paragraph
     println!("\n=== Moving up ===");
@@ -1765,10 +1759,7 @@ fn cursor_moves_into_last_wrapped_line_when_moving_up_into_quote() {
         .max()
         .expect("Should have positions for first paragraph in quote");
 
-    println!(
-        "\nLast wrapped line of first paragraph in quote: line={}",
-        first_para_last_line
-    );
+    println!("\nLast wrapped line of first paragraph in quote: line={}", first_para_last_line);
 
     // Move up - should land on the last wrapped line of the first paragraph in the quote
     println!("\n=== Moving up ===");
