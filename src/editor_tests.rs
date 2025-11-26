@@ -1590,7 +1590,7 @@ fn cursor_moves_into_last_wrapped_line_when_moving_up() {
         "Total visual positions: {}",
         display.visual_positions().len()
     );
-    for (idx, vp) in display.visual_positions().iter().enumerate().take(20) {
+    for (idx, vp) in display.visual_positions().into_iter().enumerate().take(20) {
         println!(
             "{}: line={}, col={}, path={:?}, offset={}",
             idx,
@@ -1626,7 +1626,7 @@ fn cursor_moves_into_last_wrapped_line_when_moving_up() {
     let current_before_move = display.cursor_pointer();
     let current_visual_before = display
         .visual_positions()
-        .iter()
+        .into_iter()
         .find(|vp| vp.pointer == current_before_move);
 
     if let Some(cv) = current_visual_before {
@@ -1666,7 +1666,7 @@ fn cursor_moves_into_last_wrapped_line_when_moving_up() {
 
     let after_visual = display
         .visual_positions()
-        .iter()
+        .into_iter()
         .find(|vp| vp.pointer == after_move);
 
     if let Some(av) = after_visual {
@@ -1710,7 +1710,7 @@ fn cursor_moves_into_last_wrapped_line_when_moving_up_into_quote() {
     let _ = display.render_document_with_positions(30, 0, None);
 
     println!("\n=== Initial Visual Positions ===");
-    for (idx, vp) in display.visual_positions().iter().enumerate() {
+    for (idx, vp) in display.visual_positions().into_iter().enumerate() {
         println!(
             "{}: line={}, col={}, path={:?}, offset={}",
             idx,
@@ -1746,7 +1746,7 @@ fn cursor_moves_into_last_wrapped_line_when_moving_up_into_quote() {
     let current_before_move = display.cursor_pointer();
     let current_visual_before = display
         .visual_positions()
-        .iter()
+        .into_iter()
         .find(|vp| vp.pointer == current_before_move);
 
     if let Some(cv) = current_visual_before {
@@ -1786,7 +1786,7 @@ fn cursor_moves_into_last_wrapped_line_when_moving_up_into_quote() {
 
     let after_visual = display
         .visual_positions()
-        .iter()
+        .into_iter()
         .find(|vp| vp.pointer == after_move);
 
     if let Some(av) = after_visual {

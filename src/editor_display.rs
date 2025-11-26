@@ -4,7 +4,8 @@ use ratatui::layout::Rect;
 
 use crate::editor::{CursorPointer, DocumentEditor};
 use crate::render::{
-    CursorVisualPosition, DirectCursorTracking, RenderCache, RenderResult, render_document_direct,
+    CursorVisualPosition, DirectCursorTracking, ParagraphLineInfo, RenderCache, RenderResult,
+    render_document_direct,
 };
 
 /// EditorDisplay wraps a DocumentEditor and manages all visual/rendering concerns.
@@ -13,13 +14,25 @@ use crate::render::{
 pub struct EditorDisplay {
     editor: DocumentEditor,
     render_cache: RenderCache,
-    visual_positions: Vec<CursorDisplay>,
+    /// Cached layout result - only re-rendered when document changes or viewport resizes
+    cached_layout: Option<RenderResult>,
+    /// Parameters used for cached_layout (to detect when re-render is needed)
+    cached_wrap_width: usize,
+    cached_left_padding: usize,
+    /// Mapping of visual lines to paragraphs, including all cursor positions
+    paragraph_lines: Vec<ParagraphLineInfo>,
+    /// Last wrap_width used for rendering (needed for cache lookups)
+    last_wrap_width: usize,
+    /// Last left_padding used for rendering (needed for cache lookups)
+    last_left_padding: usize,
     last_cursor_visual: Option<CursorVisualPosition>,
     preferred_column: Option<u16>,
     cursor_following: bool,
     last_view_height: usize,
     last_total_lines: usize,
     last_text_area: Rect,
+    /// Set to true when document changes to trigger re-render
+    layout_dirty: bool,
 }
 
 impl EditorDisplay {
@@ -28,25 +41,75 @@ impl EditorDisplay {
         Self {
             editor,
             render_cache: RenderCache::new(),
-            visual_positions: Vec::new(),
+            cached_layout: None,
+            cached_wrap_width: 80,
+            cached_left_padding: 0,
+            paragraph_lines: Vec::new(),
+            last_wrap_width: 80,
+            last_left_padding: 0,
             last_cursor_visual: None,
             preferred_column: None,
             cursor_following: true,
             last_view_height: 1,
             last_total_lines: 0,
             last_text_area: Rect::default(),
+            layout_dirty: true,
         }
     }
 
-    /// Get the current visual positions
+    /// Get all visual positions from paragraph_lines (for tests and legacy code)
     #[allow(dead_code)]
-    pub fn visual_positions(&self) -> &[CursorDisplay] {
-        &self.visual_positions
+    pub fn visual_positions(&self) -> Vec<CursorDisplay> {
+        self.paragraph_lines
+            .iter()
+            .flat_map(|info| {
+                info.positions.iter().map(|(pointer, position)| {
+                    // Convert relative position to absolute
+                    let mut absolute_pos = *position;
+                    absolute_pos.line = info.start_line + position.line;
+                    CursorDisplay {
+                        pointer: pointer.clone(),
+                        position: absolute_pos,
+                    }
+                })
+            })
+            .collect()
     }
 
     /// Get the last cursor visual position
     pub fn last_cursor_visual(&self) -> Option<CursorVisualPosition> {
         self.last_cursor_visual
+    }
+
+    /// Get cursor positions for a specific visual line.
+    /// Positions are read directly from the paragraph_lines structure populated during rendering.
+    fn get_positions_for_line(&self, line: usize) -> Vec<CursorDisplay> {
+        // Find which paragraph contains this line
+        let paragraph_info = self
+            .paragraph_lines
+            .iter()
+            .find(|info| line >= info.start_line && line <= info.end_line);
+
+        let Some(info) = paragraph_info else {
+            return Vec::new();
+        };
+
+        // Positions are stored relative to paragraph start, convert to absolute
+        let relative_line = line.saturating_sub(info.start_line);
+
+        info.positions
+            .iter()
+            .filter(|(_, position)| position.line == relative_line)
+            .map(|(pointer, position)| {
+                // Convert relative position back to absolute
+                let mut absolute_pos = *position;
+                absolute_pos.line = info.start_line + position.line;
+                CursorDisplay {
+                    pointer: pointer.clone(),
+                    position: absolute_pos,
+                }
+            })
+            .collect()
     }
 
     /// Get the preferred column
@@ -94,6 +157,7 @@ impl EditorDisplay {
     /// Clear render cache (called when document changes)
     pub fn clear_render_cache(&mut self) {
         self.render_cache.clear();
+        self.layout_dirty = true;
     }
 
     /// Get render cache hits
@@ -116,38 +180,58 @@ impl EditorDisplay {
     pub fn set_reveal_codes(&mut self, enabled: bool) {
         self.editor.set_reveal_codes(enabled);
         self.render_cache.clear();
+        self.layout_dirty = true;
     }
 
     /// Render the document at the given width and update internal state
     ///
-    /// If `rebuild_visual_positions` is true, tracks all cursor positions in the document
-    /// to rebuild the visual_positions map. This is expensive for large documents (~50ms for
-    /// USER-GUIDE.md) so should only be enabled when needed:
-    /// - After document structure changes (edits, resizes)
-    /// - For mouse click handling
-    /// - Periodically to keep positions fresh
-    ///
-    /// For normal keyboard scrolling, use false (default) for fast rendering (<5ms).
+    /// Uses cached layout if available and parameters unchanged. Only re-renders when:
+    /// - Document content changed (layout_dirty=true)
+    /// - Viewport dimensions changed (wrap_width or left_padding)
+    /// - First render (cached_layout=None)
     pub fn render_document(
         &mut self,
         wrap_width: usize,
         left_padding: usize,
         selection: Option<(CursorPointer, CursorPointer)>,
     ) -> RenderResult {
-        self.render_document_internal(wrap_width, left_padding, selection, false)
+        // Check if we can reuse cached layout
+        let needs_rerender = self.layout_dirty
+            || self.cached_layout.is_none()
+            || self.cached_wrap_width != wrap_width
+            || self.cached_left_padding != left_padding;
+
+        if needs_rerender {
+            let result = self.render_document_internal(wrap_width, left_padding, selection, true);
+            self.cached_wrap_width = wrap_width;
+            self.cached_left_padding = left_padding;
+            self.layout_dirty = false;
+            self.cached_layout = Some(result.clone());
+            result
+        } else {
+            // Return reference to cached layout - caller must clone if needed
+            // But since paragraph_lines is already in EditorDisplay, no need for full clone
+            self.cached_layout.as_ref().unwrap().clone()
+        }
     }
 
-    /// Render the document and rebuild all visual positions
+    /// Render the document with positions - always forces a re-render
     ///
-    /// This is slower (~50ms for large documents) but ensures visual_positions is up-to-date.
-    /// Use this after document edits or when handling mouse clicks.
+    /// Use this after document edits to ensure changes are reflected.
+    /// For just viewing/scrolling, use render_document() which caches the layout.
     pub fn render_document_with_positions(
         &mut self,
         wrap_width: usize,
         left_padding: usize,
         selection: Option<(CursorPointer, CursorPointer)>,
     ) -> RenderResult {
-        self.render_document_internal(wrap_width, left_padding, selection, true)
+        // Force re-render
+        let result = self.render_document_internal(wrap_width, left_padding, selection, true);
+        self.cached_layout = Some(result.clone());
+        self.cached_wrap_width = wrap_width;
+        self.cached_left_padding = left_padding;
+        self.layout_dirty = false;
+        result
     }
 
     /// Internal render implementation
@@ -187,15 +271,12 @@ impl EditorDisplay {
         );
 
         // Update internal state from render result
-        // Only rebuild visual_positions if we tracked all positions
-        if track_all_positions {
-            self.visual_positions = result
-                .cursor_map
-                .iter()
-                .cloned()
-                .map(|(pointer, position)| CursorDisplay { pointer, position })
-                .collect();
-        }
+        // Always store paragraph_lines which now includes all cursor positions
+        self.paragraph_lines = result.paragraph_lines.clone();
+
+        // Store rendering parameters for cache lookups
+        self.last_wrap_width = wrap_width;
+        self.last_left_padding = left_padding;
 
         self.last_cursor_visual = result.cursor;
         if self.preferred_column.is_none() {
@@ -214,45 +295,22 @@ impl EditorDisplay {
 
     /// Move cursor vertically by delta lines
     pub fn move_cursor_vertical(&mut self, delta: i32) {
-        if self.visual_positions.is_empty() {
-            // Fallback to logical cursor movement when visual positions aren't available
+        // Use last_cursor_visual as the source of truth for current position
+        let Some(current) = self.last_cursor_visual else {
+            // Fallback to logical cursor movement when visual position isn't available
             if delta < 0 {
                 self.editor.move_up();
             } else if delta > 0 {
                 self.editor.move_down();
             }
-            return;
-        }
-
-        let pointer = self.editor.cursor_pointer();
-
-        let current_position = self
-            .visual_positions
-            .iter()
-            .find(|entry| entry.pointer == pointer)
-            .map(|entry| entry.position)
-            .or(self.last_cursor_visual);
-
-        let Some(current) = current_position else {
-            // Fallback to logical cursor movement when current position is not found
-            if delta < 0 {
-                self.editor.move_up();
-            } else if delta > 0 {
-                self.editor.move_down();
-            }
-            self.preferred_column = None;
             return;
         };
 
         // Use content_column (without left padding) for consistent vertical movement
         let desired_column = self.preferred_column.unwrap_or(current.content_column);
 
-        let max_line = self
-            .visual_positions
-            .iter()
-            .map(|entry| entry.position.line)
-            .max()
-            .unwrap_or(0);
+        // Get max line from paragraph_lines (lightweight)
+        let max_line = self.paragraph_lines.last().map(|p| p.end_line).unwrap_or(0);
 
         let mut target_line = current.line as i32 + delta;
         if target_line < 0 {
@@ -266,6 +324,8 @@ impl EditorDisplay {
         let destination = self
             .closest_pointer_on_line(target_line_usize, desired_column)
             .or_else(|| self.search_nearest_line(target_line_usize, delta, desired_column));
+
+        let pointer = self.editor.cursor_pointer();
 
         if let Some(dest) = destination {
             // Check if destination is the same as current position
@@ -316,36 +376,19 @@ impl EditorDisplay {
     pub fn move_to_visual_line_start(&mut self) {
         self.preferred_column = None;
 
-        if self.visual_positions.is_empty() {
-            self.editor.move_to_segment_start();
-            return;
-        }
-
-        let pointer = self.editor.cursor_pointer();
-        let current = self
-            .visual_positions
-            .iter()
-            .find(|entry| entry.pointer == pointer)
-            .map(|entry| entry.position)
-            .or(self.last_cursor_visual);
-
-        let Some(current_position) = current else {
+        let Some(current_position) = self.last_cursor_visual else {
             self.editor.move_to_segment_start();
             return;
         };
 
-        let destination = self
-            .visual_positions
-            .iter()
-            .filter(|entry| entry.position.line == current_position.line)
-            .cloned()
-            .min_by_key(|entry| {
-                (
-                    entry.position.content_column as usize,
-                    entry.position.column as usize,
-                    entry.pointer.offset,
-                )
-            });
+        let positions_on_line = self.get_positions_for_line(current_position.line);
+        let destination = positions_on_line.into_iter().min_by_key(|entry| {
+            (
+                entry.position.content_column as usize,
+                entry.position.column as usize,
+                entry.pointer.offset,
+            )
+        });
 
         if let Some(target) = destination {
             self.editor.move_to_pointer(&target.pointer);
@@ -359,36 +402,19 @@ impl EditorDisplay {
     pub fn move_to_visual_line_end(&mut self) {
         self.preferred_column = None;
 
-        if self.visual_positions.is_empty() {
-            self.editor.move_to_segment_end();
-            return;
-        }
-
-        let pointer = self.editor.cursor_pointer();
-        let current = self
-            .visual_positions
-            .iter()
-            .find(|entry| entry.pointer == pointer)
-            .map(|entry| entry.position)
-            .or(self.last_cursor_visual);
-
-        let Some(current_position) = current else {
+        let Some(current_position) = self.last_cursor_visual else {
             self.editor.move_to_segment_end();
             return;
         };
 
-        let destination = self
-            .visual_positions
-            .iter()
-            .filter(|entry| entry.position.line == current_position.line)
-            .cloned()
-            .max_by_key(|entry| {
-                (
-                    entry.position.content_column as usize,
-                    entry.position.column as usize,
-                    entry.pointer.offset,
-                )
-            });
+        let positions_on_line = self.get_positions_for_line(current_position.line);
+        let destination = positions_on_line.into_iter().max_by_key(|entry| {
+            (
+                entry.position.content_column as usize,
+                entry.position.column as usize,
+                entry.pointer.offset,
+            )
+        });
 
         if let Some(target) = destination {
             self.editor.move_to_pointer(&target.pointer);
@@ -401,11 +427,8 @@ impl EditorDisplay {
     /// Find the closest pointer on a given line to a target column
     /// Uses content_column (without left padding) for comparison
     fn closest_pointer_on_line(&self, line: usize, column: u16) -> Option<CursorDisplay> {
-        let positions_on_line: Vec<_> = self
-            .visual_positions
-            .iter()
-            .filter(|entry| entry.position.line == line)
-            .collect();
+        // Get positions for this line on-demand
+        let positions_on_line = self.get_positions_for_line(line);
 
         if positions_on_line.is_empty() {
             return None;
@@ -458,21 +481,7 @@ impl EditorDisplay {
         if delta == 0 {
             return None;
         }
-        let max_line = self
-            .visual_positions
-            .iter()
-            .map(|entry| entry.position.line)
-            .max()
-            .unwrap_or(0);
-
-        // Debug: show which lines have positions
-        let mut lines_with_positions: Vec<usize> = self
-            .visual_positions
-            .iter()
-            .map(|vp| vp.position.line)
-            .collect();
-        lines_with_positions.sort();
-        lines_with_positions.dedup();
+        let max_line = self.paragraph_lines.last().map(|p| p.end_line).unwrap_or(0);
 
         let mut distance = 1usize;
         loop {
@@ -505,18 +514,17 @@ impl EditorDisplay {
 
     /// Find the closest pointer near a line (searching up and down if not found on exact line)
     fn closest_pointer_near_line(&self, line: usize, column: u16) -> Option<CursorDisplay> {
-        if self.visual_positions.is_empty() {
-            return None;
-        }
+        // Try exact line first
         if let Some(hit) = self.closest_pointer_on_line(line, column) {
             return Some(hit);
         }
-        let max_line = self
-            .visual_positions
-            .iter()
-            .map(|entry| entry.position.line)
-            .max()
-            .unwrap_or(0);
+
+        // Get max line from paragraph_lines (lightweight)
+        let max_line = if let Some(last_para) = self.paragraph_lines.last() {
+            last_para.end_line
+        } else {
+            0
+        };
         let mut distance = 1usize;
         while line.checked_sub(distance).is_some() || line + distance <= max_line {
             if let Some(prev) = line.checked_sub(distance)
@@ -544,9 +552,6 @@ impl EditorDisplay {
         row: u16,
         scroll_top: usize,
     ) -> Option<CursorDisplay> {
-        if self.visual_positions.is_empty() {
-            return None;
-        }
         let area = self.last_text_area;
         if area.width == 0 || area.height == 0 {
             return None;
@@ -563,12 +568,7 @@ impl EditorDisplay {
 
     /// Get the start and end boundaries of a visual line
     pub fn visual_line_boundaries(&self, line: usize) -> Option<(CursorDisplay, CursorDisplay)> {
-        let mut entries: Vec<_> = self
-            .visual_positions
-            .iter()
-            .filter(|entry| entry.position.line == line)
-            .cloned()
-            .collect();
+        let mut entries = self.get_positions_for_line(line);
         if entries.is_empty() {
             return None;
         }
@@ -596,14 +596,22 @@ impl EditorDisplay {
     /// Focus on a specific pointer
     pub fn focus_pointer(&mut self, pointer: &CursorPointer) {
         if self.editor.move_to_pointer(pointer) {
-            if let Some(display) = self
-                .visual_positions
-                .iter()
-                .find(|entry| &entry.pointer == pointer)
-                .cloned()
-            {
-                self.last_cursor_visual = Some(display.position);
-                self.preferred_column = Some(display.position.content_column);
+            // Search for the visual position of this pointer in paragraph_lines
+            let found = self.paragraph_lines.iter().find_map(|info| {
+                info.positions
+                    .iter()
+                    .find(|(p, _)| p == pointer)
+                    .map(|(_, pos)| {
+                        // Convert relative position to absolute
+                        let mut absolute_pos = *pos;
+                        absolute_pos.line = info.start_line + pos.line;
+                        absolute_pos
+                    })
+            });
+
+            if let Some(position) = found {
+                self.last_cursor_visual = Some(position);
+                self.preferred_column = Some(position.content_column);
             } else {
                 self.last_cursor_visual = None;
                 self.preferred_column = None;
@@ -1281,13 +1289,8 @@ mod tests {
         let doc = Document::new().with_paragraphs(vec![para1, para2, para3]);
         let mut display = EditorDisplay::new(DocumentEditor::new(doc));
 
-        // Render to populate visual positions
-        let result = display.render_document_with_positions(80, 0, None);
-        display.visual_positions = result
-            .cursor_map
-            .into_iter()
-            .map(|(pointer, position)| CursorDisplay { pointer, position })
-            .collect();
+        // Render to populate paragraph_lines with positions
+        let _ = display.render_document_with_positions(80, 0, None);
 
         // Start from paragraph 1 (line 0), move to the 'T' in "Text"
         for _ in 0..10 {
