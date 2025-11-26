@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::hash::{Hash, Hasher};
 
 use ratatui::{
     style::{Color, Modifier, Style},
@@ -29,222 +28,6 @@ pub struct DirectCursorTracking<'a> {
     pub track_all_positions: bool,
 }
 
-/// Cache key for a rendered paragraph
-#[derive(Clone, Hash, Eq, PartialEq, Debug)]
-struct ParagraphCacheKey {
-    /// Index of the paragraph in the document
-    paragraph_index: usize,
-    /// Hash of the paragraph content (includes sentinels if present)
-    content_hash: u64,
-    /// Wrap width used for rendering
-    wrap_width: usize,
-    /// Left padding used for rendering
-    left_padding: usize,
-}
-
-/// Simplified position info for caching (content_line is computed later from line_metrics)
-#[derive(Clone, Debug)]
-pub struct CachedPosition {
-    pub line: usize,
-    pub column: u16,
-    pub content_column: u16,
-}
-
-/// Cached rendering result for a paragraph
-#[derive(Clone, Debug)]
-struct CachedParagraphRender {
-    /// The rendered lines
-    lines: Vec<Line<'static>>,
-    /// The metrics for each rendered line
-    line_metrics: Vec<LineMetric>,
-    /// Cached cursor positions (with line numbers relative to paragraph start)
-    /// Only populated when track_all_positions was true during rendering
-    /// These are stored with relative line numbers and converted to absolute when used
-    positions: Vec<(CursorPointer, CachedPosition)>,
-}
-
-/// Cache for rendered paragraphs
-#[derive(Debug)]
-pub struct RenderCache {
-    cache: HashMap<ParagraphCacheKey, CachedParagraphRender>,
-    /// Maximum cache size (number of entries)
-    max_size: usize,
-    /// Statistics for cache performance
-    pub hits: usize,
-    pub misses: usize,
-}
-
-impl Default for RenderCache {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl RenderCache {
-    pub fn new() -> Self {
-        Self {
-            cache: HashMap::new(),
-            max_size: 50000, // Cache up to 50k paragraphs (increased for large documents)
-            hits: 0,
-            misses: 0,
-        }
-    }
-
-    /// Clear the entire cache (called when document structure changes significantly)
-    pub fn clear(&mut self) {
-        self.cache.clear();
-        self.hits = 0;
-        self.misses = 0;
-    }
-
-    /// Invalidate cache for a specific paragraph index
-    #[allow(dead_code)]
-    pub fn invalidate_paragraph(&mut self, paragraph_index: usize) {
-        self.cache
-            .retain(|key, _| key.paragraph_index != paragraph_index);
-    }
-
-    /// Get cache hit rate (0.0 to 1.0)
-    #[allow(dead_code)]
-    pub fn hit_rate(&self) -> f64 {
-        let total = self.hits + self.misses;
-        if total == 0 {
-            0.0
-        } else {
-            self.hits as f64 / total as f64
-        }
-    }
-
-    fn get(&mut self, key: &ParagraphCacheKey) -> Option<&CachedParagraphRender> {
-        if let Some(result) = self.cache.get(key) {
-            self.hits += 1;
-            Some(result)
-        } else {
-            self.misses += 1;
-            None
-        }
-    }
-
-    fn insert(&mut self, key: ParagraphCacheKey, value: CachedParagraphRender) {
-        // Simple eviction: if cache is too large, clear it
-        if self.cache.len() >= self.max_size {
-            self.cache.clear();
-        }
-        self.cache.insert(key, value);
-    }
-
-    /// Query cached positions for a specific paragraph
-    /// Returns positions with line numbers relative to the paragraph start
-    pub fn get_paragraph_positions(
-        &self,
-        paragraph: &Paragraph,
-        paragraph_index: usize,
-        wrap_width: usize,
-        left_padding: usize,
-    ) -> Option<Vec<(CursorPointer, CachedPosition)>> {
-        let content_hash = hash_paragraph(paragraph);
-        let cache_key = ParagraphCacheKey {
-            paragraph_index,
-            content_hash,
-            wrap_width,
-            left_padding,
-        };
-
-        self.cache
-            .get(&cache_key)
-            .map(|cached| cached.positions.clone())
-    }
-}
-
-/// Compute a hash of paragraph content for cache invalidation
-fn hash_paragraph(paragraph: &Paragraph) -> u64 {
-    use std::collections::hash_map::DefaultHasher;
-
-    let mut hasher = DefaultHasher::new();
-
-    // Hash paragraph type
-    match paragraph.paragraph_type() {
-        ParagraphType::Text => 0u8.hash(&mut hasher),
-        ParagraphType::Header1 => 1u8.hash(&mut hasher),
-        ParagraphType::Header2 => 2u8.hash(&mut hasher),
-        ParagraphType::Header3 => 3u8.hash(&mut hasher),
-        ParagraphType::CodeBlock => 4u8.hash(&mut hasher),
-        ParagraphType::Quote => 5u8.hash(&mut hasher),
-        ParagraphType::UnorderedList => 6u8.hash(&mut hasher),
-        ParagraphType::OrderedList => 7u8.hash(&mut hasher),
-        ParagraphType::Checklist => 8u8.hash(&mut hasher),
-    }
-
-    // Hash content spans (recursively)
-    hash_spans(paragraph.content(), &mut hasher);
-
-    // Hash children (for quotes)
-    paragraph.children().len().hash(&mut hasher);
-    for child in paragraph.children() {
-        hash_paragraph(child).hash(&mut hasher);
-    }
-
-    // Hash entries (for lists)
-    paragraph.entries().len().hash(&mut hasher);
-    for entry in paragraph.entries() {
-        entry.len().hash(&mut hasher);
-        for para in entry {
-            hash_paragraph(para).hash(&mut hasher);
-        }
-    }
-
-    // Hash checklist items
-    if let Paragraph::Checklist { items } = paragraph {
-        items.len().hash(&mut hasher);
-        for item in items {
-            item.checked.hash(&mut hasher);
-            hash_spans(&item.content, &mut hasher);
-            // Hash nested items
-            item.children.len().hash(&mut hasher);
-            // (Recursive hashing would go here, keeping it simple for now)
-        }
-    }
-
-    hasher.finish()
-}
-
-/// Hash a list of spans recursively
-fn hash_spans(spans: &[DocSpan], hasher: &mut impl Hasher) {
-    spans.len().hash(hasher);
-    for span in spans {
-        hash_span(span, hasher);
-    }
-}
-
-/// Hash a single span recursively
-fn hash_span(span: &DocSpan, hasher: &mut impl Hasher) {
-    // Hash style
-    match span.style {
-        InlineStyle::None => 0u8.hash(hasher),
-        InlineStyle::Bold => 1u8.hash(hasher),
-        InlineStyle::Italic => 2u8.hash(hasher),
-        InlineStyle::Highlight => 3u8.hash(hasher),
-        InlineStyle::Underline => 4u8.hash(hasher),
-        InlineStyle::Strike => 5u8.hash(hasher),
-        InlineStyle::Link => 6u8.hash(hasher),
-        InlineStyle::Code => 7u8.hash(hasher),
-    }
-
-    // Hash text content
-    span.text.hash(hasher);
-
-    // Hash link target if present
-    if let Some(ref target) = span.link_target {
-        target.hash(hasher);
-    }
-
-    // Hash children recursively
-    span.children.len().hash(hasher);
-    for child in &span.children {
-        hash_span(child, hasher);
-    }
-}
-
 #[derive(Clone, Copy, Debug)]
 pub struct CursorVisualPosition {
     pub line: usize,
@@ -266,6 +49,21 @@ pub struct ParagraphLineInfo {
     /// All cursor positions within this paragraph
     /// Line numbers are RELATIVE to start_line for caching efficiency
     pub positions: Vec<(CursorPointer, CursorVisualPosition)>,
+}
+
+/// Result of laying out a single paragraph
+#[derive(Debug, Clone)]
+pub struct ParagraphLayout {
+    /// The rendered lines for this paragraph (without blank separator lines)
+    pub lines: Vec<Line<'static>>,
+    /// Line metrics for content line calculation
+    pub line_metrics: Vec<LineMetric>,
+    /// Cursor positions with line numbers RELATIVE to paragraph start (line 0)
+    pub positions: Vec<(CursorPointer, CursorVisualPosition)>,
+    /// The cursor visual position if found in this paragraph (with RELATIVE line number)
+    pub cursor: Option<CursorVisualPosition>,
+    /// Number of lines rendered
+    pub line_count: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -306,17 +104,83 @@ pub fn render_document_direct(
     left_padding: usize,
     reveal_tags: &[RevealTagRef],
     direct_tracking: DirectCursorTracking,
-    cache: Option<&mut RenderCache>,
 ) -> RenderResult {
     let mut renderer = DirectRenderer::new(
         wrap_width.max(1),
         left_padding,
         reveal_tags,
         direct_tracking,
-        cache,
     );
     renderer.render_document(document);
     renderer.finish()
+}
+
+/// Layout a single paragraph in isolation
+/// Returns the rendered lines and cursor positions with RELATIVE line numbers (starting from 0)
+pub fn layout_paragraph(
+    paragraph: &Paragraph,
+    paragraph_index: usize,
+    paragraph_path: ParagraphPath,
+    wrap_width: usize,
+    left_padding: usize,
+    prefix: &str,
+    reveal_tags: &[RevealTagRef],
+    direct_tracking: DirectCursorTracking,
+) -> ParagraphLayout {
+    // Create a temporary renderer for this paragraph only
+    let mut renderer = DirectRenderer::new(
+        wrap_width.max(1),
+        left_padding,
+        reveal_tags,
+        direct_tracking,
+    );
+
+    renderer.current_paragraph_index = paragraph_index;
+    renderer.current_paragraph_path = paragraph_path;
+
+    let start_marker_id = renderer.next_marker_id;
+
+    // Render the paragraph
+    renderer.render_paragraph(paragraph, prefix);
+
+    // Extract results
+    let lines = renderer.lines;
+    let line_metrics = renderer.line_metrics;
+    let line_count = lines.len();
+
+    // Extract positions with relative line numbers (already relative since we start at line 0)
+    let mut positions = Vec::new();
+    for (marker_id, pending) in renderer.marker_pending.iter() {
+        if *marker_id >= start_marker_id {
+            if let Some(pointer) = renderer.marker_to_pointer.get(marker_id) {
+                positions.push((
+                    pointer.clone(),
+                    CursorVisualPosition {
+                        line: pending.line, // Already relative since renderer starts at line 0
+                        column: pending.column,
+                        content_line: 0, // Will be computed later when assembled into full document
+                        content_column: pending.content_column,
+                    },
+                ));
+            }
+        }
+    }
+
+    // Find cursor if present (also with relative line number)
+    let cursor = renderer.cursor_pending.map(|pending| CursorVisualPosition {
+        line: pending.line,
+        column: pending.column,
+        content_line: 0, // Will be computed later
+        content_column: pending.content_column,
+    });
+
+    ParagraphLayout {
+        lines,
+        line_metrics,
+        positions,
+        cursor,
+        line_count,
+    }
 }
 
 /// Direct renderer that tracks cursor positions without sentinels
@@ -329,7 +193,6 @@ struct DirectRenderer<'a> {
     lines: Vec<Line<'static>>,
     current_line_index: usize,
     reveal_tags: HashMap<usize, RevealTagRef>,
-    cache: Option<&'a mut RenderCache>,
 
     // Direct position tracking
     cursor_pointer: Option<&'a CursorPointer>,
@@ -358,7 +221,6 @@ impl<'a> DirectRenderer<'a> {
         left_padding: usize,
         reveal_tags: &[RevealTagRef],
         direct_tracking: DirectCursorTracking<'a>,
-        cache: Option<&'a mut RenderCache>,
     ) -> Self {
         let wrap_limit = if wrap_width > 1 { wrap_width - 1 } else { 1 };
         let padding = if left_padding > 0 {
@@ -380,7 +242,6 @@ impl<'a> DirectRenderer<'a> {
             lines: Vec::new(),
             current_line_index: 0,
             reveal_tags: reveal_map,
-            cache,
             cursor_pointer: direct_tracking.cursor,
             selection_start: direct_tracking.selection.map(|(start, _)| start),
             selection_end: direct_tracking.selection.map(|(_, end)| end),
@@ -400,28 +261,73 @@ impl<'a> DirectRenderer<'a> {
             if idx > 0 {
                 self.push_plain_line("", false);
             }
-            self.current_paragraph_index = idx;
-            self.current_paragraph_path = ParagraphPath::new_root(idx);
 
-            // Record start line and marker ID before rendering this paragraph
+            // Record start line before rendering this paragraph
             let paragraph_start_line = self.current_line_index;
-            let paragraph_start_marker_id = self.next_marker_id;
 
-            self.render_paragraph_cached(paragraph, idx, "");
+            // Layout this paragraph using the standalone function
+            let direct_tracking = DirectCursorTracking {
+                cursor: self.cursor_pointer,
+                selection: if self.selection_start.is_some() && self.selection_end.is_some() {
+                    Some((self.selection_start.unwrap(), self.selection_end.unwrap()))
+                } else {
+                    None
+                },
+                track_all_positions: self.track_all_positions,
+            };
+
+            let reveal_tags: Vec<RevealTagRef> = self.reveal_tags.values().cloned().collect();
+
+            let layout = layout_paragraph(
+                paragraph,
+                idx,
+                ParagraphPath::new_root(idx),
+                self.wrap_width,
+                self.left_padding,
+                "",
+                &reveal_tags,
+                direct_tracking,
+            );
+
+            // Add the lines and metrics to our result
+            self.lines.extend(layout.lines);
+            self.line_metrics.extend(layout.line_metrics);
+            self.current_line_index += layout.line_count;
+
+            // Convert relative positions to absolute and add to marker maps
+            let paragraph_start_marker_id = self.next_marker_id;
+            for (pointer, position) in &layout.positions {
+                let marker_id = self.next_marker_id;
+                self.next_marker_id += 1;
+
+                let absolute_position = PendingPosition {
+                    line: paragraph_start_line + position.line,
+                    column: position.column,
+                    content_column: position.content_column,
+                };
+
+                self.marker_pending.insert(marker_id, absolute_position);
+                self.marker_to_pointer.insert(marker_id, pointer.clone());
+            }
+
+            // Update cursor if found
+            if let Some(cursor) = layout.cursor {
+                self.cursor_pending = Some(PendingPosition {
+                    line: paragraph_start_line + cursor.line,
+                    column: cursor.column,
+                    content_column: cursor.content_column,
+                });
+            }
 
             // Record end line for this paragraph
             let end_line = self.current_line_index.saturating_sub(1);
 
-            // Extract positions that were added during this paragraph's rendering
-            // Always populate positions - they're needed for cursor movement
-            // Store with RELATIVE line numbers for caching efficiency
+            // Build paragraph positions with relative line numbers
             let mut paragraph_positions = Vec::new();
             for (marker_id, pending) in self.marker_pending.iter() {
                 if *marker_id >= paragraph_start_marker_id {
                     if let Some(pointer) = self.marker_to_pointer.get(marker_id) {
-                        // Convert absolute line to relative (relative to paragraph start)
                         let relative_line = pending.line.saturating_sub(paragraph_start_line);
-                        // Note: content_line will be computed in finish() with full line_metrics
                         paragraph_positions.push((
                             pointer.clone(),
                             CursorVisualPosition {
@@ -441,118 +347,6 @@ impl<'a> DirectRenderer<'a> {
                 end_line,
                 positions: paragraph_positions,
             });
-        }
-    }
-
-    fn is_paragraph_active(&self, paragraph_index: usize) -> bool {
-        let check = |p: Option<&'a CursorPointer>| -> bool {
-            p.is_some_and(|ptr| ptr.paragraph_path.root_index() == Some(paragraph_index))
-        };
-
-        check(self.cursor_pointer) || check(self.selection_start) || check(self.selection_end)
-    }
-
-    fn render_paragraph_cached(
-        &mut self,
-        paragraph: &Paragraph,
-        paragraph_index: usize,
-        prefix: &str,
-    ) {
-        // Skip caching for paragraphs with prefixes (e.g., nested in lists/quotes)
-        if self.cache.is_none() || !prefix.is_empty() {
-            self.render_paragraph(paragraph, prefix);
-            return;
-        }
-
-        let paragraph_is_active = self.is_paragraph_active(paragraph_index);
-
-        let content_hash = hash_paragraph(paragraph);
-        let cache_key = ParagraphCacheKey {
-            paragraph_index,
-            content_hash,
-            wrap_width: self.wrap_width,
-            left_padding: self.left_padding,
-        };
-
-        if !paragraph_is_active
-            && let Some(cache) = &mut self.cache
-            && let Some(cached) = cache.get(&cache_key)
-        {
-            // Cache hit on non-active paragraph, so we can use it
-            let start_line = self.current_line_index;
-
-            self.lines.extend(cached.lines.iter().cloned());
-            self.line_metrics
-                .extend(cached.line_metrics.iter().cloned());
-            self.current_line_index += cached.lines.len();
-
-            // Restore cached positions, converting relative line numbers back to absolute
-            for (pointer, relative_position) in &cached.positions {
-                let marker_id = self.next_marker_id;
-                self.next_marker_id += 1;
-
-                let absolute_position = PendingPosition {
-                    line: start_line + relative_position.line,
-                    column: relative_position.column,
-                    content_column: relative_position.content_column,
-                };
-
-                self.marker_pending.insert(marker_id, absolute_position);
-                self.marker_to_pointer.insert(marker_id, pointer.clone());
-            }
-
-            return;
-        }
-
-        // Active paragraph, or cache miss on non-active paragraph.
-        if paragraph_is_active {
-            if let Some(cache) = &mut self.cache {
-                // We don't check the cache, just record a miss because it needs re-rendering anyway.
-                cache.misses += 1;
-            }
-            self.render_paragraph(paragraph, prefix);
-            return; // Don't cache rendering of active paragraph (contains cursor styles)
-        }
-
-        // This path is for non-active paragraphs that were a cache miss.
-        // `cache.get` was already called above and recorded the miss.
-        let start_line = self.lines.len();
-        let start_metric_count = self.line_metrics.len();
-        let start_marker_id = self.next_marker_id;
-
-        self.render_paragraph(paragraph, prefix);
-
-        let rendered_lines: Vec<Line<'static>> = self.lines[start_line..].to_vec();
-        let rendered_metrics: Vec<LineMetric> = self.line_metrics[start_metric_count..].to_vec();
-
-        // Capture positions generated during rendering, with line numbers relative to paragraph
-        let mut cached_positions = Vec::new();
-        if self.track_all_positions {
-            // Extract markers that were added during this paragraph's rendering
-            for (marker_id, pending) in self.marker_pending.iter() {
-                if *marker_id >= start_marker_id
-                    && let Some(pointer) = self.marker_to_pointer.get(marker_id)
-                {
-                    // Convert absolute line to relative line (relative to paragraph start)
-                    let relative_position = CachedPosition {
-                        line: pending.line.saturating_sub(start_line),
-                        column: pending.column,
-                        content_column: pending.content_column,
-                    };
-                    cached_positions.push((pointer.clone(), relative_position));
-                }
-            }
-        }
-
-        if let Some(cache) = &mut self.cache {
-            cache.insert(
-                cache_key,
-                CachedParagraphRender {
-                    lines: rendered_lines,
-                    line_metrics: rendered_metrics,
-                    positions: cached_positions,
-                },
-            );
         }
     }
 
@@ -1924,8 +1718,8 @@ struct PendingPosition {
 }
 
 #[derive(Clone, Copy, Debug)]
-struct LineMetric {
-    counts_as_content: bool,
+pub struct LineMetric {
+    pub counts_as_content: bool,
 }
 
 #[cfg(test)]
@@ -1948,7 +1742,7 @@ mod tests {
             selection: None,
             track_all_positions: false,
         };
-        render_document_direct(&document, 120, 0, &[], tracking, None)
+        render_document_direct(&document, 120, 0, &[], tracking)
     }
 
     fn lines_to_strings(lines: &[Line<'_>]) -> Vec<String> {
@@ -2020,7 +1814,7 @@ mod tests {
             selection: None,
             track_all_positions: false,
         };
-        let rendered = render_document_direct(editor.document(), 120, 0, &[], tracking, None);
+        let rendered = render_document_direct(editor.document(), 120, 0, &[], tracking);
         let lines = lines_to_strings(&rendered.lines);
         assert_eq!(lines, vec!["• Alpha", "", "  Beta"]);
     }
@@ -2039,7 +1833,7 @@ mod tests {
             selection: None,
             track_all_positions: false,
         };
-        let rendered = render_document_direct(editor.document(), 120, 0, &[], tracking, None);
+        let rendered = render_document_direct(editor.document(), 120, 0, &[], tracking);
         assert!(
             rendered.cursor.is_some(),
             "expected cursor to be rendered for checklist content"
@@ -2070,7 +1864,7 @@ mod tests {
             selection: None,
             track_all_positions: false,
         };
-        let rendered = render_document_direct(editor.document(), 120, 0, &[], tracking, None);
+        let rendered = render_document_direct(editor.document(), 120, 0, &[], tracking);
         let cursor = rendered.cursor.expect("cursor position missing");
 
         assert_eq!(cursor.line, 2, "visual line should match second list item");
@@ -2100,7 +1894,7 @@ mod tests {
             selection: None,
             track_all_positions: false,
         };
-        let rendered = render_document_direct(editor.document(), 120, 0, &[], tracking, None);
+        let rendered = render_document_direct(editor.document(), 120, 0, &[], tracking);
         let cursor = rendered.cursor.expect("cursor position missing");
 
         assert_eq!(cursor.line, 0);
@@ -2121,7 +1915,7 @@ mod tests {
             selection: None,
             track_all_positions: true,
         };
-        let rendered = render_document_direct(editor.document(), 12, 0, &[], tracking, None);
+        let rendered = render_document_direct(editor.document(), 12, 0, &[], tracking);
 
         let mut columns_per_line: Vec<Vec<(u16, u16)>> = Vec::new();
         // Extract positions from paragraph_lines
@@ -2166,7 +1960,7 @@ mod tests {
             selection: None,
             track_all_positions: true,
         };
-        let rendered = render_document_direct(editor.document(), 10, 0, &[], tracking, None);
+        let rendered = render_document_direct(editor.document(), 10, 0, &[], tracking);
         let cursor = rendered.cursor.expect("cursor position missing");
         let lines = lines_to_strings(&rendered.lines);
 
@@ -2211,8 +2005,7 @@ mod tests {
             selection: None,
             track_all_positions: false,
         };
-        let rendered =
-            render_document_direct(editor.document(), 120, 0, &reveal_tags, tracking, None);
+        let rendered = render_document_direct(editor.document(), 120, 0, &reveal_tags, tracking);
         let lines = lines_to_strings(&rendered.lines);
         assert_eq!(lines, vec!["Hello [Bold>World<Bold]!"]);
 
@@ -2271,8 +2064,7 @@ mod tests {
                 selection: None,
                 track_all_positions: false,
             };
-            let rendered =
-                render_document_direct(editor.document(), 120, 0, reveal_tags, tracking, None);
+            let rendered = render_document_direct(editor.document(), 120, 0, reveal_tags, tracking);
             let cursor = rendered.cursor.expect("cursor should be rendered");
             let actual_position = usize::from(cursor.content_column) + 1;
 
@@ -2345,65 +2137,5 @@ mod tests {
             !editor.move_left(),
             "cursor should not move left past the start of the paragraph"
         );
-    }
-
-    #[test]
-    fn direct_renderer_uses_cache() {
-        let document = ftml! {
-            p { "Paragraph 1" }
-            p { "Paragraph 2" }
-            p { "Paragraph 3" }
-        };
-        let mut editor = DocumentEditor::new(document.clone());
-        editor.ensure_cursor_selectable(); // cursor at P1 (index 0)
-
-        let mut cache = RenderCache::new();
-
-        // --- First render ---
-        // Everything is a miss, populating the cache.
-        let tracking1 = DirectCursorTracking {
-            cursor: Some(&editor.cursor_pointer()),
-            selection: None,
-            track_all_positions: false,
-        };
-        let _ = render_document_direct(&document, 80, 0, &[], tracking1, Some(&mut cache));
-
-        assert_eq!(cache.misses, 3);
-        assert_eq!(cache.hits, 0);
-
-        // --- Second render, cursor hasn't moved ---
-        // P1 is active (miss), P2/P3 from cache (2 hits).
-        cache.hits = 0;
-        cache.misses = 0;
-        let tracking2 = DirectCursorTracking {
-            cursor: Some(&editor.cursor_pointer()),
-            selection: None,
-            track_all_positions: false,
-        };
-        let _ = render_document_direct(&document, 80, 0, &[], tracking2, Some(&mut cache));
-
-        assert_eq!(
-            cache.misses, 1,
-            "only active paragraph should be a cache miss"
-        );
-        assert_eq!(cache.hits, 2, "inactive paragraphs should be cache hits");
-
-        // --- Third render, move cursor to P2 ---
-        assert!(editor.move_down(), "failed to move cursor down to P2");
-        cache.hits = 0;
-        cache.misses = 0;
-        let tracking3 = DirectCursorTracking {
-            cursor: Some(&editor.cursor_pointer()),
-            selection: None,
-            track_all_positions: false,
-        };
-        let _ = render_document_direct(&document, 80, 0, &[], tracking3, Some(&mut cache));
-
-        // P1 is active (miss), P0 is a miss because it's being cached for the first time, P2 is a hit
-        assert_eq!(
-            cache.misses, 2,
-            "P1 (active) and P0 (first time cache) should be misses"
-        );
-        assert_eq!(cache.hits, 1, "P2 should be a hit");
     }
 }

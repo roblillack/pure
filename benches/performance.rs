@@ -235,94 +235,11 @@ fn bench_rendering_performance() {
                     0,   // left_padding
                     &[], // reveal_tags
                     tracking,
-                    None, // cache
+                    // None
                 );
             },
         );
         result.print();
-    }
-}
-
-#[test]
-fn bench_rendering_with_cache() {
-    println!("\n\n╔════════════════════════════════════════════════════════════════╗");
-    println!("║         RENDERING WITH CACHE BENCHMARKS (CACHE HITS)          ║");
-    println!("╚════════════════════════════════════════════════════════════════╝");
-
-    let docs = vec![
-        (
-            "Small (10 paras)",
-            create_test_document(SMALL_DOC_PARAGRAPHS, 20),
-        ),
-        (
-            "Medium (100 paras)",
-            create_test_document(MEDIUM_DOC_PARAGRAPHS, 20),
-        ),
-        (
-            "Large (1000 paras)",
-            create_test_document(LARGE_DOC_PARAGRAPHS, 20),
-        ),
-        (
-            "Huge (10000 paras)",
-            create_test_document(HUGE_DOC_PARAGRAPHS, 20),
-        ),
-    ];
-
-    for (name, doc) in docs {
-        let mut cache = render::RenderCache::new();
-
-        // First render - cache miss
-        let start = std::time::Instant::now();
-        let tracking = DirectCursorTracking {
-            cursor: None,
-            selection: None,
-            track_all_positions: false,
-        };
-        let _ = render::render_document_direct(
-            &doc,
-            80,  // wrap_width
-            0,   // left_padding
-            &[], // reveal_tags
-            tracking,
-            Some(&mut cache),
-        );
-        let first_render = start.elapsed();
-
-        // Subsequent renders - cache hits
-        let iterations = if name.contains("Huge") { 50 } else { 100 };
-        let mut durations = Vec::new();
-
-        for _ in 0..iterations {
-            let start = std::time::Instant::now();
-            let tracking = DirectCursorTracking {
-                cursor: None,
-                selection: None,
-                track_all_positions: false,
-            };
-            let _ = render::render_document_direct(&doc, 80, 0, &[], tracking, Some(&mut cache));
-            durations.push(start.elapsed());
-        }
-
-        let total_duration: Duration = durations.iter().sum();
-        let avg_cached = total_duration / iterations as u32;
-        let min_cached = *durations.iter().min().unwrap();
-        let max_cached = *durations.iter().max().unwrap();
-
-        println!("\n{}", name);
-        println!("  First render (cold cache): {:?}", first_render);
-        println!("  Cached renders (avg):      {:?}", avg_cached);
-        println!("  Cached renders (min):      {:?}", min_cached);
-        println!("  Cached renders (max):      {:?}", max_cached);
-        println!(
-            "  Speedup:                   {:.2}x",
-            first_render.as_secs_f64() / avg_cached.as_secs_f64()
-        );
-        println!("  Cache hits:                {}", cache.hits);
-        println!("  Cache misses:              {}", cache.misses);
-        println!(
-            "  Cache hit rate:            {:.1}%",
-            cache.hit_rate() * 100.0
-        );
     }
 }
 
@@ -354,7 +271,7 @@ fn bench_rendering_with_styles() {
                 selection: None,
                 track_all_positions: false,
             };
-            let _ = render::render_document_direct(&doc, 80, 0, &[], tracking, None);
+            let _ = render::render_document_direct(&doc, 80, 0, &[], tracking);
         });
         result.print();
     }
@@ -374,7 +291,7 @@ fn bench_rendering_reveal_codes() {
             selection: None,
             track_all_positions: false,
         };
-        let _ = render::render_document_direct(&doc, 80, 0, &[], tracking, None);
+        let _ = render::render_document_direct(&doc, 80, 0, &[], tracking);
     });
     result_normal.print();
 
@@ -384,7 +301,7 @@ fn bench_rendering_reveal_codes() {
             selection: None,
             track_all_positions: false,
         };
-        let _ = render::render_document_direct(&doc, 80, 0, &[], tracking, None);
+        let _ = render::render_document_direct(&doc, 80, 0, &[], tracking);
     });
     result_reveal.print();
 
@@ -591,7 +508,7 @@ fn bench_wrap_width_impact() {
                     selection: None,
                     track_all_positions: false,
                 };
-                let _ = render::render_document_direct(&doc, width, 0, &[], tracking, None);
+                let _ = render::render_document_direct(&doc, width, 0, &[], tracking);
             },
         );
         result.print();
@@ -617,7 +534,7 @@ fn bench_memory_allocations() {
         selection: None,
         track_all_positions: false,
     };
-    let render_result = render::render_document_direct(&doc, 80, 0, &[], tracking, None);
+    let render_result = render::render_document_direct(&doc, 80, 0, &[], tracking);
     println!("  Rendered lines: {}", render_result.lines.len());
     println!(
         "  Cursor map entries: {}",
@@ -708,14 +625,14 @@ fn bench_scrolling_detailed_analysis() {
     );
 
     // Calculate cache statistics
-    let cache_hits = display.render_cache_hits();
-    let cache_misses = display.render_cache_misses();
+    let cache_hits = // display.render_cache_hits();
+    let cache_misses = // display.render_cache_misses();
     println!("\n💾 Cache Statistics:");
     println!("  Hits:       {}", cache_hits);
     println!("  Misses:     {}", cache_misses);
     println!(
         "  Hit rate:   {:.1}%",
-        display.render_cache_hit_rate() * 100.0
+        // display.render_cache_hit_rate() * 100.0
     );
 
     // Analysis
@@ -741,7 +658,7 @@ fn bench_scrolling_detailed_analysis() {
     println!("\n3. CACHE EFFICIENCY:");
     println!(
         "   Cache hit rate is {:.1}%, but rendering is still slow",
-        display.render_cache_hit_rate() * 100.0
+        // display.render_cache_hit_rate() * 100.0
     );
     println!("   This suggests the bottleneck is not cache misses, but rather:");
     println!(
@@ -893,10 +810,10 @@ fn bench_editing_insert_text() {
 
     // Get cache statistics
     let cache_info = format!(
-        "Cache - Hits: {}, Misses: {}, Hit rate: {:.1}%",
-        display.render_cache_hits(),
-        display.render_cache_misses(),
-        display.render_cache_hit_rate() * 100.0
+        "// Cache - Hits: {}, Misses: {}, Hit rate: {:.1}%",
+        // display.render_cache_hits(),
+        // display.render_cache_misses(),
+        // display.render_cache_hit_rate() * 100.0
     );
 
     println!("\n╔════════════════════════════════════════════════════════════════╗");
@@ -1021,7 +938,7 @@ fn bench_user_guide_rendering() {
             selection: None,
             track_all_positions: false,
         };
-        let _ = render::render_document_direct(&doc, 80, 0, &[], tracking, None);
+        let _ = render::render_document_direct(&doc, 80, 0, &[], tracking);
         durations.push(start.elapsed());
     }
 
@@ -1044,7 +961,7 @@ fn bench_user_guide_rendering() {
 
     // Test with cache
     println!("\nWith render cache:");
-    let mut cache = render::RenderCache::new();
+    let mut cache = // render::RenderCache::new();
 
     // First render - cold cache
     let start = Instant::now();
@@ -1053,7 +970,7 @@ fn bench_user_guide_rendering() {
         selection: None,
         track_all_positions: false,
     };
-    let _ = render::render_document_direct(&doc, 80, 0, &[], tracking, Some(&mut cache));
+    let _ = render::render_document_direct(&doc, 80, 0, &[], tracking);
     let first_render = start.elapsed();
 
     // Subsequent renders - warm cache
@@ -1065,7 +982,7 @@ fn bench_user_guide_rendering() {
             selection: None,
             track_all_positions: false,
         };
-        let _ = render::render_document_direct(&doc, 80, 0, &[], tracking, Some(&mut cache));
+        let _ = render::render_document_direct(&doc, 80, 0, &[], tracking);
         cached_durations.push(start.elapsed());
     }
 
@@ -1097,7 +1014,7 @@ fn bench_real_world_render_flow() {
         tdoc::markdown::parse(std::io::Cursor::new(&content)).expect("Failed to parse markdown");
 
     let editor = editor::DocumentEditor::new(doc);
-    let mut cache = render::RenderCache::new();
+    let mut cache = // render::RenderCache::new();
 
     println!("\nDocument stats:");
     println!("  Paragraphs: {}", editor.document().paragraphs.len());
@@ -1130,7 +1047,6 @@ fn bench_real_world_render_flow() {
             0,
             &[],
             tracking,
-            Some(&mut cache),
         );
         render_times.push(render_start.elapsed());
 
@@ -1275,10 +1191,10 @@ fn bench_scrolling_cursor_movement() {
 
     // Get cache statistics
     let cache_info = format!(
-        "Cache - Hits: {}, Misses: {}, Hit rate: {:.1}%",
-        display.render_cache_hits(),
-        display.render_cache_misses(),
-        display.render_cache_hit_rate() * 100.0
+        "// Cache - Hits: {}, Misses: {}, Hit rate: {:.1}%",
+        // display.render_cache_hits(),
+        // display.render_cache_misses(),
+        // display.render_cache_hit_rate() * 100.0
     );
 
     println!("\n╔════════════════════════════════════════════════════════════════╗");
@@ -1408,10 +1324,10 @@ fn bench_scrolling_page_down() {
 
     // Get cache statistics
     let cache_info = format!(
-        "Cache - Hits: {}, Misses: {}, Hit rate: {:.1}%",
-        display.render_cache_hits(),
-        display.render_cache_misses(),
-        display.render_cache_hit_rate() * 100.0
+        "// Cache - Hits: {}, Misses: {}, Hit rate: {:.1}%",
+        // display.render_cache_hits(),
+        // display.render_cache_misses(),
+        // display.render_cache_hit_rate() * 100.0
     );
 
     println!("\n╔════════════════════════════════════════════════════════════════╗");
