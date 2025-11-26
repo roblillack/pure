@@ -619,7 +619,14 @@ fn bench_memory_allocations() {
     };
     let render_result = render::render_document_direct(&doc, 80, 0, &[], tracking, None);
     println!("  Rendered lines: {}", render_result.lines.len());
-    println!("  Cursor map entries: {}", render_result.cursor_map.len());
+    println!(
+        "  Cursor map entries: {}",
+        render_result
+            .paragraph_lines
+            .iter()
+            .map(|p| p.positions.len())
+            .sum::<usize>()
+    );
 
     println!("\nAllocations per edit cycle:");
     println!("  - Full segment Vec rebuild");
@@ -658,10 +665,23 @@ fn bench_scrolling_detailed_analysis() {
     display.update_after_render(text_area, result.lines.len());
 
     println!("\n📊 Document Statistics:");
-    println!("  Paragraphs:          {}", display.document().paragraphs.len());
+    println!(
+        "  Paragraphs:          {}",
+        display.document().paragraphs.len()
+    );
     println!("  Total visual lines:  {}", result.lines.len());
-    println!("  Cursor map entries:  {}", result.cursor_map.len());
-    println!("  Visual positions:    {}", display.visual_positions().len());
+    println!(
+        "  Cursor map entries:  {}",
+        result
+            .paragraph_lines
+            .iter()
+            .map(|p| p.positions.len())
+            .sum::<usize>()
+    );
+    println!(
+        "  Visual positions:    {}",
+        display.visual_positions().len()
+    );
     println!("  File size:           {} bytes", content.len());
 
     // Measure a single operation in detail
@@ -678,7 +698,14 @@ fn bench_scrolling_detailed_analysis() {
     let result = display.render_document(80, 0, None);
     let render_time = render_start.elapsed();
     println!("  render_document:      {:?}", render_time);
-    println!("  Cursor map size:      {}", result.cursor_map.len());
+    println!(
+        "  Cursor map size:      {}",
+        result
+            .paragraph_lines
+            .iter()
+            .map(|p| p.positions.len())
+            .sum::<usize>()
+    );
 
     // Calculate cache statistics
     let cache_hits = display.render_cache_hits();
@@ -686,34 +713,63 @@ fn bench_scrolling_detailed_analysis() {
     println!("\n💾 Cache Statistics:");
     println!("  Hits:       {}", cache_hits);
     println!("  Misses:     {}", cache_misses);
-    println!("  Hit rate:   {:.1}%", display.render_cache_hit_rate() * 100.0);
+    println!(
+        "  Hit rate:   {:.1}%",
+        display.render_cache_hit_rate() * 100.0
+    );
 
     // Analysis
     println!("\n🔍 Performance Analysis:");
     println!("\n1. RENDERING BOTTLENECK:");
-    println!("   Rendering takes {:?} ({:.1}% of total time)",
+    println!(
+        "   Rendering takes {:?} ({:.1}% of total time)",
         render_time,
         render_time.as_secs_f64() / (move_time + render_time).as_secs_f64() * 100.0
     );
 
     println!("\n2. CURSOR MAP SIZE:");
-    println!("   {} cursor positions tracked per render", result.cursor_map.len());
+    println!(
+        "   {} cursor positions tracked per render",
+        result
+            .paragraph_lines
+            .iter()
+            .map(|p| p.positions.len())
+            .sum::<usize>()
+    );
     println!("   This happens because track_all_positions=true in EditorDisplay::render_document");
 
     println!("\n3. CACHE EFFICIENCY:");
-    println!("   Cache hit rate is {:.1}%, but rendering is still slow",
+    println!(
+        "   Cache hit rate is {:.1}%, but rendering is still slow",
         display.render_cache_hit_rate() * 100.0
     );
     println!("   This suggests the bottleneck is not cache misses, but rather:");
-    println!("   - Processing {} cached cursor positions", result.cursor_map.len());
+    println!(
+        "   - Processing {} cached cursor positions",
+        result
+            .paragraph_lines
+            .iter()
+            .map(|p| p.positions.len())
+            .sum::<usize>()
+    );
     println!("   - Building the cursor_map Vec on every render");
     println!("   - Cloning cursor positions into visual_positions Vec");
 
     println!("\n4. ROOT CAUSES:");
-    println!("   ✗ track_all_positions=true tracks {} positions per render", result.cursor_map.len());
+    println!(
+        "   ✗ track_all_positions=true tracks {} positions per render",
+        result
+            .paragraph_lines
+            .iter()
+            .map(|p| p.positions.len())
+            .sum::<usize>()
+    );
     println!("   ✗ Every render allocates and populates large cursor_map Vec");
     println!("   ✗ visual_positions Vec is rebuilt on every render");
-    println!("   ✗ With {} visual lines, this creates significant overhead", result.lines.len());
+    println!(
+        "   ✗ With {} visual lines, this creates significant overhead",
+        result.lines.len()
+    );
 
     println!("\n5. RECOMMENDED FIXES:");
     println!("   1. Set track_all_positions=false when only cursor position is needed");
@@ -724,7 +780,14 @@ fn bench_scrolling_detailed_analysis() {
 
     println!("\n6. EXPECTED IMPROVEMENT:");
     println!("   If track_all_positions=false:");
-    println!("   - Eliminate {} cursor position tracking operations", result.cursor_map.len());
+    println!(
+        "   - Eliminate {} cursor position tracking operations",
+        result
+            .paragraph_lines
+            .iter()
+            .map(|p| p.positions.len())
+            .sum::<usize>()
+    );
     println!("   - Reduce memory allocations significantly");
     println!("   - Expected render time: <5ms (10x improvement)");
     println!("   - Combined time: <8ms (meets <10ms target)");
@@ -768,14 +831,20 @@ fn bench_editing_insert_text() {
     for _ in 0..20 {
         display.move_down();
         if matches!(
-            display.document().paragraphs.get(display.cursor_pointer().paragraph_path.numeric_steps()[0]),
+            display
+                .document()
+                .paragraphs
+                .get(display.cursor_pointer().paragraph_path.numeric_steps()[0]),
             Some(tdoc::Paragraph::Text { .. })
         ) {
             break;
         }
     }
 
-    println!("  Starting paragraph: {:?}", display.cursor_pointer().paragraph_path.numeric_steps());
+    println!(
+        "  Starting paragraph: {:?}",
+        display.cursor_pointer().paragraph_path.numeric_steps()
+    );
 
     // Prepare text to insert: 100 words
     let words_to_insert = "Lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod tempor incididunt ut labore et dolore magna aliqua ";
@@ -856,10 +925,16 @@ fn bench_editing_insert_text() {
     // Performance assessment
     println!("\n🎯 Performance Assessment:");
     if combined_avg.as_millis() > 10 {
-        println!("  ❌ FAILED: Average > 10ms target ({:.2}ms)", combined_avg.as_secs_f64() * 1000.0);
+        println!(
+            "  ❌ FAILED: Average > 10ms target ({:.2}ms)",
+            combined_avg.as_secs_f64() * 1000.0
+        );
         println!("     Users will experience noticeable lag when typing.");
     } else {
-        println!("  ✅ PASSED: Average < 10ms target ({:.2}ms)", combined_avg.as_secs_f64() * 1000.0);
+        println!(
+            "  ✅ PASSED: Average < 10ms target ({:.2}ms)",
+            combined_avg.as_secs_f64() * 1000.0
+        );
         println!("     Typing should feel smooth and responsive.");
     }
 
@@ -1232,10 +1307,16 @@ fn bench_scrolling_cursor_movement() {
     // Performance assessment
     println!("\n🎯 Performance Assessment:");
     if combined_avg.as_millis() > 10 {
-        println!("  ❌ FAILED: Average > 10ms target ({:.2}ms)", combined_avg.as_secs_f64() * 1000.0);
+        println!(
+            "  ❌ FAILED: Average > 10ms target ({:.2}ms)",
+            combined_avg.as_secs_f64() * 1000.0
+        );
         println!("     Users will experience noticeable lag when scrolling.");
     } else {
-        println!("  ✅ PASSED: Average < 10ms target ({:.2}ms)", combined_avg.as_secs_f64() * 1000.0);
+        println!(
+            "  ✅ PASSED: Average < 10ms target ({:.2}ms)",
+            combined_avg.as_secs_f64() * 1000.0
+        );
         println!("     Scrolling should feel smooth and responsive.");
     }
 
@@ -1276,7 +1357,10 @@ fn bench_scrolling_page_down() {
     println!("\nDocument stats:");
     println!("  Paragraphs: {}", display.document().paragraphs.len());
     println!("  Total visual lines: {}", result.lines.len());
-    println!("  Page jump distance: {} lines", display.page_jump_distance());
+    println!(
+        "  Page jump distance: {} lines",
+        display.page_jump_distance()
+    );
     println!("  File size: {} bytes", content.len());
 
     // Track timing for each page down press
@@ -1356,10 +1440,16 @@ fn bench_scrolling_page_down() {
     // Performance assessment
     println!("\n🎯 Performance Assessment:");
     if combined_avg.as_millis() > 10 {
-        println!("  ❌ FAILED: Average > 10ms target ({:.2}ms)", combined_avg.as_secs_f64() * 1000.0);
+        println!(
+            "  ❌ FAILED: Average > 10ms target ({:.2}ms)",
+            combined_avg.as_secs_f64() * 1000.0
+        );
         println!("     Users will experience noticeable lag when paging.");
     } else {
-        println!("  ✅ PASSED: Average < 10ms target ({:.2}ms)", combined_avg.as_secs_f64() * 1000.0);
+        println!(
+            "  ✅ PASSED: Average < 10ms target ({:.2}ms)",
+            combined_avg.as_secs_f64() * 1000.0
+        );
         println!("     Paging should feel smooth and responsive.");
     }
 

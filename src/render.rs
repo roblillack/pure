@@ -44,10 +44,10 @@ struct ParagraphCacheKey {
 
 /// Simplified position info for caching (content_line is computed later from line_metrics)
 #[derive(Clone, Debug)]
-struct CachedPosition {
-    line: usize,
-    column: u16,
-    content_column: u16,
+pub struct CachedPosition {
+    pub line: usize,
+    pub column: u16,
+    pub content_column: u16,
 }
 
 /// Cached rendering result for a paragraph
@@ -59,6 +59,7 @@ struct CachedParagraphRender {
     line_metrics: Vec<LineMetric>,
     /// Cached cursor positions (with line numbers relative to paragraph start)
     /// Only populated when track_all_positions was true during rendering
+    /// These are stored with relative line numbers and converted to absolute when used
     positions: Vec<(CursorPointer, CachedPosition)>,
 }
 
@@ -130,6 +131,28 @@ impl RenderCache {
             self.cache.clear();
         }
         self.cache.insert(key, value);
+    }
+
+    /// Query cached positions for a specific paragraph
+    /// Returns positions with line numbers relative to the paragraph start
+    pub fn get_paragraph_positions(
+        &self,
+        paragraph: &Paragraph,
+        paragraph_index: usize,
+        wrap_width: usize,
+        left_padding: usize,
+    ) -> Option<Vec<(CursorPointer, CachedPosition)>> {
+        let content_hash = hash_paragraph(paragraph);
+        let cache_key = ParagraphCacheKey {
+            paragraph_index,
+            content_hash,
+            wrap_width,
+            left_padding,
+        };
+
+        self.cache
+            .get(&cache_key)
+            .map(|cached| cached.positions.clone())
     }
 }
 
@@ -230,13 +253,29 @@ pub struct CursorVisualPosition {
     pub content_column: u16,
 }
 
-#[derive(Debug)]
+/// Maps visual lines to the paragraph that rendered them
+/// Also contains all cursor positions within this paragraph
+#[derive(Debug, Clone)]
+pub struct ParagraphLineInfo {
+    /// Index of the paragraph in the document
+    pub paragraph_index: usize,
+    /// First visual line this paragraph occupies (absolute)
+    pub start_line: usize,
+    /// Last visual line this paragraph occupies (inclusive, absolute)
+    pub end_line: usize,
+    /// All cursor positions within this paragraph
+    /// Line numbers are RELATIVE to start_line for caching efficiency
+    pub positions: Vec<(CursorPointer, CursorVisualPosition)>,
+}
+
+#[derive(Debug, Clone)]
 pub struct RenderResult {
     pub lines: Vec<Line<'static>>,
     pub cursor: Option<CursorVisualPosition>,
     pub total_lines: usize,
     pub content_lines: usize,
-    pub cursor_map: Vec<(CursorPointer, CursorVisualPosition)>,
+    /// Maps visual lines to paragraphs, including all cursor positions
+    pub paragraph_lines: Vec<ParagraphLineInfo>,
 }
 
 fn inline_style_display(style: InlineStyle) -> &'static str {
@@ -307,6 +346,9 @@ struct DirectRenderer<'a> {
     cursor_pending: Option<PendingPosition>,
     next_marker_id: usize,
     marker_to_pointer: HashMap<usize, CursorPointer>,
+
+    // Paragraph line range tracking
+    paragraph_lines: Vec<ParagraphLineInfo>,
 }
 
 impl<'a> DirectRenderer<'a> {
@@ -349,6 +391,7 @@ impl<'a> DirectRenderer<'a> {
             cursor_pending: None,
             next_marker_id: 0,
             marker_to_pointer: HashMap::new(),
+            paragraph_lines: Vec::new(),
         }
     }
 
@@ -359,7 +402,45 @@ impl<'a> DirectRenderer<'a> {
             }
             self.current_paragraph_index = idx;
             self.current_paragraph_path = ParagraphPath::new_root(idx);
+
+            // Record start line and marker ID before rendering this paragraph
+            let paragraph_start_line = self.current_line_index;
+            let paragraph_start_marker_id = self.next_marker_id;
+
             self.render_paragraph_cached(paragraph, idx, "");
+
+            // Record end line for this paragraph
+            let end_line = self.current_line_index.saturating_sub(1);
+
+            // Extract positions that were added during this paragraph's rendering
+            // Always populate positions - they're needed for cursor movement
+            // Store with RELATIVE line numbers for caching efficiency
+            let mut paragraph_positions = Vec::new();
+            for (marker_id, pending) in self.marker_pending.iter() {
+                if *marker_id >= paragraph_start_marker_id {
+                    if let Some(pointer) = self.marker_to_pointer.get(marker_id) {
+                        // Convert absolute line to relative (relative to paragraph start)
+                        let relative_line = pending.line.saturating_sub(paragraph_start_line);
+                        // Note: content_line will be computed in finish() with full line_metrics
+                        paragraph_positions.push((
+                            pointer.clone(),
+                            CursorVisualPosition {
+                                line: relative_line,
+                                column: pending.column,
+                                content_line: 0, // Will be computed in finish()
+                                content_column: pending.content_column,
+                            },
+                        ));
+                    }
+                }
+            }
+
+            self.paragraph_lines.push(ParagraphLineInfo {
+                paragraph_index: idx,
+                start_line: paragraph_start_line,
+                end_line,
+                positions: paragraph_positions,
+            });
         }
     }
 
@@ -1225,21 +1306,15 @@ impl<'a> DirectRenderer<'a> {
                 content_column: pending.content_column,
             });
 
-        // Build cursor map from tracked positions
-        let mut cursor_map = Vec::new();
-        for (marker_id, pending) in self.marker_pending.iter() {
-            if let Some(pointer) = self.marker_to_pointer.get(marker_id) {
-                let content_line = content_line_numbers
-                    .get(pending.line)
+        // Update content_line for all positions in paragraph_lines
+        // Positions are stored with relative line numbers, so convert to absolute for lookup
+        for paragraph_info in &mut self.paragraph_lines {
+            for (_, position) in &mut paragraph_info.positions {
+                let absolute_line = paragraph_info.start_line + position.line;
+                position.content_line = content_line_numbers
+                    .get(absolute_line)
                     .copied()
-                    .unwrap_or(pending.line);
-                let position = CursorVisualPosition {
-                    line: pending.line,
-                    column: pending.column,
-                    content_line,
-                    content_column: pending.content_column,
-                };
-                cursor_map.push((pointer.clone(), position));
+                    .unwrap_or(absolute_line);
             }
         }
 
@@ -1248,7 +1323,7 @@ impl<'a> DirectRenderer<'a> {
             cursor,
             total_lines,
             content_lines: current_content,
-            cursor_map,
+            paragraph_lines: self.paragraph_lines,
         }
     }
 }
@@ -2049,12 +2124,15 @@ mod tests {
         let rendered = render_document_direct(editor.document(), 12, 0, &[], tracking, None);
 
         let mut columns_per_line: Vec<Vec<(u16, u16)>> = Vec::new();
-        for (_, position) in rendered.cursor_map {
-            let line = position.line;
-            if columns_per_line.len() <= line {
-                columns_per_line.resize(line + 1, Vec::new());
+        // Extract positions from paragraph_lines
+        for paragraph_info in &rendered.paragraph_lines {
+            for (_, position) in &paragraph_info.positions {
+                let line = position.line;
+                if columns_per_line.len() <= line {
+                    columns_per_line.resize(line + 1, Vec::new());
+                }
+                columns_per_line[line].push((position.content_column, position.column));
             }
-            columns_per_line[line].push((position.content_column, position.column));
         }
         for columns in &mut columns_per_line {
             columns.sort();
@@ -2098,12 +2176,14 @@ mod tests {
         assert_eq!(cursor.content_line, 1);
         assert_eq!(cursor.content_column, 1);
 
+        // Extract position from paragraph_lines
         let boundary_position = rendered
-            .cursor_map
+            .paragraph_lines
             .iter()
+            .flat_map(|info| &info.positions)
             .find(|(pointer, _)| pointer.offset == 10)
             .map(|(_, position)| position)
-            .expect("missing cursor map entry for wrap boundary");
+            .expect("missing position for wrap boundary");
         assert_eq!(
             (boundary_position.line, boundary_position.column),
             (1, 1),

@@ -155,7 +155,6 @@ fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut A
         // Block waiting for events
         if event::poll(timeout).context("event poll failed")? {
             let evt = event::read().context("failed to read event")?;
-            eprintln!("Event: {:?}", evt);
 
             // Skip spurious Resize events that don't change size
             if let Event::Resize(_, _) = evt {
@@ -815,7 +814,7 @@ impl App {
 
         self.display
             .update_after_render(text_area, render.total_lines);
-        let cursor_visual = self.display.last_cursor_visual();
+        let _cursor_visual = self.display.last_cursor_visual();
         let viewport_height = text_area.height as usize;
         self.apply_pending_scroll_restore(&render, viewport_height);
         self.adjust_scroll(&render, viewport_height);
@@ -834,7 +833,9 @@ impl App {
         // Draw custom scrollbar
         self.draw_scrollbar(frame, scrollbar_area);
 
-        if let Some(cursor) = cursor_visual
+        // Use last_cursor_visual for current cursor position (updates on cursor movement)
+        // not render.cursor (from cached layout)
+        if let Some(cursor) = self.display.last_cursor_visual()
             && cursor.line >= self.scroll_top
             && cursor.line < self.scroll_top + viewport_height
             && text_area.width > 0
@@ -1237,7 +1238,9 @@ impl App {
             self.scroll_top = max_scroll;
         }
         if self.display.cursor_following() {
-            if let Some(cursor) = &render.cursor {
+            // Use last_cursor_visual which updates on cursor movement,
+            // not render.cursor which is from the cached layout
+            if let Some(cursor) = self.display.last_cursor_visual() {
                 self.scroll_top = self.scroll_top_for_cursor(cursor.line, viewport, max_scroll);
             }
             if self.scroll_top > max_scroll {
