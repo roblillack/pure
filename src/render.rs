@@ -42,6 +42,14 @@ struct ParagraphCacheKey {
     left_padding: usize,
 }
 
+/// Simplified position info for caching (content_line is computed later from line_metrics)
+#[derive(Clone, Debug)]
+struct CachedPosition {
+    line: usize,
+    column: u16,
+    content_column: u16,
+}
+
 /// Cached rendering result for a paragraph
 #[derive(Clone, Debug)]
 struct CachedParagraphRender {
@@ -49,6 +57,9 @@ struct CachedParagraphRender {
     lines: Vec<Line<'static>>,
     /// The metrics for each rendered line
     line_metrics: Vec<LineMetric>,
+    /// Cached cursor positions (with line numbers relative to paragraph start)
+    /// Only populated when track_all_positions was true during rendering
+    positions: Vec<(CursorPointer, CachedPosition)>,
 }
 
 /// Cache for rendered paragraphs
@@ -365,6 +376,7 @@ impl<'a> DirectRenderer<'a> {
         paragraph_index: usize,
         prefix: &str,
     ) {
+        // Skip caching for paragraphs with prefixes (e.g., nested in lists/quotes)
         if self.cache.is_none() || !prefix.is_empty() {
             self.render_paragraph(paragraph, prefix);
             return;
@@ -385,10 +397,28 @@ impl<'a> DirectRenderer<'a> {
             && let Some(cached) = cache.get(&cache_key)
         {
             // Cache hit on non-active paragraph, so we can use it
+            let start_line = self.current_line_index;
+
             self.lines.extend(cached.lines.iter().cloned());
             self.line_metrics
                 .extend(cached.line_metrics.iter().cloned());
             self.current_line_index += cached.lines.len();
+
+            // Restore cached positions, converting relative line numbers back to absolute
+            for (pointer, relative_position) in &cached.positions {
+                let marker_id = self.next_marker_id;
+                self.next_marker_id += 1;
+
+                let absolute_position = PendingPosition {
+                    line: start_line + relative_position.line,
+                    column: relative_position.column,
+                    content_column: relative_position.content_column,
+                };
+
+                self.marker_pending.insert(marker_id, absolute_position);
+                self.marker_to_pointer.insert(marker_id, pointer.clone());
+            }
+
             return;
         }
 
@@ -406,11 +436,31 @@ impl<'a> DirectRenderer<'a> {
         // `cache.get` was already called above and recorded the miss.
         let start_line = self.lines.len();
         let start_metric_count = self.line_metrics.len();
+        let start_marker_id = self.next_marker_id;
 
         self.render_paragraph(paragraph, prefix);
 
         let rendered_lines: Vec<Line<'static>> = self.lines[start_line..].to_vec();
         let rendered_metrics: Vec<LineMetric> = self.line_metrics[start_metric_count..].to_vec();
+
+        // Capture positions generated during rendering, with line numbers relative to paragraph
+        let mut cached_positions = Vec::new();
+        if self.track_all_positions {
+            // Extract markers that were added during this paragraph's rendering
+            for (marker_id, pending) in self.marker_pending.iter() {
+                if *marker_id >= start_marker_id {
+                    if let Some(pointer) = self.marker_to_pointer.get(marker_id) {
+                        // Convert absolute line to relative line (relative to paragraph start)
+                        let relative_position = CachedPosition {
+                            line: pending.line.saturating_sub(start_line),
+                            column: pending.column,
+                            content_column: pending.content_column,
+                        };
+                        cached_positions.push((pointer.clone(), relative_position));
+                    }
+                }
+            }
+        }
 
         if let Some(cache) = &mut self.cache {
             cache.insert(
@@ -418,6 +468,7 @@ impl<'a> DirectRenderer<'a> {
                 CachedParagraphRender {
                     lines: rendered_lines,
                     line_metrics: rendered_metrics,
+                    positions: cached_positions,
                 },
             );
         }
