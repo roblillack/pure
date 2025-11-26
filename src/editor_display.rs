@@ -148,7 +148,7 @@ impl EditorDisplay {
 
         self.last_cursor_visual = result.cursor;
         if self.preferred_column.is_none() {
-            self.preferred_column = result.cursor.map(|p| p.column);
+            self.preferred_column = result.cursor.map(|p| p.content_column);
         }
 
         result
@@ -174,6 +174,7 @@ impl EditorDisplay {
         }
 
         let pointer = self.editor.cursor_pointer();
+
         let current_position = self
             .visual_positions
             .iter()
@@ -188,10 +189,12 @@ impl EditorDisplay {
             } else if delta > 0 {
                 self.editor.move_down();
             }
+            self.preferred_column = None;
             return;
         };
 
-        let desired_column = self.preferred_column.unwrap_or(current.column);
+        // Use content_column (without left padding) for consistent vertical movement
+        let desired_column = self.preferred_column.unwrap_or(current.content_column);
 
         let max_line = self
             .visual_positions
@@ -233,19 +236,12 @@ impl EditorDisplay {
             }
         } else {
             // Fallback: If visual-based movement failed, try logical cursor movement
-            // This handles cases where visual positions might not be complete or up-to-date
-            let moved = if delta < 0 {
-                self.editor.move_up()
+            if delta < 0 {
+                self.editor.move_up();
             } else if delta > 0 {
-                self.editor.move_down()
-            } else {
-                false
-            };
-
-            if moved {
-                // Clear preferred column since we fell back to logical movement
-                self.preferred_column = None;
+                self.editor.move_down();
             }
+            self.preferred_column = None;
         }
     }
 
@@ -352,12 +348,53 @@ impl EditorDisplay {
     }
 
     /// Find the closest pointer on a given line to a target column
+    /// Uses content_column (without left padding) for comparison
     fn closest_pointer_on_line(&self, line: usize, column: u16) -> Option<CursorDisplay> {
-        self.visual_positions
+        let positions_on_line: Vec<_> = self
+            .visual_positions
             .iter()
             .filter(|entry| entry.position.line == line)
-            .min_by_key(|entry| column_distance(entry.position.column, column))
-            .cloned()
+            .collect();
+
+        if positions_on_line.is_empty() {
+            return None;
+        }
+
+        // Find the minimum content_column distance (without left padding)
+        let min_distance = positions_on_line
+            .iter()
+            .map(|entry| column_distance(entry.position.content_column, column))
+            .min()
+            .unwrap();
+
+        // Get all positions with the minimum distance
+        let closest_positions: Vec<_> = positions_on_line
+            .iter()
+            .filter(|entry| column_distance(entry.position.content_column, column) == min_distance)
+            .collect();
+
+        if closest_positions.len() == 1 {
+            return Some((*closest_positions[0]).clone());
+        }
+
+        // Multiple positions at the same visual column (nested inline styles)
+        // If desired column < closest position: choose outermost (shallowest nesting)
+        // If desired column >= closest position: choose innermost (deepest nesting)
+        let closest_column = closest_positions[0].position.content_column;
+
+        if column < closest_column {
+            // Choose outermost position (smallest span path length)
+            closest_positions
+                .iter()
+                .min_by_key(|entry| entry.pointer.span_path.indices.len())
+                .map(|entry| (**entry).clone())
+        } else {
+            // Choose innermost position (largest span path length)
+            closest_positions
+                .iter()
+                .max_by_key(|entry| entry.pointer.span_path.indices.len())
+                .map(|entry| (**entry).clone())
+        }
     }
 
     /// Search for the nearest line with content, starting from start_line and moving in delta direction
@@ -376,6 +413,15 @@ impl EditorDisplay {
             .map(|entry| entry.position.line)
             .max()
             .unwrap_or(0);
+
+        // Debug: show which lines have positions
+        let mut lines_with_positions: Vec<usize> = self
+            .visual_positions
+            .iter()
+            .map(|vp| vp.position.line)
+            .collect();
+        lines_with_positions.sort();
+        lines_with_positions.dedup();
 
         let mut distance = 1usize;
         loop {
@@ -491,7 +537,7 @@ impl EditorDisplay {
     pub fn focus_display(&mut self, display: &CursorDisplay) {
         if self.editor.move_to_pointer(&display.pointer) {
             self.last_cursor_visual = Some(display.position);
-            self.preferred_column = Some(display.position.column);
+            self.preferred_column = Some(display.position.content_column);
             self.cursor_following = true;
         }
     }
@@ -506,7 +552,7 @@ impl EditorDisplay {
                 .cloned()
             {
                 self.last_cursor_visual = Some(display.position);
-                self.preferred_column = Some(display.position.column);
+                self.preferred_column = Some(display.position.content_column);
             } else {
                 self.last_cursor_visual = None;
                 self.preferred_column = None;
@@ -935,6 +981,13 @@ mod tests {
             self.last_cursor_visual().map(|v| (v.line, v.column))
         }
 
+        fn get_content_pos(&mut self) -> Option<(usize, u16)> {
+            let _ = self.render_document(80, 0, None);
+
+            self.last_cursor_visual()
+                .map(|v| (v.content_line, v.content_column))
+        }
+
         fn get_txt(&mut self) -> String {
             let r = self.render_document(80, 0, None);
             let mut s = String::new();
@@ -1035,30 +1088,21 @@ mod tests {
 
         // Check initial position
         let initial = display.cursor_pointer();
-        eprintln!("\n=== Initial cursor ===");
-        eprintln!("Path: {:?}", initial.paragraph_path);
 
         // Try to navigate down to reach the checklist
-        eprintln!("\n=== Pressing down (1st time) ===");
         display.move_cursor_vertical(1);
         let pos1 = display.cursor_pointer();
-        eprintln!("Path: {:?}", pos1.paragraph_path);
 
-        eprintln!("\n=== Pressing down (2nd time) ===");
         display.move_cursor_vertical(1);
         let pos2 = display.cursor_pointer();
-        eprintln!("Path: {:?}", pos2.paragraph_path);
 
-        eprintln!("\n=== Pressing down (3rd time) ===");
         display.move_cursor_vertical(1);
         let pos3 = display.cursor_pointer();
-        eprintln!("Path: {:?}", pos3.paragraph_path);
 
         // Check if we reached a checklist item by looking at the debug representation
         let path_str = format!("{:?}", pos3.paragraph_path);
         let has_checklist = path_str.contains("ChecklistItem");
 
-        eprintln!("\nReached checklist item: {}", has_checklist);
         assert!(
             has_checklist,
             "Should reach a checklist item after 3 down presses from initial position"
@@ -1148,6 +1192,79 @@ mod tests {
         assert_eq!(
             cursor_after_move.paragraph_path, expected_path,
             "Cursor should have used logical movement fallback to reach checklist item"
+        );
+    }
+
+    #[test]
+    fn vertical_movement_from_text_to_quote_with_earlier_column() {
+        let doc = ftml! {
+            p { "Regular text here" }
+            quote { p { b { "Note:" } " Quote text here" } }
+        };
+        let mut display = EditorDisplay::new(DocumentEditor::new(doc));
+        display.editor.ensure_cursor_selectable();
+
+        assert_eq!(display.get_content_pos(), Some((0, 0)));
+        assert_eq!(display.get_pos(), Some((0, 0)));
+
+        // Move down - target line will be 1 (blank line), should skip to line 2
+        display.move_cursor_vertical(1);
+        assert_eq!(display.get_content_pos(), Some((1, 0)));
+        assert_eq!(display.get_pos(), Some((2, 2)));
+    }
+
+    #[test]
+    fn vertical_movement_into_nested_inline_styles_is_consistent() {
+        use tdoc::{Document, InlineStyle, Paragraph, Span as DocSpan};
+
+        // Create a document with nested inline styles
+        // Line 1: "Plain text on first line."
+        // Line 2: "Text with **_nested_** styles here."
+        // Line 3: "Another plain line below."
+        let italic_span = DocSpan::new_styled(InlineStyle::Italic).with_text("nested");
+        let bold_span = DocSpan::new_styled(InlineStyle::Bold).with_children(vec![italic_span]);
+
+        let para1 = Paragraph::new_text()
+            .with_content(vec![DocSpan::new_text("Plain text on first line.")]);
+        let para2 = Paragraph::new_text().with_content(vec![
+            DocSpan::new_text("Text with "),
+            bold_span,
+            DocSpan::new_text(" styles here."),
+        ]);
+        let para3 = Paragraph::new_text()
+            .with_content(vec![DocSpan::new_text("Another plain line below.")]);
+
+        let doc = Document::new().with_paragraphs(vec![para1, para2, para3]);
+        let mut display = EditorDisplay::new(DocumentEditor::new(doc));
+
+        // Render to populate visual positions
+        let result = display.render_document(80, 0, None);
+        display.visual_positions = result
+            .cursor_map
+            .into_iter()
+            .map(|(pointer, position)| CursorDisplay { pointer, position })
+            .collect();
+
+        // Start from paragraph 1 (line 0), move to the 'T' in "Text"
+        for _ in 0..10 {
+            display.editor.move_right();
+        }
+
+        // Move down to line 2 - this should land at the same column in "Text with ..."
+        display.move_cursor_vertical(1);
+        let after_first_move = display.editor.cursor_pointer();
+
+        // Move down to line 3, then back up to line 2
+        display.move_cursor_vertical(1);
+        display.move_cursor_vertical(-1);
+        let after_second_move = display.editor.cursor_pointer();
+
+        // The cursor should land at the same position both times
+        assert_eq!(
+            after_first_move, after_second_move,
+            "Cursor should land at the same position when moving vertically to a line with nested styles. \
+            First move: {:?}, Second move: {:?}",
+            after_first_move, after_second_move
         );
     }
 }

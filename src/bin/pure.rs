@@ -158,6 +158,7 @@ fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut A
         // Block waiting for events
         if event::poll(timeout).context("event poll failed")? {
             let evt = event::read().context("failed to read event")?;
+            eprintln!("Event: {:?}", evt);
 
             // Skip spurious Resize events that don't change size
             if let Event::Resize(_, _) = evt {

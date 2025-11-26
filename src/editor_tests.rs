@@ -1569,3 +1569,236 @@ fn cursor_can_move_into_quote_blocks() {
         "Should be at 'Before quote' paragraph"
     );
 }
+
+#[test]
+fn cursor_moves_into_last_wrapped_line_when_moving_up() {
+    use crate::editor_display::EditorDisplay;
+
+    // Create a document with a long first paragraph that will wrap,
+    // followed by a second paragraph
+    let doc = ftml! {
+        p { "This is a text paragraph which is rendered with a pretty tight wrap width to force creating multiple visual lines." }
+        p { "This is the 2nd paragraph." }
+    };
+    let mut display = EditorDisplay::new(DocumentEditor::new(doc));
+
+    // Render with narrow width to force wrapping of the first paragraph
+    let _ = display.render_document(30, 0, None);
+
+    println!("\n=== Initial Visual Positions ===");
+    println!("Total visual positions: {}", display.visual_positions().len());
+    for (idx, vp) in display.visual_positions().iter().enumerate().take(20) {
+        println!(
+            "{}: line={}, col={}, path={:?}, offset={}",
+            idx,
+            vp.position.line,
+            vp.position.column,
+            vp.pointer.paragraph_path.numeric_steps(),
+            vp.pointer.offset
+        );
+    }
+
+    // Find the first position in the second paragraph
+    let second_para_first = display
+        .visual_positions()
+        .iter()
+        .find(|vp| vp.pointer.paragraph_path.numeric_steps() == vec![1])
+        .expect("Should have positions for second paragraph")
+        .clone();
+
+    println!("\n=== Moving to 2nd paragraph (first position) ===");
+    println!(
+        "Target: line={}, col={}, offset={}",
+        second_para_first.position.line,
+        second_para_first.position.column,
+        second_para_first.pointer.offset
+    );
+
+    // Move to the first position in the second paragraph
+    assert!(display.move_to_pointer(&second_para_first.pointer));
+
+    // Re-render to update visual positions
+    let _ = display.render_document(30, 0, None);
+
+    let current_before_move = display.cursor_pointer();
+    let current_visual_before = display
+        .visual_positions()
+        .iter()
+        .find(|vp| vp.pointer == current_before_move);
+
+    if let Some(cv) = current_visual_before {
+        println!(
+            "Current position before move: line={}, col={}",
+            cv.position.line, cv.position.column
+        );
+    }
+
+    // Find the last wrapped line of the first paragraph
+    let first_para_last_line = display
+        .visual_positions()
+        .iter()
+        .filter(|vp| vp.pointer.paragraph_path.numeric_steps() == vec![0])
+        .map(|vp| vp.position.line)
+        .max()
+        .expect("Should have positions for first paragraph");
+
+    println!("\nLast wrapped line of first paragraph: line={}", first_para_last_line);
+
+    // Move up - should land on the last wrapped line of the first paragraph
+    println!("\n=== Moving up ===");
+    display.move_cursor_vertical(-1);
+
+    let after_move = display.cursor_pointer();
+    println!(
+        "After move cursor: path={:?}, offset={}",
+        after_move.paragraph_path.numeric_steps(),
+        after_move.offset
+    );
+
+    // Re-render to get updated visual position
+    let _ = display.render_document(30, 0, None);
+
+    let after_visual = display
+        .visual_positions()
+        .iter()
+        .find(|vp| vp.pointer == after_move);
+
+    if let Some(av) = after_visual {
+        println!(
+            "After move visual position: line={}, col={}",
+            av.position.line, av.position.column
+        );
+
+        assert_eq!(
+            av.position.line, first_para_last_line,
+            "Cursor should be on the last wrapped line of the first paragraph (line {}), but is on line {}",
+            first_para_last_line, av.position.line
+        );
+    } else {
+        panic!("Could not find visual position after move");
+    }
+
+    // Verify we're still in the first paragraph
+    assert_eq!(
+        after_move.paragraph_path.numeric_steps(),
+        vec![0],
+        "Cursor should be in the first paragraph"
+    );
+}
+
+#[test]
+fn cursor_moves_into_last_wrapped_line_when_moving_up_into_quote() {
+    use crate::editor_display::EditorDisplay;
+
+    // Create a document with a quote block containing wrapped text,
+    // followed by a second paragraph
+    let doc = ftml! {
+        quote {
+            p { "This is a text paragraph which is rendered with a pretty tight wrap width to force creating multiple visual lines." }
+        }
+        p { "This is the 2nd paragraph." }
+    };
+    let mut display = EditorDisplay::new(DocumentEditor::new(doc));
+
+    // Render with narrow width to force wrapping of the first paragraph in the quote
+    let _ = display.render_document(30, 0, None);
+
+    println!("\n=== Initial Visual Positions ===");
+    for (idx, vp) in display.visual_positions().iter().enumerate() {
+        println!(
+            "{}: line={}, col={}, path={:?}, offset={}",
+            idx,
+            vp.position.line,
+            vp.position.column,
+            vp.pointer.paragraph_path.numeric_steps(),
+            vp.pointer.offset
+        );
+    }
+
+    // Find the first position in the second paragraph (root paragraph at index 1)
+    let second_para_first = display
+        .visual_positions()
+        .iter()
+        .find(|vp| vp.pointer.paragraph_path.numeric_steps() == vec![1])
+        .expect("Should have positions for second paragraph")
+        .clone();
+
+    println!("\n=== Moving to 2nd paragraph (first position) ===");
+    println!(
+        "Target: line={}, col={}, offset={}",
+        second_para_first.position.line,
+        second_para_first.position.column,
+        second_para_first.pointer.offset
+    );
+
+    // Move to the first position in the second paragraph
+    assert!(display.move_to_pointer(&second_para_first.pointer));
+
+    // Re-render to update visual positions
+    let _ = display.render_document(30, 0, None);
+
+    let current_before_move = display.cursor_pointer();
+    let current_visual_before = display
+        .visual_positions()
+        .iter()
+        .find(|vp| vp.pointer == current_before_move);
+
+    if let Some(cv) = current_visual_before {
+        println!(
+            "Current position before move: line={}, col={}",
+            cv.position.line, cv.position.column
+        );
+    }
+
+    // Find the last wrapped line of the paragraph in the quote (path [0, 0])
+    let first_para_last_line = display
+        .visual_positions()
+        .iter()
+        .filter(|vp| vp.pointer.paragraph_path.numeric_steps() == vec![0, 0])
+        .map(|vp| vp.position.line)
+        .max()
+        .expect("Should have positions for first paragraph in quote");
+
+    println!("\nLast wrapped line of first paragraph in quote: line={}", first_para_last_line);
+
+    // Move up - should land on the last wrapped line of the first paragraph in the quote
+    println!("\n=== Moving up ===");
+    display.move_cursor_vertical(-1);
+
+    let after_move = display.cursor_pointer();
+    println!(
+        "After move cursor: path={:?}, offset={}",
+        after_move.paragraph_path.numeric_steps(),
+        after_move.offset
+    );
+
+    // Re-render to get updated visual position
+    let _ = display.render_document(30, 0, None);
+
+    let after_visual = display
+        .visual_positions()
+        .iter()
+        .find(|vp| vp.pointer == after_move);
+
+    if let Some(av) = after_visual {
+        println!(
+            "After move visual position: line={}, col={}",
+            av.position.line, av.position.column
+        );
+
+        assert_eq!(
+            av.position.line, first_para_last_line,
+            "Cursor should be on the last wrapped line of the first paragraph in quote (line {}), but is on line {}",
+            first_para_last_line, av.position.line
+        );
+    } else {
+        panic!("Could not find visual position after move");
+    }
+
+    // Verify we're in the quote's first paragraph
+    assert_eq!(
+        after_move.paragraph_path.numeric_steps(),
+        vec![0, 0],
+        "Cursor should be in the first paragraph of the quote"
+    );
+}
