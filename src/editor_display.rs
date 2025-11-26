@@ -4,8 +4,8 @@ use ratatui::layout::Rect;
 
 use crate::editor::{CursorPointer, DocumentEditor};
 use crate::render::{
-    CursorVisualPosition, DirectCursorTracking, ParagraphLineInfo, RenderCache, RenderResult,
-    render_document_direct,
+    CursorVisualPosition, DirectCursorTracking, ParagraphLineInfo, RenderResult,
+    layout_paragraph, render_document_direct,
 };
 
 /// EditorDisplay wraps a DocumentEditor and manages all visual/rendering concerns.
@@ -13,7 +13,6 @@ use crate::render::{
 #[derive(Debug)]
 pub struct EditorDisplay {
     editor: DocumentEditor,
-    render_cache: RenderCache,
     /// Cached layout result - only re-rendered when document changes or viewport resizes
     cached_layout: Option<RenderResult>,
     /// Parameters used for cached_layout (to detect when re-render is needed)
@@ -33,6 +32,8 @@ pub struct EditorDisplay {
     last_text_area: Rect,
     /// Set to true when document changes to trigger re-render
     layout_dirty: bool,
+    /// Track which paragraph was last modified for incremental updates
+    last_modified_paragraph: Option<usize>,
 }
 
 impl EditorDisplay {
@@ -40,7 +41,6 @@ impl EditorDisplay {
     pub fn new(editor: DocumentEditor) -> Self {
         Self {
             editor,
-            render_cache: RenderCache::new(),
             cached_layout: None,
             cached_wrap_width: 80,
             cached_left_padding: 0,
@@ -54,6 +54,7 @@ impl EditorDisplay {
             last_total_lines: 0,
             last_text_area: Rect::default(),
             layout_dirty: true,
+            last_modified_paragraph: None,
         }
     }
 
@@ -155,31 +156,155 @@ impl EditorDisplay {
     }
 
     /// Clear render cache (called when document changes)
+    ///
+    /// If a specific paragraph was modified (tracked in last_modified_paragraph),
+    /// tries to do an incremental update instead of marking the entire layout dirty.
     pub fn clear_render_cache(&mut self) {
-        self.render_cache.clear();
+        // Try incremental update if we know which paragraph changed
+        if let Some(para_index) = self.last_modified_paragraph {
+            if self.update_paragraph_layout(para_index) {
+                // Incremental update succeeded!
+                self.last_modified_paragraph = None;
+                return;
+            }
+        }
+
+        // Fall back to full re-render
         self.layout_dirty = true;
+        self.last_modified_paragraph = None;
     }
 
-    /// Get render cache hits
-    pub fn render_cache_hits(&self) -> usize {
-        self.render_cache.hits
+    /// Mark a specific paragraph as modified to enable incremental updates
+    pub fn mark_paragraph_modified(&mut self, paragraph_index: usize) {
+        self.last_modified_paragraph = Some(paragraph_index);
+        self.clear_render_cache();
     }
 
-    /// Get render cache misses
-    pub fn render_cache_misses(&self) -> usize {
-        self.render_cache.misses
-    }
+    /// Update layout for a single paragraph (incremental update)
+    ///
+    /// This is much faster than re-rendering the entire document when only one paragraph changed.
+    /// Returns true if the update was successful, false if a full re-render is needed.
+    pub fn update_paragraph_layout(&mut self, paragraph_index: usize) -> bool {
+        // Need cached layout and valid parameters to do incremental update
+        let Some(cached_layout) = self.cached_layout.as_mut() else {
+            return false;
+        };
 
-    /// Get render cache hit rate
-    pub fn render_cache_hit_rate(&self) -> f64 {
-        self.render_cache.hit_rate()
+        // Get the paragraph
+        let Some(paragraph) = self.editor.document().paragraphs.get(paragraph_index) else {
+            return false;
+        };
+
+        // Find the paragraph info in cached layout
+        let Some(para_info) = cached_layout.paragraph_lines.iter().find(|info| info.paragraph_index == paragraph_index) else {
+            return false;
+        };
+
+        let old_start_line = para_info.start_line;
+        let old_end_line = para_info.end_line;
+        let old_line_count = old_end_line - old_start_line + 1;
+
+        // Get reveal tags if needed
+        let reveal_tags = if self.editor.reveal_codes() {
+            let (_, _, tags, _) = self
+                .editor
+                .clone_with_markers('\u{F8FF}', None, '\u{F8FE}', '\u{F8FD}');
+            tags
+        } else {
+            Vec::new()
+        };
+
+        // Layout the paragraph
+        let cursor_pointer = self.editor.cursor_pointer();
+        let layout = layout_paragraph(
+            paragraph,
+            paragraph_index,
+            crate::editor::ParagraphPath::new_root(paragraph_index),
+            self.cached_wrap_width,
+            self.cached_left_padding,
+            "",
+            &reveal_tags,
+            DirectCursorTracking {
+                cursor: Some(&cursor_pointer),
+                selection: None,
+                track_all_positions: true,
+            },
+        );
+
+        let new_line_count = layout.line_count;
+        let line_count_delta = new_line_count as isize - old_line_count as isize;
+
+        // Replace the lines in the cached layout
+        let lines_start = old_start_line;
+        let lines_end = old_end_line + 1; // exclusive end
+        cached_layout.lines.splice(lines_start..lines_end, layout.lines.clone());
+
+        // Update paragraph_lines entry
+        let para_info_index = cached_layout.paragraph_lines
+            .iter()
+            .position(|info| info.paragraph_index == paragraph_index)
+            .unwrap();
+
+        // Convert relative positions to absolute
+        let new_positions: Vec<_> = layout.positions.iter().map(|(pointer, pos)| {
+            let mut absolute_pos = *pos;
+            absolute_pos.line = old_start_line + pos.line;
+            // Recompute content_line from line_metrics
+            // For now, just use the line number (will be fixed in next full render)
+            absolute_pos.content_line = absolute_pos.line;
+            (pointer.clone(), absolute_pos)
+        }).collect();
+
+        cached_layout.paragraph_lines[para_info_index] = ParagraphLineInfo {
+            paragraph_index,
+            start_line: old_start_line,
+            end_line: old_start_line + new_line_count.saturating_sub(1),
+            positions: new_positions.iter().map(|(pointer, pos)| {
+                let mut relative_pos = *pos;
+                relative_pos.line = pos.line.saturating_sub(old_start_line);
+                (pointer.clone(), relative_pos)
+            }).collect(),
+        };
+
+        // If line count changed, adjust all subsequent paragraphs
+        if line_count_delta != 0 {
+            for info in cached_layout.paragraph_lines.iter_mut() {
+                if info.start_line > old_start_line {
+                    info.start_line = (info.start_line as isize + line_count_delta) as usize;
+                    info.end_line = (info.end_line as isize + line_count_delta) as usize;
+                }
+            }
+
+            // Update total lines
+            cached_layout.total_lines = (cached_layout.total_lines as isize + line_count_delta) as usize;
+        }
+
+        // Update cursor if it's in the cached layout
+        if let Some(ref mut cursor) = cached_layout.cursor {
+            if cursor.line >= old_start_line && cursor.line <= old_end_line {
+                // Cursor is in the updated paragraph - recompute from layout
+                if let Some(layout_cursor) = layout.cursor {
+                    cursor.line = old_start_line + layout_cursor.line;
+                    cursor.column = layout_cursor.column;
+                    cursor.content_column = layout_cursor.content_column;
+                    // content_line will be recomputed on next full render
+                }
+            } else if cursor.line > old_end_line && line_count_delta != 0 {
+                // Cursor is after the updated paragraph - adjust line number
+                cursor.line = (cursor.line as isize + line_count_delta) as usize;
+            }
+        }
+
+        // Update paragraph_lines in EditorDisplay
+        self.paragraph_lines = cached_layout.paragraph_lines.clone();
+
+        true
     }
 
     /// Set reveal codes mode and clear cache
     /// This overrides the Deref implementation to ensure cache is cleared
     pub fn set_reveal_codes(&mut self, enabled: bool) {
         self.editor.set_reveal_codes(enabled);
-        self.render_cache.clear();
         self.layout_dirty = true;
     }
 
@@ -267,7 +392,6 @@ impl EditorDisplay {
                 selection: selection.as_ref().map(|(start, end)| (start, end)),
                 track_all_positions,
             },
-            Some(&mut self.render_cache),
         );
 
         // Update internal state from render result
@@ -615,6 +739,39 @@ impl EditorDisplay {
             }
             self.cursor_following = true;
         }
+    }
+
+    /// Insert a character at the cursor position with incremental layout update
+    pub fn insert_char(&mut self, c: char) -> bool {
+        let para_index = self.editor.cursor_pointer().paragraph_path.root_index();
+        let result = self.editor.insert_char(c);
+        if let Some(index) = para_index {
+            self.mark_paragraph_modified(index);
+        } else {
+            self.clear_render_cache();
+        }
+        result
+    }
+
+    /// Delete character before cursor with incremental layout update
+    pub fn delete_char(&mut self) -> bool {
+        let para_index = self.editor.cursor_pointer().paragraph_path.root_index();
+        let result = self.editor.delete();
+        if let Some(index) = para_index {
+            self.mark_paragraph_modified(index);
+        } else {
+            self.clear_render_cache();
+        }
+        result
+    }
+
+    /// Insert paragraph break with layout update (requires full re-render as it affects multiple paragraphs)
+    pub fn insert_paragraph_break(&mut self) -> bool {
+        let result = self.editor.insert_paragraph_break();
+        // Paragraph breaks affect structure - need full re-render
+        self.last_modified_paragraph = None;
+        self.clear_render_cache();
+        result
     }
 }
 
