@@ -127,6 +127,10 @@ pub fn layout_paragraph(
     reveal_tags: &[RevealTagRef],
     direct_tracking: DirectCursorTracking,
 ) -> ParagraphLayout {
+    eprintln!(
+        "Layout paragraph {} at path {:?}",
+        paragraph_index, paragraph_path
+    );
     // Create a temporary renderer for this paragraph only
     let mut renderer = DirectRenderer::new(
         wrap_width.max(1),
@@ -2005,8 +2009,7 @@ mod tests {
             selection: None,
             track_all_positions: false,
         };
-        let rendered =
-            render_document_direct(editor.document(), 120, 0, &reveal_tags, tracking);
+        let rendered = render_document_direct(editor.document(), 120, 0, &reveal_tags, tracking);
         let lines = lines_to_strings(&rendered.lines);
         assert_eq!(lines, vec!["Hello [Bold>World<Bold]!"]);
 
@@ -2065,8 +2068,7 @@ mod tests {
                 selection: None,
                 track_all_positions: false,
             };
-            let rendered =
-                render_document_direct(editor.document(), 120, 0, reveal_tags, tracking);
+            let rendered = render_document_direct(editor.document(), 120, 0, reveal_tags, tracking);
             let cursor = rendered.cursor.expect("cursor should be rendered");
             let actual_position = usize::from(cursor.content_column) + 1;
 

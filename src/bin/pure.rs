@@ -1876,10 +1876,13 @@ impl App {
 
     fn mark_dirty(&mut self) {
         self.dirty = true;
-        // Clear render cache when document changes
-        self.display.clear_render_cache();
-        // Need to rebuild visual positions after document changes
-        self.needs_position_rebuild = true;
+        // Clear render cache when document changes (returns true if incremental update succeeded)
+        let incremental_succeeded = self.display.clear_render_cache();
+        // Only need to rebuild visual positions if incremental update failed
+        // (incremental updates already update positions correctly)
+        if !incremental_succeeded {
+            self.needs_position_rebuild = true;
+        }
     }
 
     fn count_words(&self) -> usize {

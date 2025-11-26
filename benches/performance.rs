@@ -1373,3 +1373,41 @@ fn bench_scrolling_page_down() {
         println!("  ⚠️  WARNING: Average > 16ms - will drop below 60 FPS");
     }
 }
+
+#[test]
+fn benchmark_incremental_updates() {
+    use pure_tui::editor_display::EditorDisplay;
+    use pure_tui::editor::DocumentEditor;
+
+    println!("\n=== Incremental Update Performance ===\n");
+
+    // Test with medium document (584 paragraphs like USER-GUIDE.md)
+    let doc = create_test_document(584, 20);
+    let editor = DocumentEditor::new(doc);
+    let mut display = EditorDisplay::new(editor);
+
+    // Initial render
+    let _ = display.render_document(80, 0, None);
+
+    // Test incremental updates
+    let iterations = 100;
+    let start = Instant::now();
+    for _ in 0..iterations {
+        display.insert_char('x');
+        display.clear_render_cache();
+        let _ = display.render_document(80, 0, None);
+    }
+    let total = start.elapsed();
+    let avg = total / iterations as u32;
+
+    println!("Document: 584 paragraphs");
+    println!("Iterations: {}", iterations);
+    println!("Total time: {:?}", total);
+    println!("Average per keypress: {:.2}ms", avg.as_secs_f64() * 1000.0);
+
+    if avg.as_millis() > 10 {
+        println!("  ❌ WARNING: Incremental updates slower than 10ms target");
+    } else {
+        println!("  ✅ PASSED: Incremental updates < 10ms - should feel responsive");
+    }
+}
