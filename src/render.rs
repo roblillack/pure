@@ -127,6 +127,10 @@ pub fn layout_paragraph(
     reveal_tags: &[RevealTagRef],
     direct_tracking: DirectCursorTracking,
 ) -> ParagraphLayout {
+    eprintln!(
+        "Layout paragraph {} at path {:?}",
+        paragraph_index, paragraph_path
+    );
     // Create a temporary renderer for this paragraph only
     let mut renderer = DirectRenderer::new(
         wrap_width.max(1),
