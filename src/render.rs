@@ -235,6 +235,7 @@ pub struct RenderResult {
     pub lines: Vec<Line<'static>>,
     pub cursor: Option<CursorVisualPosition>,
     pub total_lines: usize,
+    pub content_lines: usize,
     pub cursor_map: Vec<(CursorPointer, CursorVisualPosition)>,
 }
 
@@ -1246,6 +1247,7 @@ impl<'a> DirectRenderer<'a> {
             lines: self.lines,
             cursor,
             total_lines,
+            content_lines: current_content,
             cursor_map,
         }
     }
