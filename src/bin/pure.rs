@@ -774,10 +774,9 @@ impl App {
             return;
         }
 
-        let status_height = if area.height > 1 { 2 } else { 1 };
         let vertical = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([Constraint::Min(1), Constraint::Length(status_height)])
+            .constraints([Constraint::Min(1), Constraint::Length(1)])
             .split(area);
 
         let editor_area = vertical[0];
@@ -833,9 +832,10 @@ impl App {
             frame.set_cursor_position(Position::new(cursor_x, cursor_y));
         }
 
-        let status_text = self.status_line(render.total_lines);
-        let status_widget = Paragraph::new(Line::from(Span::styled(status_text, Style::default())))
-            .block(Block::default().borders(Borders::TOP));
+        let status_line = self.status_line(render.content_lines, status_area.width as usize);
+        let status_widget = Paragraph::new(status_line)
+            .block(Block::default().borders(Borders::NONE))
+            .style(Style::default().bg(Color::Blue).fg(Color::White));
         frame.render_widget(status_widget, status_area);
 
         if self.context_menu.is_some() {
@@ -1110,27 +1110,101 @@ impl App {
         }
     }
 
-    fn status_line(&mut self, total_lines: usize) -> String {
+    fn status_line(&mut self, content_lines: usize, terminal_width: usize) -> Line<'static> {
         self.prune_status_message();
-        let cursor_details = self.cursor_status_text();
+
+        // If there's a status message, show it prominently
         if let Some((message, _)) = &self.status_message {
-            return format!("{cursor_details} | {message}");
+            let position = self.cursor_position_text();
+            return Line::from(vec![
+                Span::raw(format!("{} ", position)),
+                Span::raw(message.clone()),
+            ]);
         }
 
+        let position = self.cursor_position_text();
+        let filename = self.file_path.display().to_string();
         let marker = if self.dirty { "*" } else { "" };
-        let reveal_indicator = if self.display.reveal_codes() {
-            " | Reveal"
+        let breadcrumbs = self.breadcrumbs_text();
+        let word_count = self.count_words();
+
+        // Shortcuts ordered from least to most important (reversed order for display)
+        let all_shortcuts = vec!["^S:Save", "^Q:Quit"];
+
+        // Build the left part of the status line
+        let mut spans = Vec::new();
+
+        // Position
+        spans.push(Span::styled(position, Style::default().fg(Color::White)));
+        spans.push(Span::raw(" "));
+
+        // Filename (yellow on blue)
+        spans.push(Span::styled(
+            format!("{}{}", filename, marker),
+            Style::default().fg(Color::Yellow),
+        ));
+
+        // Breadcrumbs
+        if !breadcrumbs.is_empty() {
+            spans.push(Span::raw(" "));
+            spans.push(Span::styled(breadcrumbs, Style::default().fg(Color::White)));
+        }
+
+        // Lines and words
+        spans.push(Span::raw(format!(
+            ", {} lines, {} words",
+            content_lines, word_count
+        )));
+
+        // Calculate the width of the left content
+        let left_width: usize = spans.iter().map(|span| span.content.chars().count()).sum();
+
+        // Determine which shortcuts fit
+        // We need at least 1 space before shortcuts
+        let min_padding = 1;
+        let mut shortcuts_to_show = Vec::new();
+        let mut shortcuts_width = 0;
+
+        // Try to fit shortcuts from most to least important (reverse order)
+        for shortcut in all_shortcuts.iter().rev() {
+            let test_width = if shortcuts_to_show.is_empty() {
+                shortcut.chars().count()
+            } else {
+                shortcuts_width + 1 + shortcut.chars().count() // +1 for space separator
+            };
+
+            // Check if this shortcut would fit with at least min_padding
+            if left_width + min_padding + test_width <= terminal_width {
+                shortcuts_to_show.insert(0, *shortcut); // Insert at beginning to maintain order
+                shortcuts_width = test_width;
+            } else {
+                break; // If this doesn't fit, neither will less important ones
+            }
+        }
+
+        // Build the shortcuts string
+        let shortcuts_text = shortcuts_to_show.join(" ");
+
+        // Calculate actual padding
+        let padding_needed = if !shortcuts_text.is_empty() {
+            terminal_width
+                .saturating_sub(left_width)
+                .saturating_sub(shortcuts_width)
+                .max(min_padding)
         } else {
-            ""
+            // No shortcuts shown, no need for padding
+            0
         };
-        format!(
-            "{} | {}{} | Lines: {}{} | Ctrl-S save | Ctrl-Q quit",
-            cursor_details,
-            self.file_path.display(),
-            marker,
-            total_lines,
-            reveal_indicator
-        )
+
+        if !shortcuts_text.is_empty() {
+            spans.push(Span::raw(" ".repeat(padding_needed)));
+            spans.push(Span::styled(
+                shortcuts_text,
+                Style::default().fg(Color::White),
+            ));
+        }
+
+        Line::from(spans)
     }
 
     fn prune_status_message(&mut self) {
@@ -1788,21 +1862,78 @@ impl App {
         self.display.clear_render_cache();
     }
 
-    fn cursor_status_text(&self) -> String {
-        let position_text = if let Some(position) = self.display.last_cursor_visual() {
+    fn count_words(&self) -> usize {
+        fn count_words_in_spans(spans: &[tdoc::Span]) -> usize {
+            spans
+                .iter()
+                .map(|span| {
+                    let text_words = span
+                        .text
+                        .split_whitespace()
+                        .filter(|s| !s.is_empty())
+                        .count();
+                    let child_words = count_words_in_spans(&span.children);
+                    text_words + child_words
+                })
+                .sum()
+        }
+
+        fn count_words_in_paragraph(paragraph: &tdoc::Paragraph) -> usize {
+            let content_words = count_words_in_spans(paragraph.content());
+            let children_words: usize = paragraph
+                .children()
+                .iter()
+                .map(count_words_in_paragraph)
+                .sum();
+            let entries_words: usize = paragraph
+                .entries()
+                .iter()
+                .flat_map(|entry| entry.iter())
+                .map(count_words_in_paragraph)
+                .sum();
+            let checklist_words: usize = paragraph
+                .checklist_items()
+                .iter()
+                .map(|item| {
+                    let item_words = count_words_in_spans(&item.content);
+                    let nested_words: usize = item
+                        .children
+                        .iter()
+                        .map(|nested| count_words_in_spans(&nested.content))
+                        .sum();
+                    item_words + nested_words
+                })
+                .sum();
+
+            content_words + children_words + entries_words + checklist_words
+        }
+
+        self.display
+            .document()
+            .paragraphs
+            .iter()
+            .map(count_words_in_paragraph)
+            .sum()
+    }
+
+    fn cursor_position_text(&self) -> String {
+        if let Some(position) = self.display.last_cursor_visual() {
             let line = position.content_line + 1;
             let column = usize::from(position.content_column) + 1;
-            format!("[{},{}]", line, column)
+            format!("{}:{}", line, column)
         } else {
-            "[?,?]".to_string()
-        };
-        let mut parts = vec![position_text];
+            "?:?".to_string()
+        }
+    }
+
+    fn breadcrumbs_text(&self) -> String {
         if let Some(labels) = self.display.cursor_breadcrumbs()
             && !labels.is_empty()
         {
-            parts.push(labels.join(" > "));
+            labels.join(" > ")
+        } else {
+            String::new()
         }
-        parts.join(" ")
     }
 }
 
