@@ -630,6 +630,8 @@ struct App {
     last_viewport_height: usize,
     last_total_lines: usize,
     last_scrollbar_column: u16,
+    /// Flag to track when we need to rebuild visual positions (after edits, mouse clicks, etc.)
+    needs_position_rebuild: bool,
 }
 
 impl App {
@@ -663,6 +665,7 @@ impl App {
             last_viewport_height: 0,
             last_total_lines: 0,
             last_scrollbar_column: 0,
+            needs_position_rebuild: true, // Rebuild on first render
         }
     }
 
@@ -793,9 +796,18 @@ impl App {
         let width = text_area.width.max(1) as usize;
         let (wrap_width, left_padding) = editor_wrap_configuration(width);
         let selection = self.current_selection();
-        let render = self
-            .display
-            .render_document(wrap_width, left_padding, selection);
+
+        // Use full position tracking when needed (after edits, mouse events, first render)
+        // Otherwise use fast rendering for smooth scrolling
+        let render = if self.needs_position_rebuild {
+            self.needs_position_rebuild = false;
+            self.display
+                .render_document_with_positions(wrap_width, left_padding, selection)
+        } else {
+            self.display
+                .render_document(wrap_width, left_padding, selection)
+        };
+
         let render_time = render_start.elapsed();
         if render_time.as_millis() > 10 {
             // eprintln!("  render_document: {:?}", render_time);
@@ -1461,6 +1473,9 @@ impl App {
     }
 
     fn handle_mouse_down(&mut self, event: MouseEvent) {
+        // Rebuild visual positions on next render for accurate click-to-cursor mapping
+        self.needs_position_rebuild = true;
+
         // Check if click is on scrollbar (rightmost column)
         if event.column == self.last_scrollbar_column
             && event.row < self.last_viewport_height as u16
@@ -1860,6 +1875,8 @@ impl App {
         self.dirty = true;
         // Clear render cache when document changes
         self.display.clear_render_cache();
+        // Need to rebuild visual positions after document changes
+        self.needs_position_rebuild = true;
     }
 
     fn count_words(&self) -> usize {

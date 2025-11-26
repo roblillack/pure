@@ -1474,7 +1474,7 @@ fn cursor_valid_after_nesting_checklist_item() {
     }
 
     // Now test rendering to ensure visual position is tracked
-    let result = display.render_document(80, 0, None);
+    let result = display.render_document_with_positions(80, 0, None);
     assert!(
         result.cursor.is_some(),
         "Cursor visual position should be found after nesting. Cursor pointer: {:?}",
@@ -1504,7 +1504,7 @@ fn cursor_can_move_into_quote_blocks() {
     let mut display = EditorDisplay::new(DocumentEditor::new(doc));
 
     // Render to populate visual_positions
-    let _ = display.render_document(80, 0, None);
+    let _ = display.render_document_with_positions(80, 0, None);
 
     // Start at first paragraph, should be at [0]
     let pos0 = display.cursor_pointer();
@@ -1583,7 +1583,7 @@ fn cursor_moves_into_last_wrapped_line_when_moving_up() {
     let mut display = EditorDisplay::new(DocumentEditor::new(doc));
 
     // Render with narrow width to force wrapping of the first paragraph
-    let _ = display.render_document(30, 0, None);
+    let _ = display.render_document_with_positions(30, 0, None);
 
     println!("\n=== Initial Visual Positions ===");
     println!(
@@ -1621,7 +1621,7 @@ fn cursor_moves_into_last_wrapped_line_when_moving_up() {
     assert!(display.move_to_pointer(&second_para_first.pointer));
 
     // Re-render to update visual positions
-    let _ = display.render_document(30, 0, None);
+    let _ = display.render_document_with_positions(30, 0, None);
 
     let current_before_move = display.cursor_pointer();
     let current_visual_before = display
@@ -1662,7 +1662,7 @@ fn cursor_moves_into_last_wrapped_line_when_moving_up() {
     );
 
     // Re-render to get updated visual position
-    let _ = display.render_document(30, 0, None);
+    let _ = display.render_document_with_positions(30, 0, None);
 
     let after_visual = display
         .visual_positions()
@@ -1707,7 +1707,7 @@ fn cursor_moves_into_last_wrapped_line_when_moving_up_into_quote() {
     let mut display = EditorDisplay::new(DocumentEditor::new(doc));
 
     // Render with narrow width to force wrapping of the first paragraph in the quote
-    let _ = display.render_document(30, 0, None);
+    let _ = display.render_document_with_positions(30, 0, None);
 
     println!("\n=== Initial Visual Positions ===");
     for (idx, vp) in display.visual_positions().iter().enumerate() {
@@ -1741,7 +1741,7 @@ fn cursor_moves_into_last_wrapped_line_when_moving_up_into_quote() {
     assert!(display.move_to_pointer(&second_para_first.pointer));
 
     // Re-render to update visual positions
-    let _ = display.render_document(30, 0, None);
+    let _ = display.render_document_with_positions(30, 0, None);
 
     let current_before_move = display.cursor_pointer();
     let current_visual_before = display
@@ -1782,7 +1782,7 @@ fn cursor_moves_into_last_wrapped_line_when_moving_up_into_quote() {
     );
 
     // Re-render to get updated visual position
-    let _ = display.render_document(30, 0, None);
+    let _ = display.render_document_with_positions(30, 0, None);
 
     let after_visual = display
         .visual_positions()

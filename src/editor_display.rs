@@ -96,6 +96,21 @@ impl EditorDisplay {
         self.render_cache.clear();
     }
 
+    /// Get render cache hits
+    pub fn render_cache_hits(&self) -> usize {
+        self.render_cache.hits
+    }
+
+    /// Get render cache misses
+    pub fn render_cache_misses(&self) -> usize {
+        self.render_cache.misses
+    }
+
+    /// Get render cache hit rate
+    pub fn render_cache_hit_rate(&self) -> f64 {
+        self.render_cache.hit_rate()
+    }
+
     /// Set reveal codes mode and clear cache
     /// This overrides the Deref implementation to ensure cache is cleared
     pub fn set_reveal_codes(&mut self, enabled: bool) {
@@ -104,11 +119,44 @@ impl EditorDisplay {
     }
 
     /// Render the document at the given width and update internal state
+    ///
+    /// If `rebuild_visual_positions` is true, tracks all cursor positions in the document
+    /// to rebuild the visual_positions map. This is expensive for large documents (~50ms for
+    /// USER-GUIDE.md) so should only be enabled when needed:
+    /// - After document structure changes (edits, resizes)
+    /// - For mouse click handling
+    /// - Periodically to keep positions fresh
+    ///
+    /// For normal keyboard scrolling, use false (default) for fast rendering (<5ms).
     pub fn render_document(
         &mut self,
         wrap_width: usize,
         left_padding: usize,
         selection: Option<(CursorPointer, CursorPointer)>,
+    ) -> RenderResult {
+        self.render_document_internal(wrap_width, left_padding, selection, false)
+    }
+
+    /// Render the document and rebuild all visual positions
+    ///
+    /// This is slower (~50ms for large documents) but ensures visual_positions is up-to-date.
+    /// Use this after document edits or when handling mouse clicks.
+    pub fn render_document_with_positions(
+        &mut self,
+        wrap_width: usize,
+        left_padding: usize,
+        selection: Option<(CursorPointer, CursorPointer)>,
+    ) -> RenderResult {
+        self.render_document_internal(wrap_width, left_padding, selection, true)
+    }
+
+    /// Internal render implementation
+    fn render_document_internal(
+        &mut self,
+        wrap_width: usize,
+        left_padding: usize,
+        selection: Option<(CursorPointer, CursorPointer)>,
+        track_all_positions: bool,
     ) -> RenderResult {
         // Use direct rendering - no document cloning needed!
         let cursor_pointer = self.editor.cursor_pointer();
@@ -133,18 +181,21 @@ impl EditorDisplay {
             DirectCursorTracking {
                 cursor: Some(&cursor_pointer),
                 selection: selection.as_ref().map(|(start, end)| (start, end)),
-                track_all_positions: true, // Track all positions for cursor_map
+                track_all_positions,
             },
             Some(&mut self.render_cache),
         );
 
         // Update internal state from render result
-        self.visual_positions = result
-            .cursor_map
-            .iter()
-            .cloned()
-            .map(|(pointer, position)| CursorDisplay { pointer, position })
-            .collect();
+        // Only rebuild visual_positions if we tracked all positions
+        if track_all_positions {
+            self.visual_positions = result
+                .cursor_map
+                .iter()
+                .cloned()
+                .map(|(pointer, position)| CursorDisplay { pointer, position })
+                .collect();
+        }
 
         self.last_cursor_visual = result.cursor;
         if self.preferred_column.is_none() {
@@ -615,7 +666,7 @@ mod tests {
         let mut display = create_test_display();
 
         // Render to populate visual positions
-        let _render = display.render_document(80, 0, None);
+        let _render = display.render_document_with_positions(80, 0, None);
 
         // Get initial cursor position
         let initial_pointer = display.cursor_pointer();
@@ -632,7 +683,7 @@ mod tests {
         let mut display = create_test_display();
 
         // Render to populate visual positions
-        let _render = display.render_document(80, 0, None);
+        let _render = display.render_document_with_positions(80, 0, None);
 
         // Move to second paragraph first
         display.move_cursor_vertical(1);
@@ -650,7 +701,7 @@ mod tests {
         let mut display = create_test_display();
 
         // Render to populate visual positions
-        let _render = display.render_document(80, 0, None);
+        let _render = display.render_document_with_positions(80, 0, None);
 
         // Move cursor to the middle of the line
         for _ in 0..5 {
@@ -672,7 +723,7 @@ mod tests {
         let mut display = create_test_display();
 
         // Render to populate visual positions
-        let _render = display.render_document(80, 0, None);
+        let _render = display.render_document_with_positions(80, 0, None);
 
         let initial_offset = display.cursor_pointer().offset;
 
@@ -718,7 +769,7 @@ mod tests {
         display.last_view_height = 10;
 
         // Render to populate visual positions
-        let _render = display.render_document(80, 0, None);
+        let _render = display.render_document_with_positions(80, 0, None);
 
         let initial_pointer = display.cursor_pointer();
 
@@ -738,7 +789,7 @@ mod tests {
         let mut display = create_test_display();
 
         // Render to populate visual positions
-        let _render = display.render_document(80, 0, None);
+        let _render = display.render_document_with_positions(80, 0, None);
 
         // Move to the middle of the line
         for _ in 0..5 {
@@ -785,7 +836,7 @@ mod tests {
         let mut display = create_test_display();
 
         // Render to populate visual positions
-        let _render = display.render_document(80, 0, None);
+        let _render = display.render_document_with_positions(80, 0, None);
 
         // Get boundaries of first visual line
         if let Some((start, end)) = display.visual_line_boundaries(0) {
@@ -812,7 +863,7 @@ mod tests {
         let mut display = EditorDisplay::new(DocumentEditor::new(doc));
 
         // Render to populate visual_positions
-        let _ = display.render_document(80, 0, None);
+        let _ = display.render_document_with_positions(80, 0, None);
 
         // Try to navigate down to reach the checklist
         display.move_cursor_vertical(1);
@@ -846,7 +897,7 @@ mod tests {
         let mut display = EditorDisplay::new(DocumentEditor::new(doc));
 
         // Render to populate visual_positions
-        let _ = display.render_document(80, 0, None);
+        let _ = display.render_document_with_positions(80, 0, None);
 
         // Try to navigate down to reach the checklist
         display.move_cursor_vertical(1);
@@ -885,7 +936,7 @@ mod tests {
         let mut display = EditorDisplay::new(DocumentEditor::new(doc));
 
         // Render to populate visual_positions
-        let _ = display.render_document(80, 0, None);
+        let _ = display.render_document_with_positions(80, 0, None);
 
         // Try to navigate down to reach the checklist
         display.move_cursor_vertical(1);
@@ -919,7 +970,7 @@ mod tests {
         let mut display = EditorDisplay::new(DocumentEditor::new(doc));
 
         // Render to populate visual_positions
-        let _ = display.render_document(80, 0, None);
+        let _ = display.render_document_with_positions(80, 0, None);
 
         // Try to navigate down to reach the checklist
         display.move_cursor_vertical(1);
@@ -950,7 +1001,7 @@ mod tests {
     fn test_empty_doc_has_cursor() {
         let doc = ftml! { p {} };
         let mut display = EditorDisplay::new(DocumentEditor::new(doc));
-        let _ = display.render_document(80, 0, None);
+        let _ = display.render_document_with_positions(80, 0, None);
         let pos1 = display.cursor_pointer();
         assert_eq!(pos1.paragraph_path.numeric_steps(), vec![0]);
         assert_eq!(pos1.span_path.indices(), vec![0]);
@@ -976,20 +1027,20 @@ mod tests {
         }
 
         fn get_pos(&mut self) -> Option<(usize, u16)> {
-            let _ = self.render_document(80, 0, None);
+            let _ = self.render_document_with_positions(80, 0, None);
 
             self.last_cursor_visual().map(|v| (v.line, v.column))
         }
 
         fn get_content_pos(&mut self) -> Option<(usize, u16)> {
-            let _ = self.render_document(80, 0, None);
+            let _ = self.render_document_with_positions(80, 0, None);
 
             self.last_cursor_visual()
                 .map(|v| (v.content_line, v.content_column))
         }
 
         fn get_txt(&mut self) -> String {
-            let r = self.render_document(80, 0, None);
+            let r = self.render_document_with_positions(80, 0, None);
             let mut s = String::new();
             for l in r.lines {
                 for i in l.spans {
@@ -1005,7 +1056,7 @@ mod tests {
     fn test_adding_two_checklist_items() {
         let doc = ftml! { p {} };
         let mut display = EditorDisplay::new(DocumentEditor::new(doc));
-        let _ = display.render_document(80, 0, None);
+        let _ = display.render_document_with_positions(80, 0, None);
 
         assert!(
             display.set_paragraph_type(tdoc::ParagraphType::Checklist),
@@ -1042,7 +1093,7 @@ mod tests {
         let mut display = EditorDisplay::new(DocumentEditor::new(doc));
 
         // Render to populate visual_positions
-        let _ = display.render_document(80, 0, None);
+        let _ = display.render_document_with_positions(80, 0, None);
 
         // Find the H2 "Todos"
         let h2_path = ParagraphPath::new_root(1); // H1 is 0, H2 is 1
@@ -1084,7 +1135,7 @@ mod tests {
         let mut display = EditorDisplay::new(DocumentEditor::new(doc));
 
         // Render to populate visual_positions
-        let _ = display.render_document(80, 0, None);
+        let _ = display.render_document_with_positions(80, 0, None);
 
         // Check initial position
         let initial = display.cursor_pointer();
@@ -1238,7 +1289,7 @@ mod tests {
         let mut display = EditorDisplay::new(DocumentEditor::new(doc));
 
         // Render to populate visual positions
-        let result = display.render_document(80, 0, None);
+        let result = display.render_document_with_positions(80, 0, None);
         display.visual_positions = result
             .cursor_map
             .into_iter()
