@@ -579,7 +579,7 @@ fn bench_scrolling_detailed_analysis() {
         height: 30,
     };
     let result = display.render_document(80, 0, None);
-    display.update_after_render(text_area, result.lines.len());
+    display.update_after_render(text_area);
 
     println!("\n📊 Document Statistics:");
     println!(
