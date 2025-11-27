@@ -139,6 +139,13 @@ impl EditorDisplay {
         });
 
         layout.cursor = found;
+
+        // If cursor wasn't found (because track_all_positions was false during rendering),
+        // mark layout dirty and force a re-render to populate the cursor position
+        if found.is_none() {
+            self.layout_dirty = true;
+            self.render_document(self.wrap_width, self.left_padding, None);
+        }
     }
 
     /// Get cursor positions for a specific visual line.
@@ -344,8 +351,8 @@ impl EditorDisplay {
             for info in cached_layout.paragraph_lines.iter_mut() {
                 // Adjust paragraphs that come after the edited one (by index, not by line number)
                 if info.paragraph_index > paragraph_index {
-                    let old_start = info.start_line;
-                    let old_end = info.end_line;
+                    let _old_start = info.start_line;
+                    let _old_end = info.end_line;
                     info.start_line = (info.start_line as isize + line_count_delta) as usize;
                     info.end_line = (info.end_line as isize + line_count_delta) as usize;
                 }
@@ -402,10 +409,11 @@ impl EditorDisplay {
             || self.left_padding != left_padding;
 
         if needs_rerender {
+            self.render_document_internal(wrap_width, left_padding, selection, false);
             self.wrap_width = wrap_width;
             self.left_padding = left_padding;
             self.layout_dirty = false;
-        } else {
+        } else{
             let result = self.layout.as_ref().unwrap().clone();
             // Update internal cursor state even when using cached layout
             if self.preferred_column.is_none() {
