@@ -578,7 +578,7 @@ fn bench_scrolling_detailed_analysis() {
         width: 100,
         height: 30,
     };
-    let result = display.render_document(80, 0, None);
+    display.render_document(80, 0, None);
     display.update_after_render(text_area);
 
     println!("\n📊 Document Statistics:");
@@ -586,10 +586,10 @@ fn bench_scrolling_detailed_analysis() {
         "  Paragraphs:          {}",
         display.document().paragraphs.len()
     );
-    println!("  Total visual lines:  {}", result.lines.len());
+    println!("  Total visual lines:  {}", display.get_layout().lines.len());
     println!(
         "  Cursor map entries:  {}",
-        result
+        display.get_layout()
             .paragraph_lines
             .iter()
             .map(|p| p.positions.len())
@@ -612,30 +612,20 @@ fn bench_scrolling_detailed_analysis() {
 
     // Measure render_document
     let render_start = Instant::now();
-    let result = display.render_document(80, 0, None);
+    display.render_document(80, 0, None);
     let render_time = render_start.elapsed();
     println!("  render_document:      {:?}", render_time);
     println!(
         "  Cursor map size:      {}",
-        result
+        display.get_layout()
             .paragraph_lines
             .iter()
             .map(|p| p.positions.len())
             .sum::<usize>()
     );
 
-    // Calculate cache statistics
-    let cache_hits = // display.render_cache_hits();
-    let cache_misses = // display.render_cache_misses();
-    println!("\n💾 Cache Statistics:");
-    println!("  Hits:       {}", cache_hits);
-    println!("  Misses:     {}", cache_misses);
-    println!(
-        "  Hit rate:   {:.1}%",
-        // display.render_cache_hit_rate() * 100.0
-    );
-
     // Analysis
+    let layout = display.get_layout();
     println!("\n🔍 Performance Analysis:");
     println!("\n1. RENDERING BOTTLENECK:");
     println!(
@@ -647,7 +637,7 @@ fn bench_scrolling_detailed_analysis() {
     println!("\n2. CURSOR MAP SIZE:");
     println!(
         "   {} cursor positions tracked per render",
-        result
+        layout
             .paragraph_lines
             .iter()
             .map(|p| p.positions.len())
@@ -655,27 +645,10 @@ fn bench_scrolling_detailed_analysis() {
     );
     println!("   This happens because track_all_positions=true in EditorDisplay::render_document");
 
-    println!("\n3. CACHE EFFICIENCY:");
-    println!(
-        "   Cache hit rate is {:.1}%, but rendering is still slow",
-        // display.render_cache_hit_rate() * 100.0
-    );
-    println!("   This suggests the bottleneck is not cache misses, but rather:");
-    println!(
-        "   - Processing {} cached cursor positions",
-        result
-            .paragraph_lines
-            .iter()
-            .map(|p| p.positions.len())
-            .sum::<usize>()
-    );
-    println!("   - Building the cursor_map Vec on every render");
-    println!("   - Cloning cursor positions into visual_positions Vec");
-
-    println!("\n4. ROOT CAUSES:");
+    println!("\n3. ROOT CAUSES:");
     println!(
         "   ✗ track_all_positions=true tracks {} positions per render",
-        result
+        layout
             .paragraph_lines
             .iter()
             .map(|p| p.positions.len())
@@ -685,21 +658,21 @@ fn bench_scrolling_detailed_analysis() {
     println!("   ✗ visual_positions Vec is rebuilt on every render");
     println!(
         "   ✗ With {} visual lines, this creates significant overhead",
-        result.lines.len()
+        layout.lines.len()
     );
 
-    println!("\n5. RECOMMENDED FIXES:");
+    println!("\n4. RECOMMENDED FIXES:");
     println!("   1. Set track_all_positions=false when only cursor position is needed");
     println!("   2. Only track full cursor_map when actually needed (e.g., for mouse clicks)");
     println!("   3. Consider incremental updates to cursor_map instead of full rebuild");
     println!("   4. Cache visual_positions separately to avoid rebuilding on every render");
     println!("   5. Use a more efficient data structure for cursor_map (e.g., HashMap)");
 
-    println!("\n6. EXPECTED IMPROVEMENT:");
+    println!("\n5. EXPECTED IMPROVEMENT:");
     println!("   If track_all_positions=false:");
     println!(
         "   - Eliminate {} cursor position tracking operations",
-        result
+        layout
             .paragraph_lines
             .iter()
             .map(|p| p.positions.len())
@@ -736,12 +709,12 @@ fn bench_editing_insert_text() {
         width: 100,
         height: 30,
     };
-    let result = display.render_document_with_positions(80, 0, None);
-    display.update_after_render(text_area, result.lines.len());
+    display.render_document(80, 0, None);
+    display.update_after_render(text_area);
 
     println!("\nDocument stats:");
     println!("  Paragraphs: {}", display.document().paragraphs.len());
-    println!("  Total visual lines: {}", result.lines.len());
+    println!("  Total visual lines: {}", display.get_layout().lines.len());
 
     // Find first text paragraph and move cursor there
     // USER-GUIDE starts with heading paragraphs, so we need to move to first text paragraph
@@ -782,11 +755,11 @@ fn bench_editing_insert_text() {
         display.insert_char(*ch);
         insert_times.push(insert_start.elapsed());
 
-        // Render after insertion (with position rebuild since document changed)
+        // Render after insertion (uses incremental updates)
         let render_start = Instant::now();
-        let result = display.render_document_with_positions(80, 0, None);
+        display.render_document(80, 0, None);
         render_times.push(render_start.elapsed());
-        display.update_after_render(text_area, result.lines.len());
+        display.update_after_render(text_area);
 
         // Sample every 100 characters for progress
         if (idx + 1) % 100 == 0 {
@@ -808,14 +781,6 @@ fn bench_editing_insert_text() {
 
     let combined_avg = insert_avg + render_avg;
 
-    // Get cache statistics
-    let cache_info = format!(
-        "// Cache - Hits: {}, Misses: {}, Hit rate: {:.1}%",
-        // display.render_cache_hits(),
-        // display.render_cache_misses(),
-        // display.render_cache_hit_rate() * 100.0
-    );
-
     println!("\n╔════════════════════════════════════════════════════════════════╗");
     println!("║                         RESULTS                                ║");
     println!("╚════════════════════════════════════════════════════════════════╝");
@@ -829,15 +794,13 @@ fn bench_editing_insert_text() {
     println!("  Min:      {:?}", insert_min);
     println!("  Max:      {:?}", insert_max);
     println!();
-    println!("🎨 Rendering (render_document_with_positions):");
+    println!("🎨 Rendering (render_document with incremental updates):");
     println!("  Average:  {:?}", render_avg);
     println!("  Min:      {:?}", render_min);
     println!("  Max:      {:?}", render_max);
     println!();
     println!("⚡ Combined per keypress:");
     println!("  Average:  {:?}", combined_avg);
-    println!();
-    println!("💾 {}", cache_info);
 
     // Performance assessment
     println!("\n🎯 Performance Assessment:");
@@ -875,8 +838,8 @@ fn bench_editing_insert_text() {
 
     if render_avg.as_millis() > 5 {
         println!("\n  💡 Rendering is slow - potential optimizations:");
-        println!("     - This uses render_document_with_positions (full tracking)");
-        println!("     - Consider incremental visual position updates");
+        println!("     - This uses render_document (with incremental updates)");
+        println!("     - Check if incremental updates are working correctly");
         println!("     - Optimize paragraph hashing for cache invalidation");
     }
 }
@@ -959,43 +922,9 @@ fn bench_user_guide_rendering() {
         println!("  ✅ GOOD: Rendering is fast enough for 60 FPS");
     }
 
-    // Test with cache
-    println!("\nWith render cache:");
-    let mut cache = // render::RenderCache::new();
-
-    // First render - cold cache
-    let start = Instant::now();
-    let tracking = DirectCursorTracking {
-        cursor: None,
-        selection: None,
-        track_all_positions: false,
-    };
-    let _ = render::render_document_direct(&doc, 80, 0, &[], tracking);
-    let first_render = start.elapsed();
-
-    // Subsequent renders - warm cache
-    let mut cached_durations = Vec::new();
-    for _ in 0..iterations {
-        let start = Instant::now();
-        let tracking = DirectCursorTracking {
-            cursor: None,
-            selection: None,
-            track_all_positions: false,
-        };
-        let _ = render::render_document_direct(&doc, 80, 0, &[], tracking);
-        cached_durations.push(start.elapsed());
-    }
-
-    let cached_total: Duration = cached_durations.iter().sum();
-    let cached_avg = cached_total / iterations as u32;
-
-    println!("  First render: {:?}", first_render);
-    println!("  Cached average: {:?}", cached_avg);
-    println!(
-        "  Speedup: {:.2}x",
-        first_render.as_secs_f64() / cached_avg.as_secs_f64()
-    );
-    println!("  Cache hit rate: {:.1}%", cache.hit_rate() * 100.0);
+    // Note: In production, render caching is handled by EditorDisplay's layout cache
+    println!("\nNote: Direct rendering doesn't have per-paragraph caching,");
+    println!("      but EditorDisplay provides layout caching for real-world use.");
 }
 
 #[test]
@@ -1014,7 +943,6 @@ fn bench_real_world_render_flow() {
         tdoc::markdown::parse(std::io::Cursor::new(&content)).expect("Failed to parse markdown");
 
     let editor = editor::DocumentEditor::new(doc);
-    let mut cache = // render::RenderCache::new();
 
     println!("\nDocument stats:");
     println!("  Paragraphs: {}", editor.document().paragraphs.len());
@@ -1082,23 +1010,6 @@ fn bench_real_world_render_flow() {
     println!("  ─────────────────────────────────────");
     println!("  TOTAL per frame:      {:>8?}  (100.0%)", total_avg);
 
-    println!("\n📈 Cache statistics:");
-    println!("  Cache hits:     {}", cache.hits);
-    println!("  Cache misses:   {}", cache.misses);
-    println!("  Hit rate:       {:.1}%", cache.hit_rate() * 100.0);
-    println!(
-        "  Expected hits:  {} (if only 1 para with cursor changes per frame)",
-        iterations * (editor.document().paragraphs.len() - 1)
-    );
-    println!(
-        "  Expected misses: {} (1 para with cursor per frame)",
-        iterations
-    );
-    println!(
-        "  Actual misses/iter: {:.1} paragraphs",
-        cache.misses as f64 / iterations as f64
-    );
-
     println!("\n🔍 Analysis:");
     println!("  ✨ Direct rendering eliminates document cloning overhead!");
     println!("     Cursor tracking is now negligible compared to old cloning approach.");
@@ -1138,12 +1049,12 @@ fn bench_scrolling_cursor_movement() {
         width: 100,
         height: 30,
     };
-    let result = display.render_document(80, 0, None);
-    display.update_after_render(text_area, result.lines.len());
+    display.render_document(80, 0, None);
+    display.update_after_render(text_area);
 
     println!("\nDocument stats:");
     println!("  Paragraphs: {}", display.document().paragraphs.len());
-    println!("  Total visual lines: {}", result.lines.len());
+    println!("  Total visual lines: {}", display.get_layout().lines.len());
     println!("  File size: {} bytes", content.len());
 
     // Track timing for each down arrow press
@@ -1163,9 +1074,9 @@ fn bench_scrolling_cursor_movement() {
 
         // Time the render (which happens after each keypress)
         let render_start = Instant::now();
-        let result = display.render_document(80, 0, None);
+        display.render_document(80, 0, None);
         render_times.push(render_start.elapsed());
-        display.update_after_render(text_area, result.lines.len());
+        display.update_after_render(text_area);
 
         // Check if we've reached the end (cursor didn't move)
         let after_pointer = display.cursor_pointer();
@@ -1189,14 +1100,6 @@ fn bench_scrolling_cursor_movement() {
 
     let combined_avg = move_avg + render_avg;
 
-    // Get cache statistics
-    let cache_info = format!(
-        "// Cache - Hits: {}, Misses: {}, Hit rate: {:.1}%",
-        // display.render_cache_hits(),
-        // display.render_cache_misses(),
-        // display.render_cache_hit_rate() * 100.0
-    );
-
     println!("\n╔════════════════════════════════════════════════════════════════╗");
     println!("║                         RESULTS                                ║");
     println!("╚════════════════════════════════════════════════════════════════╝");
@@ -1217,8 +1120,6 @@ fn bench_scrolling_cursor_movement() {
     println!();
     println!("⚡ Combined per keypress:");
     println!("  Average:  {:?}", combined_avg);
-    println!();
-    println!("💾 {}", cache_info);
 
     // Performance assessment
     println!("\n🎯 Performance Assessment:");
@@ -1267,12 +1168,12 @@ fn bench_scrolling_page_down() {
         width: 100,
         height: 30,
     };
-    let result = display.render_document(80, 0, None);
-    display.update_after_render(text_area, result.lines.len());
+    display.render_document(80, 0, None);
+    display.update_after_render(text_area);
 
     println!("\nDocument stats:");
     println!("  Paragraphs: {}", display.document().paragraphs.len());
-    println!("  Total visual lines: {}", result.lines.len());
+    println!("  Total visual lines: {}", display.get_layout().lines.len());
     println!(
         "  Page jump distance: {} lines",
         display.page_jump_distance()
@@ -1296,9 +1197,9 @@ fn bench_scrolling_page_down() {
 
         // Time the render (which happens after each keypress)
         let render_start = Instant::now();
-        let result = display.render_document(80, 0, None);
+        display.render_document(80, 0, None);
         render_times.push(render_start.elapsed());
-        display.update_after_render(text_area, result.lines.len());
+        display.update_after_render(text_area);
 
         // Check if we've reached the end (cursor didn't move)
         let after_pointer = display.cursor_pointer();
@@ -1322,14 +1223,6 @@ fn bench_scrolling_page_down() {
 
     let combined_avg = move_avg + render_avg;
 
-    // Get cache statistics
-    let cache_info = format!(
-        "// Cache - Hits: {}, Misses: {}, Hit rate: {:.1}%",
-        // display.render_cache_hits(),
-        // display.render_cache_misses(),
-        // display.render_cache_hit_rate() * 100.0
-    );
-
     println!("\n╔════════════════════════════════════════════════════════════════╗");
     println!("║                         RESULTS                                ║");
     println!("╚════════════════════════════════════════════════════════════════╝");
@@ -1350,8 +1243,6 @@ fn bench_scrolling_page_down() {
     println!();
     println!("⚡ Combined per keypress:");
     println!("  Average:  {:?}", combined_avg);
-    println!();
-    println!("💾 {}", cache_info);
 
     // Performance assessment
     println!("\n🎯 Performance Assessment:");
