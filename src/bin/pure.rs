@@ -745,15 +745,16 @@ impl App {
         });
     }
 
-    fn apply_pending_scroll_restore(&mut self, render: &RenderResult, viewport_height: usize) {
+    fn apply_pending_scroll_restore(&mut self, viewport_height: usize) {
         let Some(restore) = self.pending_scroll_restore.take() else {
             return;
         };
         let viewport = viewport_height.max(1);
-        let max_scroll = render
-            .total_lines
+        let max_scroll = self
+            .display
+            .get_total_lines()
             .saturating_sub(viewport)
-            .min(render.total_lines);
+            .min(self.display.get_total_lines());
         let mut target = if max_scroll == 0 {
             0
         } else {
@@ -764,7 +765,7 @@ impl App {
         }
         self.scroll_top = target;
         if restore.ensure_cursor_visible
-            && let Some(cursor) = &render.cursor
+            && let Some(cursor) = &self.display.cursor_visual()
         {
             self.scroll_top = self.scroll_top_for_cursor(cursor.line, viewport, max_scroll);
         }
@@ -798,13 +799,13 @@ impl App {
 
         // Use full position tracking when needed (after edits, mouse events, first render)
         // Otherwise use fast rendering for smooth scrolling
-        let render = if self.needs_position_rebuild {
+        if self.needs_position_rebuild {
             self.needs_position_rebuild = false;
             self.display
-                .render_document_with_positions(wrap_width, left_padding, selection)
+                .render_document_with_positions(wrap_width, left_padding, selection);
         } else {
             self.display
-                .render_document(wrap_width, left_padding, selection)
+                .render_document(wrap_width, left_padding, selection);
         };
 
         let render_time = render_start.elapsed();
@@ -812,30 +813,29 @@ impl App {
             // eprintln!("  render_document: {:?}", render_time);
         }
 
-        self.display
-            .update_after_render(text_area, render.total_lines);
-        let _cursor_visual = self.display.last_cursor_visual();
+        self.display.update_after_render(text_area);
+        let _cursor_visual = self.display.cursor_visual();
         let viewport_height = text_area.height as usize;
-        self.apply_pending_scroll_restore(&render, viewport_height);
-        self.adjust_scroll(&render, viewport_height);
+        self.apply_pending_scroll_restore(viewport_height);
+        self.adjust_scroll(self.display.get_total_lines(), viewport_height);
 
         // Store viewport and total lines for scrollbar calculations
         self.last_viewport_height = viewport_height;
-        self.last_total_lines = render.total_lines;
+        self.last_total_lines = self.display.get_total_lines();
         self.last_scrollbar_column = scrollbar_area.x;
 
-        let paragraph = Paragraph::new(Text::from(render.lines.clone()))
-            .wrap(Wrap { trim: false })
-            .block(Block::default().borders(Borders::NONE))
-            .scroll((self.scroll_top as u16, 0));
-        frame.render_widget(paragraph, text_area);
+        if let Some(lines) = self.display.get_lines() {
+            let paragraph = Paragraph::new(Text::from(lines))
+                .wrap(Wrap { trim: false })
+                .block(Block::default().borders(Borders::NONE))
+                .scroll((self.scroll_top as u16, 0));
+            frame.render_widget(paragraph, text_area);
+        }
 
         // Draw custom scrollbar
         self.draw_scrollbar(frame, scrollbar_area);
 
-        // Use last_cursor_visual for current cursor position (updates on cursor movement)
-        // not render.cursor (from cached layout)
-        if let Some(cursor) = self.display.last_cursor_visual()
+        if let Some(cursor) = self.display.cursor_visual()
             && cursor.line >= self.scroll_top
             && cursor.line < self.scroll_top + viewport_height
             && text_area.width > 0
@@ -845,7 +845,8 @@ impl App {
             frame.set_cursor_position(Position::new(cursor_x, cursor_y));
         }
 
-        let status_line = self.status_line(render.content_lines, status_area.width as usize);
+        let status_line =
+            self.status_line(self.display.get_content_lines(), status_area.width as usize);
         let status_widget = Paragraph::new(status_line)
             .block(Block::default().borders(Borders::NONE))
             .style(Style::default().bg(Color::Blue).fg(Color::White));
@@ -1228,19 +1229,15 @@ impl App {
         }
     }
 
-    fn adjust_scroll(&mut self, render: &RenderResult, viewport_height: usize) {
+    fn adjust_scroll(&mut self, total_lines: usize, viewport_height: usize) {
         let viewport = viewport_height.max(1);
-        let max_scroll = render
-            .total_lines
-            .saturating_sub(viewport)
-            .min(render.total_lines);
+        let max_scroll = total_lines.saturating_sub(viewport).min(total_lines);
         if self.scroll_top > max_scroll {
             self.scroll_top = max_scroll;
         }
         if self.display.cursor_following() {
-            // Use last_cursor_visual which updates on cursor movement,
-            // not render.cursor which is from the cached layout
-            if let Some(cursor) = self.display.last_cursor_visual() {
+            // Use cursor_visual() to get the visual cursor position from the cached layout
+            if let Some(cursor) = self.display.cursor_visual() {
                 self.scroll_top = self.scroll_top_for_cursor(cursor.line, viewport, max_scroll);
             }
             if self.scroll_top > max_scroll {
@@ -1940,7 +1937,7 @@ impl App {
     }
 
     fn cursor_position_text(&self) -> String {
-        if let Some(position) = self.display.last_cursor_visual() {
+        if let Some(position) = self.display.cursor_visual() {
             let line = position.content_line + 1;
             let column = usize::from(position.content_column) + 1;
             format!("{}:{}", line, column)
