@@ -33,6 +33,8 @@ pub struct EditorDisplay {
     layout_dirty: bool,
     /// Track which paragraph was last modified for incremental updates
     last_modified_paragraph: Option<usize>,
+    /// Track the last selection to detect selection changes
+    last_selection: Option<(CursorPointer, CursorPointer)>,
 }
 
 impl EditorDisplay {
@@ -52,6 +54,7 @@ impl EditorDisplay {
             last_text_area: Rect::default(),
             layout_dirty: true,
             last_modified_paragraph: None,
+            last_selection: None,
         }
     }
 
@@ -395,6 +398,7 @@ impl EditorDisplay {
     /// Uses cached layout if available and parameters unchanged. Only re-renders when:
     /// - Document content changed (layout_dirty=true)
     /// - Viewport dimensions changed (wrap_width or left_padding)
+    /// - Selection changed
     /// - First render (cached_layout=None)
     pub fn render_document(
         &mut self,
@@ -402,17 +406,22 @@ impl EditorDisplay {
         left_padding: usize,
         selection: Option<(CursorPointer, CursorPointer)>,
     ) {
+        // Check if selection has changed
+        let selection_changed = self.last_selection != selection;
+
         // Check if we can reuse cached layout
         let needs_rerender = self.layout_dirty
             || self.layout.is_none()
             || self.wrap_width != wrap_width
-            || self.left_padding != left_padding;
+            || self.left_padding != left_padding
+            || selection_changed;
 
         if needs_rerender {
-            self.render_document_internal(wrap_width, left_padding, selection, false);
+            self.render_document_internal(wrap_width, left_padding, selection.clone(), false);
             self.wrap_width = wrap_width;
             self.left_padding = left_padding;
             self.layout_dirty = false;
+            self.last_selection = selection;
         } else{
             let result = self.layout.as_ref().unwrap().clone();
             // Update internal cursor state even when using cached layout
@@ -436,10 +445,11 @@ impl EditorDisplay {
         selection: Option<(CursorPointer, CursorPointer)>,
     ) {
         // Force re-render
-        self.render_document_internal(wrap_width, left_padding, selection, true);
+        self.render_document_internal(wrap_width, left_padding, selection.clone(), true);
         self.wrap_width = wrap_width;
         self.left_padding = left_padding;
         self.layout_dirty = false;
+        self.last_selection = selection;
     }
 
     /// Internal render implementation
