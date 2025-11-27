@@ -1,6 +1,7 @@
 use std::ops::{Deref, DerefMut};
 
 use ratatui::layout::Rect;
+use ratatui::text::Line;
 
 use crate::editor::{CursorPointer, DocumentEditor};
 use crate::render::{
@@ -14,17 +15,15 @@ use crate::render::{
 pub struct EditorDisplay {
     editor: DocumentEditor,
     /// Cached layout result - only re-rendered when document changes or viewport resizes
-    cached_layout: Option<RenderResult>,
+    layout: Option<RenderResult>,
     /// Parameters used for cached_layout (to detect when re-render is needed)
-    cached_wrap_width: usize,
-    cached_left_padding: usize,
-    /// Mapping of visual lines to paragraphs, including all cursor positions
-    paragraph_lines: Vec<ParagraphLineInfo>,
+    wrap_width: usize,
+    left_padding: usize,
+
     /// Last wrap_width used for rendering (needed for cache lookups)
     last_wrap_width: usize,
     /// Last left_padding used for rendering (needed for cache lookups)
     last_left_padding: usize,
-    last_cursor_visual: Option<CursorVisualPosition>,
     preferred_column: Option<u16>,
     cursor_following: bool,
     last_view_height: usize,
@@ -41,13 +40,11 @@ impl EditorDisplay {
     pub fn new(editor: DocumentEditor) -> Self {
         Self {
             editor,
-            cached_layout: None,
-            cached_wrap_width: 80,
-            cached_left_padding: 0,
-            paragraph_lines: Vec::new(),
+            layout: None,
+            wrap_width: 80,
+            left_padding: 0,
             last_wrap_width: 80,
             last_left_padding: 0,
-            last_cursor_visual: None,
             preferred_column: None,
             cursor_following: true,
             last_view_height: 1,
@@ -61,25 +58,90 @@ impl EditorDisplay {
     /// Get all visual positions from paragraph_lines (for tests and legacy code)
     #[allow(dead_code)]
     pub fn visual_positions(&self) -> Vec<CursorDisplay> {
-        self.paragraph_lines
-            .iter()
-            .flat_map(|info| {
-                info.positions.iter().map(|(pointer, position)| {
-                    // Convert relative position to absolute
-                    let mut absolute_pos = *position;
-                    absolute_pos.line = info.start_line + position.line;
-                    CursorDisplay {
-                        pointer: pointer.clone(),
-                        position: absolute_pos,
-                    }
+        if let Some(layout) = &self.layout {
+            layout
+                .paragraph_lines
+                .iter()
+                .flat_map(|info| {
+                    info.positions.iter().map(|(pointer, position)| {
+                        // Convert relative position to absolute
+                        let mut absolute_pos = *position;
+                        absolute_pos.line = info.start_line + position.line;
+                        CursorDisplay {
+                            pointer: pointer.clone(),
+                            position: absolute_pos,
+                        }
+                    })
                 })
-            })
-            .collect()
+                .collect()
+        } else {
+            vec![]
+        }
+    }
+
+    pub fn get_layout(&self) -> &RenderResult {
+        self.layout.as_ref().unwrap()
+    }
+
+    pub fn get_total_lines(&self) -> usize {
+        if let Some(layout) = &self.layout {
+            layout.total_lines
+        } else {
+            0
+        }
+    }
+
+    pub fn get_content_lines(&self) -> usize {
+        if let Some(layout) = &self.layout {
+            layout.content_lines
+        } else {
+            0
+        }
+    }
+
+    pub fn get_lines(&self) -> Option<Vec<Line<'static>>> {
+        if let Some(layout) = &self.layout {
+            Some(layout.lines.clone())
+        } else {
+            None
+        }
     }
 
     /// Get the last cursor visual position
-    pub fn last_cursor_visual(&self) -> Option<CursorVisualPosition> {
-        self.last_cursor_visual
+    pub fn cursor_visual(&self) -> Option<CursorVisualPosition> {
+        if let Some(layout) = &self.layout {
+            layout.cursor
+        } else {
+            None
+        }
+    }
+
+    /// Update the cached cursor visual position after cursor movement
+    /// Looks up the current logical cursor position in paragraph_lines and updates layout.cursor
+    fn update_cursor_visual_position(&mut self) {
+        let Some(layout) = &mut self.layout else {
+            return;
+        };
+
+        let cursor_pointer = self.editor.cursor_pointer();
+
+        // Search for the visual position of this pointer in paragraph_lines
+        let found = layout
+            .paragraph_lines
+            .iter()
+            .find_map(|info| {
+                info.positions
+                    .iter()
+                    .find(|(p, _)| p == &cursor_pointer)
+                    .map(|(_, pos)| {
+                        // Convert relative position to absolute
+                        let mut absolute_pos = *pos;
+                        absolute_pos.line = info.start_line + pos.line;
+                        absolute_pos
+                    })
+            });
+
+        layout.cursor = found;
     }
 
     /// Get cursor positions for a specific visual line.
@@ -87,6 +149,9 @@ impl EditorDisplay {
     fn get_positions_for_line(&self, line: usize) -> Vec<CursorDisplay> {
         // Find which paragraph contains this line
         let paragraph_info = self
+            .layout
+            .as_ref()
+            .unwrap()
             .paragraph_lines
             .iter()
             .find(|info| line >= info.start_line && line <= info.end_line);
@@ -164,14 +229,19 @@ impl EditorDisplay {
     pub fn clear_render_cache(&mut self) -> bool {
         // Try incremental update if we know which paragraph changed
         if let Some(para_index) = self.last_modified_paragraph {
-            eprintln!("DEBUG clear_render_cache: trying incremental update for paragraph {}", para_index);
+            eprintln!(
+                "DEBUG clear_render_cache: trying incremental update for paragraph {}",
+                para_index
+            );
             if self.update_paragraph_layout(para_index) {
                 // Incremental update succeeded!
                 eprintln!("DEBUG clear_render_cache: incremental update SUCCEEDED");
                 self.last_modified_paragraph = None;
                 return true; // Incremental update succeeded
             }
-            eprintln!("DEBUG clear_render_cache: incremental update FAILED, falling back to full re-render");
+            eprintln!(
+                "DEBUG clear_render_cache: incremental update FAILED, falling back to full re-render"
+            );
         } else {
             eprintln!("DEBUG clear_render_cache: no paragraph index set, doing full re-render");
         }
@@ -193,17 +263,23 @@ impl EditorDisplay {
     /// This is much faster than re-rendering the entire document when only one paragraph changed.
     /// Returns true if the update was successful, false if a full re-render is needed.
     pub fn update_paragraph_layout(&mut self, paragraph_index: usize) -> bool {
-        eprintln!("DEBUG update_paragraph_layout: starting for paragraph {}", paragraph_index);
+        eprintln!(
+            "DEBUG update_paragraph_layout: starting for paragraph {}",
+            paragraph_index
+        );
 
         // Need cached layout and valid parameters to do incremental update
-        let Some(cached_layout) = self.cached_layout.as_mut() else {
+        let Some(cached_layout) = self.layout.as_mut() else {
             eprintln!("DEBUG update_paragraph_layout: FAILED - no cached layout");
             return false;
         };
 
         // Get the paragraph
         let Some(paragraph) = self.editor.document().paragraphs.get(paragraph_index) else {
-            eprintln!("DEBUG update_paragraph_layout: FAILED - paragraph {} not found", paragraph_index);
+            eprintln!(
+                "DEBUG update_paragraph_layout: FAILED - paragraph {} not found",
+                paragraph_index
+            );
             return false;
         };
 
@@ -213,7 +289,10 @@ impl EditorDisplay {
             .iter()
             .find(|info| info.paragraph_index == paragraph_index)
         else {
-            eprintln!("DEBUG update_paragraph_layout: FAILED - paragraph {} not in cached layout", paragraph_index);
+            eprintln!(
+                "DEBUG update_paragraph_layout: FAILED - paragraph {} not in cached layout",
+                paragraph_index
+            );
             return false;
         };
 
@@ -231,8 +310,8 @@ impl EditorDisplay {
             paragraph,
             paragraph_index,
             crate::editor::ParagraphPath::new_root(paragraph_index),
-            self.cached_wrap_width,
-            self.cached_left_padding,
+            self.wrap_width,
+            self.left_padding,
             "",
             &reveal_tags,
             DirectCursorTracking {
@@ -302,8 +381,14 @@ impl EditorDisplay {
         }
 
         // Update cursor if it's in the cached layout
-        eprintln!("DEBUG update_paragraph_layout: layout.cursor = {:?}", layout.cursor);
-        eprintln!("DEBUG update_paragraph_layout: cached_layout.cursor before = {:?}", cached_layout.cursor);
+        eprintln!(
+            "DEBUG update_paragraph_layout: layout.cursor = {:?}",
+            layout.cursor
+        );
+        eprintln!(
+            "DEBUG update_paragraph_layout: cached_layout.cursor before = {:?}",
+            cached_layout.cursor
+        );
         if let Some(ref mut cursor) = cached_layout.cursor {
             if cursor.line >= old_start_line && cursor.line <= old_end_line {
                 // Cursor is in the updated paragraph - recompute from layout
@@ -319,26 +404,31 @@ impl EditorDisplay {
                 eprintln!("DEBUG update_paragraph_layout: adjusting cursor line number");
                 cursor.line = (cursor.line as isize + line_count_delta) as usize;
             } else {
-                eprintln!("DEBUG update_paragraph_layout: cursor not in range to update (cursor.line={}, old_start={}, old_end={})",
-                         cursor.line, old_start_line, old_end_line);
+                eprintln!(
+                    "DEBUG update_paragraph_layout: cursor not in range to update (cursor.line={}, old_start={}, old_end={})",
+                    cursor.line, old_start_line, old_end_line
+                );
             }
         } else {
             eprintln!("DEBUG update_paragraph_layout: no cursor in cached layout!");
         }
-        eprintln!("DEBUG update_paragraph_layout: cached_layout.cursor after = {:?}", cached_layout.cursor);
+        eprintln!(
+            "DEBUG update_paragraph_layout: cached_layout.cursor after = {:?}",
+            cached_layout.cursor
+        );
 
         // Update just the modified paragraph entry in self.paragraph_lines (surgical update)
-        if let Some(self_para_info) = self
-            .paragraph_lines
-            .iter_mut()
-            .find(|info| info.paragraph_index == paragraph_index)
-        {
-            *self_para_info = cached_layout.paragraph_lines[para_info_index].clone();
-        }
+        // if let Some(self_para_info) = cached_layout
+        //     .paragraph_lines
+        //     .iter_mut()
+        //     .find(|info| info.paragraph_index == paragraph_index)
+        // {
+        //     *self_para_info = cached_layout.paragraph_lines[para_info_index].clone();
+        // }
 
-        // If line count changed, also adjust subsequent paragraphs in self.paragraph_lines
+        // If line count changed, also adjust subsequent paragraphs
         if line_count_delta != 0 {
-            for info in self.paragraph_lines.iter_mut() {
+            for info in cached_layout.paragraph_lines.iter_mut() {
                 if info.start_line > old_start_line {
                     info.start_line = (info.start_line as isize + line_count_delta) as usize;
                     info.end_line = (info.end_line as isize + line_count_delta) as usize;
@@ -346,7 +436,10 @@ impl EditorDisplay {
             }
         }
 
-        eprintln!("DEBUG update_paragraph_layout: SUCCESS for paragraph {}", paragraph_index);
+        eprintln!(
+            "DEBUG update_paragraph_layout: SUCCESS for paragraph {}",
+            paragraph_index
+        );
         true
     }
 
@@ -368,42 +461,43 @@ impl EditorDisplay {
         wrap_width: usize,
         left_padding: usize,
         selection: Option<(CursorPointer, CursorPointer)>,
-    ) -> RenderResult {
+    ) {
         // Check if we can reuse cached layout
         let needs_rerender = self.layout_dirty
-            || self.cached_layout.is_none()
-            || self.cached_wrap_width != wrap_width
-            || self.cached_left_padding != left_padding;
+            || self.layout.is_none()
+            || self.wrap_width != wrap_width
+            || self.left_padding != left_padding;
 
-        eprintln!("DEBUG render_document: needs_rerender={} (layout_dirty={}, cached_layout={}, wrap_width_changed={}, left_padding_changed={})",
-                  needs_rerender,
-                  self.layout_dirty,
-                  self.cached_layout.is_some(),
-                  self.cached_wrap_width != wrap_width,
-                  self.cached_left_padding != left_padding);
+        eprintln!(
+            "DEBUG render_document: needs_rerender={} (layout_dirty={}, cached_layout={}, wrap_width_changed={}, left_padding_changed={})",
+            needs_rerender,
+            self.layout_dirty,
+            self.layout.is_some(),
+            self.wrap_width != wrap_width,
+            self.left_padding != left_padding
+        );
 
         if needs_rerender {
             eprintln!("DEBUG render_document: doing FULL RE-RENDER");
             let result = self.render_document_internal(wrap_width, left_padding, selection, true);
-            self.cached_wrap_width = wrap_width;
-            self.cached_left_padding = left_padding;
+            self.wrap_width = wrap_width;
+            self.left_padding = left_padding;
             self.layout_dirty = false;
-            self.cached_layout = Some(result.clone());
-            result
         } else {
             eprintln!("DEBUG render_document: using CACHED layout");
-            let result = self.cached_layout.as_ref().unwrap().clone();
-            eprintln!("DEBUG render_document: cursor in cached result = {:?}", result.cursor);
+            let result = self.layout.as_ref().unwrap().clone();
+            eprintln!(
+                "DEBUG render_document: cursor in cached result = {:?}",
+                result.cursor
+            );
 
             // Update internal cursor state even when using cached layout
-            self.last_cursor_visual = result.cursor;
             if self.preferred_column.is_none() {
                 self.preferred_column = result.cursor.map(|p| p.content_column);
             }
 
             // Return reference to cached layout - caller must clone if needed
             // But since paragraph_lines is already in EditorDisplay, no need for full clone
-            result
         }
     }
 
@@ -416,15 +510,13 @@ impl EditorDisplay {
         wrap_width: usize,
         left_padding: usize,
         selection: Option<(CursorPointer, CursorPointer)>,
-    ) -> RenderResult {
+    ) {
         eprintln!("DEBUG render_document_with_positions: FORCING FULL RE-RENDER");
         // Force re-render
-        let result = self.render_document_internal(wrap_width, left_padding, selection, true);
-        self.cached_layout = Some(result.clone());
-        self.cached_wrap_width = wrap_width;
-        self.cached_left_padding = left_padding;
+        self.render_document_internal(wrap_width, left_padding, selection, true);
+        self.wrap_width = wrap_width;
+        self.left_padding = left_padding;
         self.layout_dirty = false;
-        result
     }
 
     /// Internal render implementation
@@ -434,7 +526,7 @@ impl EditorDisplay {
         left_padding: usize,
         selection: Option<(CursorPointer, CursorPointer)>,
         track_all_positions: bool,
-    ) -> RenderResult {
+    ) {
         // Use direct rendering - no document cloning needed!
         let cursor_pointer = self.editor.cursor_pointer();
 
@@ -464,31 +556,33 @@ impl EditorDisplay {
 
         // Update internal state from render result
         // Always store paragraph_lines which now includes all cursor positions
-        self.paragraph_lines = result.paragraph_lines.clone();
+        self.layout = Some(result);
 
         // Store rendering parameters for cache lookups
         self.last_wrap_width = wrap_width;
         self.last_left_padding = left_padding;
 
-        self.last_cursor_visual = result.cursor;
         if self.preferred_column.is_none() {
-            self.preferred_column = result.cursor.map(|p| p.content_column);
+            self.preferred_column = self
+                .layout
+                .as_ref()
+                .unwrap()
+                .cursor
+                .map(|p| p.content_column);
         }
-
-        result
     }
 
     /// Update tracking state after rendering (called from draw)
-    pub fn update_after_render(&mut self, text_area: Rect, total_lines: usize) {
+    pub fn update_after_render(&mut self, text_area: Rect) {
         self.last_text_area = text_area;
-        self.last_total_lines = total_lines;
+        self.last_total_lines = self.layout.as_ref().unwrap().total_lines;
         self.last_view_height = (text_area.height as usize).max(1);
     }
 
     /// Move cursor vertically by delta lines
     pub fn move_cursor_vertical(&mut self, delta: i32) {
-        // Use last_cursor_visual as the source of truth for current position
-        let Some(current) = self.last_cursor_visual else {
+        // Use layout.cursor as the source of truth for current position
+        let Some(current) = self.cursor_visual() else {
             // Fallback to logical cursor movement when visual position isn't available
             if delta < 0 {
                 self.editor.move_up();
@@ -502,7 +596,14 @@ impl EditorDisplay {
         let desired_column = self.preferred_column.unwrap_or(current.content_column);
 
         // Get max line from paragraph_lines (lightweight)
-        let max_line = self.paragraph_lines.last().map(|p| p.end_line).unwrap_or(0);
+        let max_line = self
+            .layout
+            .as_ref()
+            .unwrap()
+            .paragraph_lines
+            .last()
+            .map(|p| p.end_line)
+            .unwrap_or(0);
 
         let mut target_line = current.line as i32 + delta;
         if target_line < 0 {
@@ -533,9 +634,6 @@ impl EditorDisplay {
                 self.preferred_column = None;
             } else if self.editor.move_to_pointer(&dest.pointer) {
                 self.preferred_column = Some(desired_column);
-                self.last_cursor_visual = Some(dest.position);
-            } else {
-                self.last_cursor_visual = Some(dest.position);
             }
         } else {
             // Fallback: If visual-based movement failed, try logical cursor movement
@@ -546,6 +644,9 @@ impl EditorDisplay {
             }
             self.preferred_column = None;
         }
+
+        // Update the cached cursor visual position after movement
+        self.update_cursor_visual_position();
     }
 
     /// Calculate the page jump distance based on viewport height
@@ -568,7 +669,7 @@ impl EditorDisplay {
     pub fn move_to_visual_line_start(&mut self) {
         self.preferred_column = None;
 
-        let Some(current_position) = self.last_cursor_visual else {
+        let Some(current_position) = self.cursor_visual() else {
             self.editor.move_to_segment_start();
             return;
         };
@@ -584,17 +685,19 @@ impl EditorDisplay {
 
         if let Some(target) = destination {
             self.editor.move_to_pointer(&target.pointer);
-            self.last_cursor_visual = Some(target.position);
         } else {
             self.editor.move_to_segment_start();
         }
+
+        // Update the cached cursor visual position after movement
+        self.update_cursor_visual_position();
     }
 
     /// Move cursor to the end of the current visual line
     pub fn move_to_visual_line_end(&mut self) {
         self.preferred_column = None;
 
-        let Some(current_position) = self.last_cursor_visual else {
+        let Some(current_position) = self.cursor_visual() else {
             self.editor.move_to_segment_end();
             return;
         };
@@ -610,10 +713,48 @@ impl EditorDisplay {
 
         if let Some(target) = destination {
             self.editor.move_to_pointer(&target.pointer);
-            self.last_cursor_visual = Some(target.position);
         } else {
             self.editor.move_to_segment_end();
         }
+
+        // Update the cached cursor visual position after movement
+        self.update_cursor_visual_position();
+    }
+
+    /// Move cursor left by one character
+    pub fn move_left(&mut self) -> bool {
+        let result = self.editor.move_left();
+        if result {
+            self.update_cursor_visual_position();
+        }
+        result
+    }
+
+    /// Move cursor right by one character
+    pub fn move_right(&mut self) -> bool {
+        let result = self.editor.move_right();
+        if result {
+            self.update_cursor_visual_position();
+        }
+        result
+    }
+
+    /// Move cursor left by one word
+    pub fn move_word_left(&mut self) -> bool {
+        let result = self.editor.move_word_left();
+        if result {
+            self.update_cursor_visual_position();
+        }
+        result
+    }
+
+    /// Move cursor right by one word
+    pub fn move_word_right(&mut self) -> bool {
+        let result = self.editor.move_word_right();
+        if result {
+            self.update_cursor_visual_position();
+        }
+        result
     }
 
     /// Find the closest pointer on a given line to a target column
@@ -673,7 +814,14 @@ impl EditorDisplay {
         if delta == 0 {
             return None;
         }
-        let max_line = self.paragraph_lines.last().map(|p| p.end_line).unwrap_or(0);
+        let max_line = self
+            .layout
+            .as_ref()
+            .unwrap()
+            .paragraph_lines
+            .last()
+            .map(|p| p.end_line)
+            .unwrap_or(0);
 
         let mut distance = 1usize;
         loop {
@@ -712,7 +860,8 @@ impl EditorDisplay {
         }
 
         // Get max line from paragraph_lines (lightweight)
-        let max_line = if let Some(last_para) = self.paragraph_lines.last() {
+        let max_line = if let Some(last_para) = self.layout.as_ref().unwrap().paragraph_lines.last()
+        {
             last_para.end_line
         } else {
             0
@@ -779,9 +928,9 @@ impl EditorDisplay {
     /// Focus on a specific display position
     pub fn focus_display(&mut self, display: &CursorDisplay) {
         if self.editor.move_to_pointer(&display.pointer) {
-            self.last_cursor_visual = Some(display.position);
             self.preferred_column = Some(display.position.content_column);
             self.cursor_following = true;
+            self.update_cursor_visual_position();
         }
     }
 
@@ -789,26 +938,31 @@ impl EditorDisplay {
     pub fn focus_pointer(&mut self, pointer: &CursorPointer) {
         if self.editor.move_to_pointer(pointer) {
             // Search for the visual position of this pointer in paragraph_lines
-            let found = self.paragraph_lines.iter().find_map(|info| {
-                info.positions
-                    .iter()
-                    .find(|(p, _)| p == pointer)
-                    .map(|(_, pos)| {
-                        // Convert relative position to absolute
-                        let mut absolute_pos = *pos;
-                        absolute_pos.line = info.start_line + pos.line;
-                        absolute_pos
-                    })
-            });
+            let found = self
+                .layout
+                .as_ref()
+                .unwrap()
+                .paragraph_lines
+                .iter()
+                .find_map(|info| {
+                    info.positions
+                        .iter()
+                        .find(|(p, _)| p == pointer)
+                        .map(|(_, pos)| {
+                            // Convert relative position to absolute
+                            let mut absolute_pos = *pos;
+                            absolute_pos.line = info.start_line + pos.line;
+                            absolute_pos
+                        })
+                });
 
             if let Some(position) = found {
-                self.last_cursor_visual = Some(position);
                 self.preferred_column = Some(position.content_column);
             } else {
-                self.last_cursor_visual = None;
                 self.preferred_column = None;
             }
             self.cursor_following = true;
+            self.update_cursor_visual_position();
         }
     }
 
@@ -1242,7 +1396,7 @@ mod tests {
         assert_eq!(pos1.span_path.indices(), vec![0]);
         assert_eq!(pos1.offset, 0);
 
-        if let Some(vis1) = display.last_cursor_visual() {
+        if let Some(vis1) = display.cursor_visual() {
             assert_eq!(vis1.line, 0);
             assert_eq!(vis1.column, 0);
         } else {
@@ -1264,21 +1418,21 @@ mod tests {
         fn get_pos(&mut self) -> Option<(usize, u16)> {
             let _ = self.render_document_with_positions(80, 0, None);
 
-            self.last_cursor_visual().map(|v| (v.line, v.column))
+            self.cursor_visual().map(|v| (v.line, v.column))
         }
 
         fn get_content_pos(&mut self) -> Option<(usize, u16)> {
             let _ = self.render_document_with_positions(80, 0, None);
 
-            self.last_cursor_visual()
+            self.cursor_visual()
                 .map(|v| (v.content_line, v.content_column))
         }
 
         fn get_txt(&mut self) -> String {
-            let r = self.render_document_with_positions(80, 0, None);
+            self.render_document_with_positions(80, 0, None);
             let mut s = String::new();
-            for l in r.lines {
-                for i in l.spans {
+            for l in &self.layout.as_ref().unwrap().lines {
+                for i in &l.spans {
                     s.push_str(&i.content);
                 }
                 s.push('\n');

@@ -1481,11 +1481,11 @@ fn cursor_valid_after_nesting_checklist_item() {
         cursor
     );
 
-    // Also check that last_cursor_visual is set
-    let last_visual = display.last_cursor_visual();
+    // Also check that the cursor visual position (from layout) is set
+    let last_visual = display.cursor_visual();
     assert!(
         last_visual.is_some(),
-        "last_cursor_visual should be Some after rendering, not None (which shows as [?,?])"
+        "cursor_visual() should return Some after rendering, not None (which shows as [?,?])"
     );
 }
 
