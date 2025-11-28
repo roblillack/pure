@@ -1187,19 +1187,41 @@ impl EditorDisplay {
 
     /// Insert a paragraph break as sibling (Ctrl-P) with layout update
     pub fn insert_paragraph_break_as_sibling(&mut self) -> bool {
+        // Get the paragraph index before splitting
+        let old_para_idx = self.editor.cursor_pointer().paragraph_path.root_index();
+
         let result = self.editor.insert_paragraph_break_as_sibling();
-        // Paragraph breaks affect structure - need full re-render
-        self.force_full_relayout();
-        self.clear_render_cache();
+
+        if result {
+            // Splitting creates a new paragraph and modifies the original
+            // Mark both the original paragraph and the new one (where cursor now is)
+            if let Some(old_idx) = old_para_idx {
+                self.mark_paragraph_modified(old_idx);
+            }
+            if let Some(new_idx) = self.editor.cursor_pointer().paragraph_path.root_index() {
+                self.mark_paragraph_modified(new_idx);
+            }
+            self.clear_render_cache();
+        }
         result
     }
 
     /// Indent current paragraph with layout update
     pub fn indent_current_paragraph(&mut self) -> bool {
+        // Get the root paragraph index before indenting
+        let old_para_idx = self.editor.cursor_pointer().paragraph_path.root_index();
+
         let result = self.editor.indent_current_paragraph();
+
         if result {
-            // Indentation changes structure and indentation levels - need full re-render
-            self.force_full_relayout();
+            // Indenting may move the paragraph into a different structure
+            // Mark both the old parent and new parent paragraphs
+            if let Some(old_idx) = old_para_idx {
+                self.mark_paragraph_modified(old_idx);
+            }
+            if let Some(new_idx) = self.editor.cursor_pointer().paragraph_path.root_index() {
+                self.mark_paragraph_modified(new_idx);
+            }
             self.clear_render_cache();
         }
         result
@@ -1207,10 +1229,20 @@ impl EditorDisplay {
 
     /// Unindent current paragraph with layout update
     pub fn unindent_current_paragraph(&mut self) -> bool {
+        // Get the root paragraph index before unindenting
+        let old_para_idx = self.editor.cursor_pointer().paragraph_path.root_index();
+
         let result = self.editor.unindent_current_paragraph();
+
         if result {
-            // Unindentation changes structure and indentation levels - need full re-render
-            self.force_full_relayout();
+            // Unindenting may move the paragraph to a different structure
+            // Mark both the old parent and new parent paragraphs
+            if let Some(old_idx) = old_para_idx {
+                self.mark_paragraph_modified(old_idx);
+            }
+            if let Some(new_idx) = self.editor.cursor_pointer().paragraph_path.root_index() {
+                self.mark_paragraph_modified(new_idx);
+            }
             self.clear_render_cache();
         }
         result
