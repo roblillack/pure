@@ -259,7 +259,7 @@ impl<'a> DirectRenderer<'a> {
     fn render_document(&mut self, document: &Document) {
         for (idx, paragraph) in document.paragraphs.iter().enumerate() {
             if idx > 0 {
-                self.push_plain_line("", false);
+                self.push_plain_line("", true);
             }
 
             // Record start line before rendering this paragraph

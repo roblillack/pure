@@ -968,8 +968,10 @@ impl DocumentEditor {
         }
         let pointer = self.cursor.clone();
         if let Some(new_pointer) = split_paragraph_break(&mut self.document, &pointer, false) {
-            self.cursor = new_pointer;
             self.rebuild_segments();
+            if !self.move_to_pointer(&new_pointer) && !self.fallback_move_to_text(&new_pointer, false) {
+                self.ensure_cursor_selectable();
+            }
             true
         } else {
             false
@@ -982,8 +984,10 @@ impl DocumentEditor {
         }
         let pointer = self.cursor.clone();
         if let Some(new_pointer) = split_paragraph_break(&mut self.document, &pointer, true) {
-            self.cursor = new_pointer;
             self.rebuild_segments();
+            if !self.move_to_pointer(&new_pointer) && !self.fallback_move_to_text(&new_pointer, false) {
+                self.ensure_cursor_selectable();
+            }
             true
         } else {
             false

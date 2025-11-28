@@ -1730,7 +1730,7 @@ mod tests {
 
         // Move down - target line will be 1 (blank line), should skip to line 2
         display.move_cursor_vertical(1);
-        assert_eq!(display.get_content_pos(), Some((1, 0)));
+        assert_eq!(display.get_content_pos(), Some((2, 0)));
         assert_eq!(display.get_pos(), Some((2, 2)));
     }
 
@@ -1796,7 +1796,7 @@ mod tests {
         let mut display = EditorDisplay::new(editor);
 
         display.move_cursor_vertical(1);
-        assert_eq!(display.get_content_pos(), Some((1, 0)));
+        assert_eq!(display.get_content_pos(), Some((2, 0)));
 
         assert!(
             display.backspace(),
@@ -1822,7 +1822,7 @@ mod tests {
         let mut display = EditorDisplay::new(editor);
 
         display.move_cursor_vertical(1);
-        assert_eq!(display.get_content_pos(), Some((1, 0)));
+        assert_eq!(display.get_content_pos(), Some((2, 0)));
 
         assert!(
             display.backspace(),
@@ -1848,7 +1848,7 @@ mod tests {
         let mut display = EditorDisplay::new(editor);
 
         display.move_cursor_vertical(1);
-        assert_eq!(display.get_content_pos(), Some((1, 0)));
+        assert_eq!(display.get_content_pos(), Some((2, 0)));
 
         assert!(
             display.backspace(),
@@ -1871,7 +1871,7 @@ mod tests {
         let mut display = EditorDisplay::new(editor);
 
         display.move_cursor_vertical(1);
-        assert_eq!(display.get_content_pos(), Some((1, 0)));
+        assert_eq!(display.get_content_pos(), Some((2, 0)));
 
         // Press Backspace - should remove empty paragraph and stay at beginning
         assert!(
@@ -1881,6 +1881,37 @@ mod tests {
 
         assert_eq!(display.get_txt(), "Next paragraph\n");
         assert_eq!(display.get_content_pos(), Some((0, 0)));
+    }
+
+    #[test]
+    fn test_breaking_at_the_beginning_of_bold_text_works() {
+        let doc = ftml! {
+            p {
+                "First paragraph"
+                b { "This"} " will become the second paragraph"
+            }
+        };
+        let mut editor = DocumentEditor::new(doc);
+        editor.ensure_cursor_selectable();
+        let mut display = EditorDisplay::new(editor);
+
+        // Length of "First paragraph"
+        for _ in 0..15 {
+            display.editor.move_right();
+        }
+
+        assert_eq!(
+            display.get_txt(),
+            "First paragraphThis will become the second paragraph\n"
+        );
+        assert_eq!(display.get_content_pos(), Some((0, 15)));
+
+        display.insert_paragraph_break();
+        assert_eq!(
+            display.get_txt(),
+            "First paragraph\n\nThis will become the second paragraph\n"
+        );
+        assert_eq!(display.get_content_pos(), Some((2, 0)));
     }
 
     #[test]
