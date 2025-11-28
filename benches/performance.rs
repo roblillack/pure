@@ -586,10 +586,14 @@ fn bench_scrolling_detailed_analysis() {
         "  Paragraphs:          {}",
         display.document().paragraphs.len()
     );
-    println!("  Total visual lines:  {}", display.get_layout().lines.len());
+    println!(
+        "  Total visual lines:  {}",
+        display.get_layout().lines.len()
+    );
     println!(
         "  Cursor map entries:  {}",
-        display.get_layout()
+        display
+            .get_layout()
             .paragraph_lines
             .iter()
             .map(|p| p.positions.len())
@@ -617,7 +621,8 @@ fn bench_scrolling_detailed_analysis() {
     println!("  render_document:      {:?}", render_time);
     println!(
         "  Cursor map size:      {}",
-        display.get_layout()
+        display
+            .get_layout()
             .paragraph_lines
             .iter()
             .map(|p| p.positions.len())
@@ -969,13 +974,7 @@ fn bench_real_world_render_flow() {
 
         // Step 2: Render the document directly with cache
         let render_start = Instant::now();
-        let render_result = render::render_document_direct(
-            editor.document(),
-            80,
-            0,
-            &[],
-            tracking,
-        );
+        let render_result = render::render_document_direct(editor.document(), 80, 0, &[], tracking);
         render_times.push(render_start.elapsed());
 
         // Step 3: Clone rendered lines (for ratatui widget)
@@ -1267,8 +1266,8 @@ fn bench_scrolling_page_down() {
 
 #[test]
 fn benchmark_incremental_updates() {
-    use pure_tui::editor_display::EditorDisplay;
     use pure_tui::editor::DocumentEditor;
+    use pure_tui::editor_display::EditorDisplay;
 
     println!("\n=== Incremental Update Performance ===\n");
 

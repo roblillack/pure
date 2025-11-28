@@ -103,11 +103,7 @@ impl EditorDisplay {
     }
 
     pub fn get_lines(&self) -> Option<Vec<Line<'static>>> {
-        if let Some(layout) = &self.layout {
-            Some(layout.lines.clone())
-        } else {
-            None
-        }
+        self.layout.as_ref().map(|layout| layout.lines.clone())
     }
 
     /// Get the last cursor visual position
@@ -235,12 +231,12 @@ impl EditorDisplay {
     /// Returns true if an incremental update succeeded, false if a full re-render is needed.
     pub fn clear_render_cache(&mut self) -> bool {
         // Try incremental update if we know which paragraph changed
-        if let Some(para_index) = self.last_modified_paragraph {
-            if self.update_paragraph_layout(para_index) {
-                // Incremental update succeeded!
-                self.last_modified_paragraph = None;
-                return true; // Incremental update succeeded
-            }
+        if let Some(para_index) = self.last_modified_paragraph
+            && self.update_paragraph_layout(para_index)
+        {
+            // Incremental update succeeded!
+            self.last_modified_paragraph = None;
+            return true; // Incremental update succeeded
         }
 
         // Fall back to full re-render
@@ -379,7 +375,6 @@ impl EditorDisplay {
             } else if cursor.line > old_end_line && line_count_delta != 0 {
                 // Cursor is after the updated paragraph - adjust line number
                 cursor.line = (cursor.line as isize + line_count_delta) as usize;
-            } else {
             }
         }
 
@@ -422,7 +417,7 @@ impl EditorDisplay {
             self.left_padding = left_padding;
             self.layout_dirty = false;
             self.last_selection = selection;
-        } else{
+        } else {
             let result = self.layout.as_ref().unwrap().clone();
             // Update internal cursor state even when using cached layout
             if self.preferred_column.is_none() {
@@ -555,10 +550,8 @@ impl EditorDisplay {
         let target_line_usize = target_line as usize;
 
         let from_closest = self.closest_pointer_on_line(target_line_usize, desired_column);
-        let destination = from_closest.or_else(|| {
-            let result = self.search_nearest_line(target_line_usize, delta, desired_column);
-            result
-        });
+        let destination = from_closest
+            .or_else(|| self.search_nearest_line(target_line_usize, delta, desired_column));
 
         let pointer = self.editor.cursor_pointer();
 
