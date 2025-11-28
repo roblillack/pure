@@ -1185,6 +1185,15 @@ impl EditorDisplay {
         result
     }
 
+    /// Insert a paragraph break as sibling (Ctrl-P) with layout update
+    pub fn insert_paragraph_break_as_sibling(&mut self) -> bool {
+        let result = self.editor.insert_paragraph_break_as_sibling();
+        // Paragraph breaks affect structure - need full re-render
+        self.force_full_relayout();
+        self.clear_render_cache();
+        result
+    }
+
     /// Set paragraph type with layout update
     pub fn set_paragraph_type(&mut self, target: tdoc::ParagraphType) -> bool {
         let para_index = self.editor.cursor_pointer().paragraph_path.root_index();
@@ -2070,6 +2079,81 @@ mod tests {
         );
         assert_eq!(lines[0], "Text with trailing newline");
         assert_eq!(lines[1], "");
+    }
+
+    #[test]
+    fn test_ctrl_p_split_text_paragraph_updates_screen() {
+        let doc = ftml! {
+            p { "First paragraph" }
+        };
+        let mut editor = DocumentEditor::new(doc);
+        editor.ensure_cursor_selectable();
+        let mut display = EditorDisplay::new(editor);
+
+        // Move to middle of paragraph
+        for _ in 0..6 {
+            display.editor.move_right();
+        }
+
+        // Get initial render
+        display.render_document(80, 0, None);
+        let initial_lines = display.layout.as_ref().unwrap().lines.len();
+
+        // Split with Ctrl-P (as sibling)
+        assert!(display.insert_paragraph_break_as_sibling());
+
+        // Render again - should show the split
+        display.render_document(80, 0, None);
+        let after_lines = display.layout.as_ref().unwrap().lines.len();
+
+        // Should have created a new paragraph, adding a blank separator line
+        assert!(
+            after_lines > initial_lines,
+            "Screen should update after Ctrl-P split (had {} lines, now has {})",
+            initial_lines,
+            after_lines
+        );
+
+        // Verify the split happened
+        assert_eq!(display.editor.document().paragraphs.len(), 2);
+    }
+
+    #[test]
+    fn test_ctrl_p_split_checklist_item_updates_screen() {
+        use tdoc::{ChecklistItem, Document, Paragraph, Span as DocSpan};
+
+        let item = ChecklistItem::new(false).with_content(vec![DocSpan::new_text("First item")]);
+        let checklist = Paragraph::new_checklist().with_checklist_items(vec![item]);
+        let doc = Document::new().with_paragraphs(vec![checklist]);
+
+        let mut editor = DocumentEditor::new(doc);
+        editor.ensure_cursor_selectable();
+        let mut display = EditorDisplay::new(editor);
+
+        // Move to middle of item
+        for _ in 0..6 {
+            display.editor.move_right();
+        }
+
+        // Get initial render
+        display.render_document(80, 0, None);
+        let initial_text = display.get_txt();
+
+        // Split with Ctrl-P (as sibling)
+        assert!(display.insert_paragraph_break_as_sibling());
+
+        // Render and get text - should show the split
+        let after_text = display.get_txt();
+
+        // Should have created a new checklist item
+        assert_ne!(
+            initial_text, after_text,
+            "Screen should update after Ctrl-P split in checklist"
+        );
+
+        // Verify the split happened
+        let checklist = &display.editor.document().paragraphs[0];
+        assert_eq!(checklist.checklist_items().len(), 2);
     }
 
     #[test]
