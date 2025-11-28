@@ -1474,18 +1474,14 @@ fn cursor_valid_after_nesting_checklist_item() {
     }
 
     // Now test rendering to ensure visual position is tracked
-    let result = display.render_document(80, 0, None);
-    assert!(
-        result.cursor.is_some(),
-        "Cursor visual position should be found after nesting. Cursor pointer: {:?}",
-        cursor
-    );
+    display.render_document_with_positions(80, 0, None);
 
-    // Also check that last_cursor_visual is set
-    let last_visual = display.last_cursor_visual();
+    // Check that the cursor visual position (from layout) is set
+    let last_visual = display.cursor_visual();
     assert!(
         last_visual.is_some(),
-        "last_cursor_visual should be Some after rendering, not None (which shows as [?,?])"
+        "cursor_visual() should return Some after rendering (cursor pointer: {:?}), not None (which shows as [?,?])",
+        cursor
     );
 }
 
@@ -1504,7 +1500,7 @@ fn cursor_can_move_into_quote_blocks() {
     let mut display = EditorDisplay::new(DocumentEditor::new(doc));
 
     // Render to populate visual_positions
-    let _ = display.render_document(80, 0, None);
+    display.render_document_with_positions(80, 0, None);
 
     // Start at first paragraph, should be at [0]
     let pos0 = display.cursor_pointer();
@@ -1583,11 +1579,14 @@ fn cursor_moves_into_last_wrapped_line_when_moving_up() {
     let mut display = EditorDisplay::new(DocumentEditor::new(doc));
 
     // Render with narrow width to force wrapping of the first paragraph
-    let _ = display.render_document(30, 0, None);
+    display.render_document_with_positions(30, 0, None);
 
     println!("\n=== Initial Visual Positions ===");
-    println!("Total visual positions: {}", display.visual_positions().len());
-    for (idx, vp) in display.visual_positions().iter().enumerate().take(20) {
+    println!(
+        "Total visual positions: {}",
+        display.visual_positions().len()
+    );
+    for (idx, vp) in display.visual_positions().into_iter().enumerate().take(20) {
         println!(
             "{}: line={}, col={}, path={:?}, offset={}",
             idx,
@@ -1618,12 +1617,12 @@ fn cursor_moves_into_last_wrapped_line_when_moving_up() {
     assert!(display.move_to_pointer(&second_para_first.pointer));
 
     // Re-render to update visual positions
-    let _ = display.render_document(30, 0, None);
+    display.render_document_with_positions(30, 0, None);
 
     let current_before_move = display.cursor_pointer();
     let current_visual_before = display
         .visual_positions()
-        .iter()
+        .into_iter()
         .find(|vp| vp.pointer == current_before_move);
 
     if let Some(cv) = current_visual_before {
@@ -1642,7 +1641,10 @@ fn cursor_moves_into_last_wrapped_line_when_moving_up() {
         .max()
         .expect("Should have positions for first paragraph");
 
-    println!("\nLast wrapped line of first paragraph: line={}", first_para_last_line);
+    println!(
+        "\nLast wrapped line of first paragraph: line={}",
+        first_para_last_line
+    );
 
     // Move up - should land on the last wrapped line of the first paragraph
     println!("\n=== Moving up ===");
@@ -1656,11 +1658,11 @@ fn cursor_moves_into_last_wrapped_line_when_moving_up() {
     );
 
     // Re-render to get updated visual position
-    let _ = display.render_document(30, 0, None);
+    display.render_document_with_positions(30, 0, None);
 
     let after_visual = display
         .visual_positions()
-        .iter()
+        .into_iter()
         .find(|vp| vp.pointer == after_move);
 
     if let Some(av) = after_visual {
@@ -1701,10 +1703,10 @@ fn cursor_moves_into_last_wrapped_line_when_moving_up_into_quote() {
     let mut display = EditorDisplay::new(DocumentEditor::new(doc));
 
     // Render with narrow width to force wrapping of the first paragraph in the quote
-    let _ = display.render_document(30, 0, None);
+    display.render_document_with_positions(30, 0, None);
 
     println!("\n=== Initial Visual Positions ===");
-    for (idx, vp) in display.visual_positions().iter().enumerate() {
+    for (idx, vp) in display.visual_positions().into_iter().enumerate() {
         println!(
             "{}: line={}, col={}, path={:?}, offset={}",
             idx,
@@ -1735,12 +1737,12 @@ fn cursor_moves_into_last_wrapped_line_when_moving_up_into_quote() {
     assert!(display.move_to_pointer(&second_para_first.pointer));
 
     // Re-render to update visual positions
-    let _ = display.render_document(30, 0, None);
+    display.render_document_with_positions(30, 0, None);
 
     let current_before_move = display.cursor_pointer();
     let current_visual_before = display
         .visual_positions()
-        .iter()
+        .into_iter()
         .find(|vp| vp.pointer == current_before_move);
 
     if let Some(cv) = current_visual_before {
@@ -1759,7 +1761,10 @@ fn cursor_moves_into_last_wrapped_line_when_moving_up_into_quote() {
         .max()
         .expect("Should have positions for first paragraph in quote");
 
-    println!("\nLast wrapped line of first paragraph in quote: line={}", first_para_last_line);
+    println!(
+        "\nLast wrapped line of first paragraph in quote: line={}",
+        first_para_last_line
+    );
 
     // Move up - should land on the last wrapped line of the first paragraph in the quote
     println!("\n=== Moving up ===");
@@ -1773,11 +1778,11 @@ fn cursor_moves_into_last_wrapped_line_when_moving_up_into_quote() {
     );
 
     // Re-render to get updated visual position
-    let _ = display.render_document(30, 0, None);
+    display.render_document_with_positions(30, 0, None);
 
     let after_visual = display
         .visual_positions()
-        .iter()
+        .into_iter()
         .find(|vp| vp.pointer == after_move);
 
     if let Some(av) = after_visual {
@@ -1801,4 +1806,505 @@ fn cursor_moves_into_last_wrapped_line_when_moving_up_into_quote() {
         vec![0, 0],
         "Cursor should be in the first paragraph of the quote"
     );
+}
+
+#[test]
+fn test_paragraph_break_updates_subsequent_paragraph_lines() {
+    use crate::editor_display::EditorDisplay;
+    use ratatui::layout::Rect;
+
+    // Create a document with two paragraphs that will wrap
+    // First paragraph: "This is a very long line that will definitely wrap when we render it at a narrow width"
+    // Second paragraph: "Second paragraph here"
+    let doc = Document::new().with_paragraphs(vec![
+        text_paragraph("This is a very long line that will definitely wrap when we render it at a narrow width"),
+        text_paragraph("Second paragraph here"),
+    ]);
+
+    let mut display = EditorDisplay::new(DocumentEditor::new(doc));
+
+    // Render with narrow width to force wrapping
+    let text_area = Rect {
+        x: 0,
+        y: 0,
+        width: 30,
+        height: 20,
+    };
+    display.render_document(28, 2, None); // wrap_width=28, left_padding=2
+    display.update_after_render(text_area);
+
+    // Print initial layout
+    eprintln!("\n=== INITIAL LAYOUT ===");
+    let layout = display.get_layout();
+    eprintln!("Total lines: {}", layout.total_lines);
+    for info in &layout.paragraph_lines {
+        eprintln!(
+            "Paragraph {}: lines {}-{} ({} lines)",
+            info.paragraph_index,
+            info.start_line,
+            info.end_line,
+            info.end_line - info.start_line + 1
+        );
+    }
+
+    // Move cursor to middle of first paragraph (around character 30)
+    for _ in 0..30 {
+        display.move_right();
+    }
+
+    eprintln!("\n=== BEFORE INSERT PARAGRAPH BREAK ===");
+    eprintln!("Cursor pointer: {:?}", display.cursor_pointer());
+    if let Some(cursor_vis) = display.cursor_visual() {
+        eprintln!(
+            "Cursor visual: line={}, col={}",
+            cursor_vis.line, cursor_vis.column
+        );
+    }
+
+    // Insert a paragraph break (Ctrl-J)
+    display.insert_paragraph_break();
+
+    // Render again
+    display.render_document(28, 2, None);
+    display.update_after_render(text_area);
+
+    eprintln!("\n=== AFTER INSERT PARAGRAPH BREAK ===");
+    let layout = display.get_layout();
+    eprintln!("Total lines: {}", layout.total_lines);
+    for info in &layout.paragraph_lines {
+        eprintln!(
+            "Paragraph {}: lines {}-{} ({} lines)",
+            info.paragraph_index,
+            info.start_line,
+            info.end_line,
+            info.end_line - info.start_line + 1
+        );
+    }
+    eprintln!("Cursor pointer: {:?}", display.cursor_pointer());
+    if let Some(cursor_vis) = display.cursor_visual() {
+        eprintln!(
+            "Cursor visual: line={}, col={}",
+            cursor_vis.line, cursor_vis.column
+        );
+    }
+
+    // Now try to move down to the original second paragraph (now third paragraph)
+    // We should be able to reach it
+    display
+        .cursor_pointer()
+        .paragraph_path
+        .root_index()
+        .unwrap();
+    eprintln!("\n=== MOVING DOWN ===");
+
+    // Move down several times to reach the third paragraph
+    for i in 0..10 {
+        display.move_cursor_vertical(1);
+        let current_para = display
+            .cursor_pointer()
+            .paragraph_path
+            .root_index()
+            .unwrap();
+        if let Some(cursor_vis) = display.cursor_visual() {
+            eprintln!(
+                "After move {}: para={}, line={}, col={}",
+                i + 1,
+                current_para,
+                cursor_vis.line,
+                cursor_vis.column
+            );
+        }
+
+        // If we've reached paragraph 2 (the original second paragraph), success!
+        if current_para == 2 {
+            eprintln!("\n✓ Successfully reached paragraph 2");
+            return;
+        }
+    }
+
+    // If we get here, we couldn't reach paragraph 2
+    panic!("Failed to reach paragraph 2 (original second paragraph) after moving down 10 times");
+}
+
+#[test]
+fn test_incremental_update_adjusts_subsequent_paragraphs() {
+    use crate::editor_display::EditorDisplay;
+    use ratatui::layout::Rect;
+
+    // Create document with two wrapping paragraphs
+    let doc = Document::new().with_paragraphs(vec![
+        text_paragraph("First paragraph with enough text to wrap when rendered at narrow width"),
+        text_paragraph("Second paragraph also wraps"),
+    ]);
+
+    let mut display = EditorDisplay::new(DocumentEditor::new(doc));
+
+    // Initial render
+    let text_area = Rect {
+        x: 0,
+        y: 0,
+        width: 30,
+        height: 20,
+    };
+    display.render_document(28, 2, None);
+    display.update_after_render(text_area);
+
+    eprintln!("\n=== INITIAL STATE ===");
+    let layout = display.get_layout();
+    for info in &layout.paragraph_lines {
+        eprintln!(
+            "Para {}: lines {}-{}",
+            info.paragraph_index, info.start_line, info.end_line
+        );
+    }
+
+    // Insert a character in the first paragraph (should trigger incremental update)
+    display.move_right();
+    display.move_right();
+    display.insert_char('X');
+
+    // Mark dirty to trigger incremental update
+    let incremental_ok = display.clear_render_cache();
+    eprintln!("\n=== AFTER INSERT 'X' ===");
+    eprintln!("Incremental update succeeded: {}", incremental_ok);
+
+    // Re-render (should use incremental update if it worked)
+    display.render_document(28, 2, None);
+    display.update_after_render(text_area);
+
+    let layout = display.get_layout();
+    for info in &layout.paragraph_lines {
+        eprintln!(
+            "Para {}: lines {}-{}",
+            info.paragraph_index, info.start_line, info.end_line
+        );
+    }
+
+    // Try to move cursor to second paragraph
+    eprintln!("\n=== MOVING TO SECOND PARAGRAPH ===");
+    for i in 0..20 {
+        let para = display
+            .cursor_pointer()
+            .paragraph_path
+            .root_index()
+            .unwrap();
+        if para == 1 {
+            eprintln!("✓ Reached paragraph 1 after {} moves", i);
+            return;
+        }
+        display.move_cursor_vertical(1);
+        if let Some(cursor_vis) = display.cursor_visual() {
+            eprintln!(
+                "Move {}: para={}, line={}",
+                i + 1,
+                display
+                    .cursor_pointer()
+                    .paragraph_path
+                    .root_index()
+                    .unwrap(),
+                cursor_vis.line
+            );
+        }
+    }
+
+    panic!("Failed to reach paragraph 1 after moving down 20 times");
+}
+
+#[test]
+fn test_cursor_down_after_paragraph_break_lands_on_correct_line() {
+    use crate::editor_display::EditorDisplay;
+    use ratatui::layout::Rect;
+
+    // Simulate: paragraph with wrapping text, add word, Ctrl-J, Down
+    let doc = Document::new().with_paragraphs(vec![
+        text_paragraph("First paragraph with some text that will wrap"),
+        text_paragraph("Second paragraph here"),
+    ]);
+
+    let mut display = EditorDisplay::new(DocumentEditor::new(doc));
+
+    let text_area = Rect {
+        x: 0,
+        y: 0,
+        width: 30,
+        height: 20,
+    };
+    display.render_document(28, 2, None);
+    display.update_after_render(text_area);
+
+    eprintln!("\n=== INITIAL STATE ===");
+    let layout = display.get_layout();
+    for info in &layout.paragraph_lines {
+        eprintln!(
+            "Para {}: lines {}-{}",
+            info.paragraph_index, info.start_line, info.end_line
+        );
+    }
+    if let Some(cursor) = display.cursor_visual() {
+        eprintln!("Cursor at line {}", cursor.line);
+    }
+
+    // Add a word at the beginning
+    display.insert_char('W');
+    display.insert_char('o');
+    display.insert_char('r');
+    display.insert_char('d');
+    display.insert_char(' ');
+
+    eprintln!("\n=== AFTER ADDING 'Word ' ===");
+    display.render_document(28, 2, None);
+    display.update_after_render(text_area);
+
+    let layout = display.get_layout();
+    for info in &layout.paragraph_lines {
+        eprintln!(
+            "Para {}: lines {}-{}",
+            info.paragraph_index, info.start_line, info.end_line
+        );
+    }
+    if let Some(cursor) = display.cursor_visual() {
+        eprintln!(
+            "Cursor at line {} (para {})",
+            cursor.line,
+            display
+                .cursor_pointer()
+                .paragraph_path
+                .root_index()
+                .unwrap()
+        );
+    }
+
+    // Press Ctrl-J (insert paragraph break)
+    display.insert_paragraph_break();
+
+    eprintln!("\n=== AFTER Ctrl-J (paragraph break) ===");
+    display.render_document(28, 2, None);
+    display.update_after_render(text_area);
+
+    let layout = display.get_layout();
+    for info in &layout.paragraph_lines {
+        eprintln!(
+            "Para {}: lines {}-{}",
+            info.paragraph_index, info.start_line, info.end_line
+        );
+    }
+    let cursor_before_down = display.cursor_visual().unwrap();
+    let para_before_down = display
+        .cursor_pointer()
+        .paragraph_path
+        .root_index()
+        .unwrap();
+    eprintln!(
+        "Cursor at line {} (para {})",
+        cursor_before_down.line, para_before_down
+    );
+
+    // Find the first line of paragraph 1 (the continuation of original para 0) BEFORE moving
+    let para1_info = layout
+        .paragraph_lines
+        .iter()
+        .find(|info| info.paragraph_index == 1)
+        .expect("Paragraph 1 should exist");
+    let para1_start = para1_info.start_line;
+    let para1_end = para1_info.end_line;
+
+    // Press Down once
+    display.move_cursor_vertical(1);
+
+    eprintln!("\n=== AFTER pressing Down ===");
+    let cursor_after_down = display.cursor_visual().unwrap();
+    let para_after_down = display
+        .cursor_pointer()
+        .paragraph_path
+        .root_index()
+        .unwrap();
+    eprintln!(
+        "Cursor at line {} (para {})",
+        cursor_after_down.line, para_after_down
+    );
+
+    // The cursor should move down by exactly 1 line (or 2 if there's a blank line)
+    // It should land on the first line of the next paragraph
+    let expected_line = cursor_before_down.line + 1;
+
+    eprintln!(
+        "Expected cursor at line {} (para 1 starts at {})",
+        expected_line, para1_start
+    );
+
+    // The user expects: pressing Down from line 2 should move to line 3 (next line in same para)
+    // OR if para 1 only has 1 line, should skip blank line and go to para 2
+    // The bug: cursor might skip too far
+
+    // Let's check what actually happened vs what we expect
+    let expected_next_line = cursor_before_down.line + 1;
+
+    eprintln!("\nDIAGNOSTICS:");
+    eprintln!("- Cursor was at line {}", cursor_before_down.line);
+    eprintln!("- Expected to move to line {}", expected_next_line);
+    eprintln!("- Actually moved to line {}", cursor_after_down.line);
+    eprintln!("- Para 1 spans lines {}-{}", para1_start, para1_end);
+
+    // Now continue pressing Down to reach para 2 (the original second paragraph)
+    // Track all line numbers we visit
+    let mut visited_lines = vec![cursor_after_down.line];
+
+    eprintln!("\n=== CONTINUING TO PARA 2 ===");
+    for i in 0..10 {
+        let para = display
+            .cursor_pointer()
+            .paragraph_path
+            .root_index()
+            .unwrap();
+        if para == 2 {
+            eprintln!("Reached para 2 after {} more moves", i);
+            break;
+        }
+        display.move_cursor_vertical(1);
+        if let Some(cursor) = display.cursor_visual() {
+            visited_lines.push(cursor.line);
+            eprintln!(
+                "Move {}: line {}, para {}",
+                i + 1,
+                cursor.line,
+                display
+                    .cursor_pointer()
+                    .paragraph_path
+                    .root_index()
+                    .unwrap()
+            );
+        }
+    }
+
+    // Check for gaps in visited lines
+    eprintln!("\nVisited lines: {:?}", visited_lines);
+
+    for i in 1..visited_lines.len() {
+        let jump = visited_lines[i].saturating_sub(visited_lines[i - 1]);
+        if jump > 2 {
+            panic!(
+                "BUG FOUND! Cursor jumped {} lines from {} to {} (expected max 2 to account for blank lines)",
+                jump,
+                visited_lines[i - 1],
+                visited_lines[i]
+            );
+        }
+    }
+
+    eprintln!("\n✓ No unexpected line skipping detected");
+}
+
+#[test]
+fn test_cursor_down_after_incremental_wrap_no_line_skip() {
+    use crate::editor_display::EditorDisplay;
+
+    // Regression test for bug where cursor would jump extra lines after
+    // incremental update caused text wrapping.
+    // Bug: After wrapping paragraph 0 from 1 to 2 lines, subsequent paragraphs
+    // were being adjusted TWICE (once by paragraph_index, once by start_line),
+    // causing cursor to land on wrong line when moving down.
+
+    eprintln!("\n=== Test: Cursor Down After Incremental Wrap (No Line Skip) ===");
+
+    // Create document with 3 short paragraphs
+    let doc = Document::new().with_paragraphs(vec![
+        text_paragraph("Hi"),
+        text_paragraph("Second"),
+        text_paragraph("Third"),
+    ]);
+
+    let mut display = EditorDisplay::new(DocumentEditor::new(doc));
+
+    // Initial render with narrow width to test wrapping
+    let wrap_width = 20; // Narrow enough to cause wrapping
+    let left_padding = 2;
+    display.render_document(wrap_width, left_padding, None);
+
+    eprintln!("\nInitial state:");
+    eprintln!("  Paragraph 0: 'Hi'");
+    eprintln!("  Paragraph 1: 'Second'");
+    eprintln!("  Paragraph 2: 'Third'");
+
+    // Cursor starts at beginning of document - move to end of first paragraph
+    display.move_right();
+    display.move_right();
+
+    let initial_cursor = display.cursor_visual().unwrap();
+    eprintln!("\nCursor at end of 'Hi': line {}", initial_cursor.line);
+    assert_eq!(initial_cursor.line, 0, "Cursor should start on line 0");
+
+    // Add text character by character to trigger incremental updates
+    // Add enough to cause wrapping (using characters that will wrap)
+    // With wrap_width=20, left_padding=2, content_width=18
+    // "Hi" (2) + 20 more chars = 22 total, which should wrap
+    eprintln!("\nAdding text to cause wrapping...");
+    for ch in "XXXXXXXXXXXXXXXXXXXX".chars() {
+        // 20 X's
+        display.insert_char(ch);
+        // Each insert marks paragraph as modified
+    }
+
+    // Trigger incremental update and render
+    display.clear_render_cache();
+    display.render_document(wrap_width, left_padding, None);
+
+    // Get cursor position after wrapping
+    let after_wrap_cursor = display.cursor_visual().unwrap();
+    eprintln!("\nAfter wrapping:");
+    eprintln!("  Paragraph 0 text: 'Hi{}'", "X".repeat(20));
+    eprintln!("  Cursor now at line: {}", after_wrap_cursor.line);
+
+    // Check paragraph layout to see if wrapping occurred
+    let layout = display.get_layout();
+    let para0_info = layout
+        .paragraph_lines
+        .iter()
+        .find(|info| info.paragraph_index == 0)
+        .unwrap();
+    eprintln!(
+        "  Paragraph 0 spans lines {}-{}",
+        para0_info.start_line, para0_info.end_line
+    );
+
+    // Paragraph 0 should have wrapped to 2 lines
+    // Expected layout:
+    // Line 0: "HiXXXXXXXXXXXXXXX" (up to wrap width)
+    // Line 1: (remaining text of paragraph 0)
+    // Line 2: (blank line between paragraphs)
+    // Line 3: "Second" (paragraph 1 should be at line 3, NOT line 4)
+
+    assert!(
+        para0_info.end_line > para0_info.start_line,
+        "Paragraph 0 should have wrapped to multiple lines, but is at lines {}-{}",
+        para0_info.start_line,
+        para0_info.end_line
+    );
+
+    // Now move cursor down - this is where the bug occurred
+    eprintln!("\nMoving cursor down...");
+    display.move_cursor_vertical(1);
+
+    let after_down_cursor = display.cursor_visual().unwrap();
+    eprintln!("Cursor after Down: line {}", after_down_cursor.line);
+
+    // Cursor should move to next content line (paragraph 1)
+    // With the bug, it would skip from line 1 -> 4
+    // Without bug, it should go line 1 -> 3 (line 2 is blank)
+
+    // The key assertion: cursor should NOT jump to line 4 or beyond
+    // Paragraph 1 starts at line 3 (after para 0's 2 lines + 1 blank)
+    assert!(
+        after_down_cursor.line <= 3,
+        "Cursor should not skip lines - expected at most line 3, got line {}",
+        after_down_cursor.line
+    );
+
+    // More specific: cursor should land on paragraph 1's line (line 3)
+    // Search nearest line should find line 3, not line 4
+    assert_eq!(
+        after_down_cursor.line, 3,
+        "Cursor should land on paragraph 1 at line 3, not skip to line 4+"
+    );
+
+    eprintln!("\n✓ Cursor correctly landed on line 3 (no line skip bug)");
 }

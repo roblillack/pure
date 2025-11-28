@@ -119,7 +119,7 @@ This document provides a comprehensive overview of the editor, renderer, and dis
 - `editor`: The underlying `DocumentEditor`
 - `render_cache`: Cache of rendered paragraphs
 - `visual_positions`: Vector mapping all cursor pointers to visual positions
-- `last_cursor_visual`: The last known visual position of the cursor
+- `layout`: Cached `RenderResult` containing visual cursor position (`layout.cursor`)
 - `preferred_column`: Column to maintain during vertical movement
 - `cursor_following`: Whether the view should follow the cursor
 - `last_view_height`: Height of the viewport (for page jumps)
@@ -269,9 +269,9 @@ For each paragraph:
      - `lines`: Styled lines for display
      - `cursor`: Visual position of cursor
      - `cursor_map`: Map of all positions
-   - EditorDisplay updates internal state:
+   - EditorDisplay caches the `RenderResult` in `layout` field
+     - `layout.cursor` contains the visual cursor position
      - `visual_positions` from cursor_map
-     - `last_cursor_visual` from cursor
      - `preferred_column` initialized
 
 4. **Draw to Screen**: Application uses `RenderResult.lines`
@@ -329,11 +329,12 @@ For each paragraph:
 3. **Move Editor Cursor**:
    - If destination found: `editor.move_to_pointer(&dest.pointer)`
      - Editor updates cursor to logical position
-     - Updates `last_cursor_visual` and `preferred_column`
+     - Updates `preferred_column`
    - If same position (edge case): Falls back to `editor.move_down()` for logical movement
    - If no destination: Falls back to logical movement
 
 4. **Next Render**: Cursor appears on new visual line
+   - Visual cursor position (`layout.cursor`) is updated during render
    - Render cache hits for unchanged paragraphs
    - Only paragraphs with cursor (old and new) are re-rendered
 

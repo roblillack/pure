@@ -235,94 +235,11 @@ fn bench_rendering_performance() {
                     0,   // left_padding
                     &[], // reveal_tags
                     tracking,
-                    None, // cache
+                    // None
                 );
             },
         );
         result.print();
-    }
-}
-
-#[test]
-fn bench_rendering_with_cache() {
-    println!("\n\n╔════════════════════════════════════════════════════════════════╗");
-    println!("║         RENDERING WITH CACHE BENCHMARKS (CACHE HITS)          ║");
-    println!("╚════════════════════════════════════════════════════════════════╝");
-
-    let docs = vec![
-        (
-            "Small (10 paras)",
-            create_test_document(SMALL_DOC_PARAGRAPHS, 20),
-        ),
-        (
-            "Medium (100 paras)",
-            create_test_document(MEDIUM_DOC_PARAGRAPHS, 20),
-        ),
-        (
-            "Large (1000 paras)",
-            create_test_document(LARGE_DOC_PARAGRAPHS, 20),
-        ),
-        (
-            "Huge (10000 paras)",
-            create_test_document(HUGE_DOC_PARAGRAPHS, 20),
-        ),
-    ];
-
-    for (name, doc) in docs {
-        let mut cache = render::RenderCache::new();
-
-        // First render - cache miss
-        let start = std::time::Instant::now();
-        let tracking = DirectCursorTracking {
-            cursor: None,
-            selection: None,
-            track_all_positions: false,
-        };
-        let _ = render::render_document_direct(
-            &doc,
-            80,  // wrap_width
-            0,   // left_padding
-            &[], // reveal_tags
-            tracking,
-            Some(&mut cache),
-        );
-        let first_render = start.elapsed();
-
-        // Subsequent renders - cache hits
-        let iterations = if name.contains("Huge") { 50 } else { 100 };
-        let mut durations = Vec::new();
-
-        for _ in 0..iterations {
-            let start = std::time::Instant::now();
-            let tracking = DirectCursorTracking {
-                cursor: None,
-                selection: None,
-                track_all_positions: false,
-            };
-            let _ = render::render_document_direct(&doc, 80, 0, &[], tracking, Some(&mut cache));
-            durations.push(start.elapsed());
-        }
-
-        let total_duration: Duration = durations.iter().sum();
-        let avg_cached = total_duration / iterations as u32;
-        let min_cached = *durations.iter().min().unwrap();
-        let max_cached = *durations.iter().max().unwrap();
-
-        println!("\n{}", name);
-        println!("  First render (cold cache): {:?}", first_render);
-        println!("  Cached renders (avg):      {:?}", avg_cached);
-        println!("  Cached renders (min):      {:?}", min_cached);
-        println!("  Cached renders (max):      {:?}", max_cached);
-        println!(
-            "  Speedup:                   {:.2}x",
-            first_render.as_secs_f64() / avg_cached.as_secs_f64()
-        );
-        println!("  Cache hits:                {}", cache.hits);
-        println!("  Cache misses:              {}", cache.misses);
-        println!(
-            "  Cache hit rate:            {:.1}%",
-            cache.hit_rate() * 100.0
-        );
     }
 }
 
@@ -354,7 +271,7 @@ fn bench_rendering_with_styles() {
                 selection: None,
                 track_all_positions: false,
             };
-            let _ = render::render_document_direct(&doc, 80, 0, &[], tracking, None);
+            let _ = render::render_document_direct(&doc, 80, 0, &[], tracking);
         });
         result.print();
     }
@@ -374,7 +291,7 @@ fn bench_rendering_reveal_codes() {
             selection: None,
             track_all_positions: false,
         };
-        let _ = render::render_document_direct(&doc, 80, 0, &[], tracking, None);
+        let _ = render::render_document_direct(&doc, 80, 0, &[], tracking);
     });
     result_normal.print();
 
@@ -384,7 +301,7 @@ fn bench_rendering_reveal_codes() {
             selection: None,
             track_all_positions: false,
         };
-        let _ = render::render_document_direct(&doc, 80, 0, &[], tracking, None);
+        let _ = render::render_document_direct(&doc, 80, 0, &[], tracking);
     });
     result_reveal.print();
 
@@ -591,7 +508,7 @@ fn bench_wrap_width_impact() {
                     selection: None,
                     track_all_positions: false,
                 };
-                let _ = render::render_document_direct(&doc, width, 0, &[], tracking, None);
+                let _ = render::render_document_direct(&doc, width, 0, &[], tracking);
             },
         );
         result.print();
@@ -617,15 +534,319 @@ fn bench_memory_allocations() {
         selection: None,
         track_all_positions: false,
     };
-    let render_result = render::render_document_direct(&doc, 80, 0, &[], tracking, None);
+    let render_result = render::render_document_direct(&doc, 80, 0, &[], tracking);
     println!("  Rendered lines: {}", render_result.lines.len());
-    println!("  Cursor map entries: {}", render_result.cursor_map.len());
+    println!(
+        "  Cursor map entries: {}",
+        render_result
+            .paragraph_lines
+            .iter()
+            .map(|p| p.positions.len())
+            .sum::<usize>()
+    );
 
     println!("\nAllocations per edit cycle:");
     println!("  - Full segment Vec rebuild");
     println!("  - Cursor map Vec rebuild");
     println!("  - Direct rendering without document cloning");
     println!("  - Multiple intermediate Vecs during rendering");
+}
+
+#[test]
+fn bench_scrolling_detailed_analysis() {
+    println!("\n\n╔════════════════════════════════════════════════════════════════╗");
+    println!("║           DETAILED PERFORMANCE ANALYSIS                       ║");
+    println!("╚════════════════════════════════════════════════════════════════╝");
+    println!("\nThis benchmark analyzes exactly what's causing the slowdown");
+    println!("during scrolling operations in USER-GUIDE.md.");
+
+    use pure_tui::editor_display::EditorDisplay;
+    use ratatui::layout::Rect;
+
+    // Load USER-GUIDE.md
+    let content = std::fs::read_to_string("USER-GUIDE.md").expect("Failed to read USER-GUIDE.md");
+    let doc =
+        tdoc::markdown::parse(std::io::Cursor::new(&content)).expect("Failed to parse markdown");
+
+    let editor = editor::DocumentEditor::new(doc);
+    let mut display = EditorDisplay::new(editor);
+
+    // Initial render to populate visual positions
+    let text_area = Rect {
+        x: 0,
+        y: 0,
+        width: 100,
+        height: 30,
+    };
+    display.render_document(80, 0, None);
+    display.update_after_render(text_area);
+
+    println!("\n📊 Document Statistics:");
+    println!(
+        "  Paragraphs:          {}",
+        display.document().paragraphs.len()
+    );
+    println!(
+        "  Total visual lines:  {}",
+        display.get_layout().lines.len()
+    );
+    println!(
+        "  Cursor map entries:  {}",
+        display
+            .get_layout()
+            .paragraph_lines
+            .iter()
+            .map(|p| p.positions.len())
+            .sum::<usize>()
+    );
+    println!(
+        "  Visual positions:    {}",
+        display.visual_positions().len()
+    );
+    println!("  File size:           {} bytes", content.len());
+
+    // Measure a single operation in detail
+    println!("\n🔬 Single Operation Analysis (move down + render):");
+
+    // Measure move_cursor_vertical
+    let move_start = Instant::now();
+    display.move_cursor_vertical(1);
+    let move_time = move_start.elapsed();
+    println!("  move_cursor_vertical: {:?}", move_time);
+
+    // Measure render_document
+    let render_start = Instant::now();
+    display.render_document(80, 0, None);
+    let render_time = render_start.elapsed();
+    println!("  render_document:      {:?}", render_time);
+    println!(
+        "  Cursor map size:      {}",
+        display
+            .get_layout()
+            .paragraph_lines
+            .iter()
+            .map(|p| p.positions.len())
+            .sum::<usize>()
+    );
+
+    // Analysis
+    let layout = display.get_layout();
+    println!("\n🔍 Performance Analysis:");
+    println!("\n1. RENDERING BOTTLENECK:");
+    println!(
+        "   Rendering takes {:?} ({:.1}% of total time)",
+        render_time,
+        render_time.as_secs_f64() / (move_time + render_time).as_secs_f64() * 100.0
+    );
+
+    println!("\n2. CURSOR MAP SIZE:");
+    println!(
+        "   {} cursor positions tracked per render",
+        layout
+            .paragraph_lines
+            .iter()
+            .map(|p| p.positions.len())
+            .sum::<usize>()
+    );
+    println!("   This happens because track_all_positions=true in EditorDisplay::render_document");
+
+    println!("\n3. ROOT CAUSES:");
+    println!(
+        "   ✗ track_all_positions=true tracks {} positions per render",
+        layout
+            .paragraph_lines
+            .iter()
+            .map(|p| p.positions.len())
+            .sum::<usize>()
+    );
+    println!("   ✗ Every render allocates and populates large cursor_map Vec");
+    println!("   ✗ visual_positions Vec is rebuilt on every render");
+    println!(
+        "   ✗ With {} visual lines, this creates significant overhead",
+        layout.lines.len()
+    );
+
+    println!("\n4. RECOMMENDED FIXES:");
+    println!("   1. Set track_all_positions=false when only cursor position is needed");
+    println!("   2. Only track full cursor_map when actually needed (e.g., for mouse clicks)");
+    println!("   3. Consider incremental updates to cursor_map instead of full rebuild");
+    println!("   4. Cache visual_positions separately to avoid rebuilding on every render");
+    println!("   5. Use a more efficient data structure for cursor_map (e.g., HashMap)");
+
+    println!("\n5. EXPECTED IMPROVEMENT:");
+    println!("   If track_all_positions=false:");
+    println!(
+        "   - Eliminate {} cursor position tracking operations",
+        layout
+            .paragraph_lines
+            .iter()
+            .map(|p| p.positions.len())
+            .sum::<usize>()
+    );
+    println!("   - Reduce memory allocations significantly");
+    println!("   - Expected render time: <5ms (10x improvement)");
+    println!("   - Combined time: <8ms (meets <10ms target)");
+}
+
+#[test]
+fn bench_editing_insert_text() {
+    println!("\n\n╔════════════════════════════════════════════════════════════════╗");
+    println!("║       EDITING BENCHMARK: INSERT TEXT (Typing Performance)     ║");
+    println!("╚════════════════════════════════════════════════════════════════╝");
+    println!("\nThis simulates opening USER-GUIDE.md, finding the first text");
+    println!("paragraph, and typing 100 words at the beginning.");
+
+    use pure_tui::editor_display::EditorDisplay;
+    use ratatui::layout::Rect;
+
+    // Load USER-GUIDE.md
+    let content = std::fs::read_to_string("USER-GUIDE.md").expect("Failed to read USER-GUIDE.md");
+    let doc =
+        tdoc::markdown::parse(std::io::Cursor::new(&content)).expect("Failed to parse markdown");
+
+    let editor = editor::DocumentEditor::new(doc);
+    let mut display = EditorDisplay::new(editor);
+
+    // Initial render to populate visual positions
+    let text_area = Rect {
+        x: 0,
+        y: 0,
+        width: 100,
+        height: 30,
+    };
+    display.render_document(80, 0, None);
+    display.update_after_render(text_area);
+
+    println!("\nDocument stats:");
+    println!("  Paragraphs: {}", display.document().paragraphs.len());
+    println!("  Total visual lines: {}", display.get_layout().lines.len());
+
+    // Find first text paragraph and move cursor there
+    // USER-GUIDE starts with heading paragraphs, so we need to move to first text paragraph
+    for _ in 0..20 {
+        display.move_down();
+        if matches!(
+            display
+                .document()
+                .paragraphs
+                .get(display.cursor_pointer().paragraph_path.numeric_steps()[0]),
+            Some(tdoc::Paragraph::Text { .. })
+        ) {
+            break;
+        }
+    }
+
+    println!(
+        "  Starting paragraph: {:?}",
+        display.cursor_pointer().paragraph_path.numeric_steps()
+    );
+
+    // Prepare text to insert: 100 words
+    let words_to_insert = "Lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod tempor incididunt ut labore et dolore magna aliqua ";
+    let total_chars = words_to_insert.len() * 10; // Repeat to get ~100 words
+
+    println!("  Characters to insert: {}", total_chars);
+
+    // Track timing for each character insertion
+    let mut insert_times = Vec::new();
+    let mut render_times = Vec::new();
+    let overall_start = Instant::now();
+
+    let chars_to_type: Vec<char> = words_to_insert.chars().cycle().take(total_chars).collect();
+
+    for (idx, ch) in chars_to_type.iter().enumerate() {
+        // Time the character insertion
+        let insert_start = Instant::now();
+        display.insert_char(*ch);
+        insert_times.push(insert_start.elapsed());
+
+        // Render after insertion (uses incremental updates)
+        let render_start = Instant::now();
+        display.render_document(80, 0, None);
+        render_times.push(render_start.elapsed());
+        display.update_after_render(text_area);
+
+        // Sample every 100 characters for progress
+        if (idx + 1) % 100 == 0 {
+            println!("  Inserted {} characters...", idx + 1);
+        }
+    }
+
+    let overall_time = overall_start.elapsed();
+
+    // Calculate statistics
+    let total_ops = insert_times.len();
+    let insert_avg: Duration = insert_times.iter().sum::<Duration>() / total_ops as u32;
+    let insert_min = *insert_times.iter().min().unwrap();
+    let insert_max = *insert_times.iter().max().unwrap();
+
+    let render_avg: Duration = render_times.iter().sum::<Duration>() / total_ops as u32;
+    let render_min = *render_times.iter().min().unwrap();
+    let render_max = *render_times.iter().max().unwrap();
+
+    let combined_avg = insert_avg + render_avg;
+
+    println!("\n╔════════════════════════════════════════════════════════════════╗");
+    println!("║                         RESULTS                                ║");
+    println!("╚════════════════════════════════════════════════════════════════╝");
+    println!("\n📊 Overall:");
+    println!("  Total characters:   {}", total_ops);
+    println!("  Total time:         {:?}", overall_time);
+    println!("  Avg per keypress:   {:?}", combined_avg);
+    println!();
+    println!("✍️  Character Insertion (insert_char):");
+    println!("  Average:  {:?}", insert_avg);
+    println!("  Min:      {:?}", insert_min);
+    println!("  Max:      {:?}", insert_max);
+    println!();
+    println!("🎨 Rendering (render_document with incremental updates):");
+    println!("  Average:  {:?}", render_avg);
+    println!("  Min:      {:?}", render_min);
+    println!("  Max:      {:?}", render_max);
+    println!();
+    println!("⚡ Combined per keypress:");
+    println!("  Average:  {:?}", combined_avg);
+
+    // Performance assessment
+    println!("\n🎯 Performance Assessment:");
+    if combined_avg.as_millis() > 10 {
+        println!(
+            "  ❌ FAILED: Average > 10ms target ({:.2}ms)",
+            combined_avg.as_secs_f64() * 1000.0
+        );
+        println!("     Users will experience noticeable lag when typing.");
+    } else {
+        println!(
+            "  ✅ PASSED: Average < 10ms target ({:.2}ms)",
+            combined_avg.as_secs_f64() * 1000.0
+        );
+        println!("     Typing should feel smooth and responsive.");
+    }
+
+    if combined_avg.as_millis() > 16 {
+        println!("  ⚠️  WARNING: Average > 16ms - will drop below 60 FPS");
+    }
+
+    // Analyze the breakdown
+    println!("\n📈 Performance Breakdown:");
+    let insert_pct = insert_avg.as_secs_f64() / combined_avg.as_secs_f64() * 100.0;
+    let render_pct = render_avg.as_secs_f64() / combined_avg.as_secs_f64() * 100.0;
+    println!("  Insert: {:.1}% of time", insert_pct);
+    println!("  Render: {:.1}% of time", render_pct);
+
+    if insert_avg.as_millis() > 5 {
+        println!("\n  💡 Insertion is slow - potential optimizations:");
+        println!("     - Reduce segment collection overhead");
+        println!("     - Optimize char_to_byte_idx conversions");
+        println!("     - Batch cursor position updates");
+    }
+
+    if render_avg.as_millis() > 5 {
+        println!("\n  💡 Rendering is slow - potential optimizations:");
+        println!("     - This uses render_document (with incremental updates)");
+        println!("     - Check if incremental updates are working correctly");
+        println!("     - Optimize paragraph hashing for cache invalidation");
+    }
 }
 
 #[cfg(test)]
@@ -642,11 +863,14 @@ mod summary {
             "  cargo test --release --bench performance bench_rendering_performance -- --nocapture"
         );
         println!("\nKey metrics to watch:");
+        println!("  • Scrolling performance (should be < 10ms per keypress)");
+        println!("  • Editing performance (should be < 10ms per keypress)");
         println!("  • Full edit cycle time (should be < 5ms per character)");
         println!("  • Segment collection time (runs on EVERY keystroke)");
         println!("  • Rendering time for large documents");
         println!("  • char_to_byte_idx performance (called multiple times per edit)");
         println!("\nPerformance targets:");
+        println!("  • < 10ms per keypress = smooth typing/scrolling");
         println!("  • < 16ms per operation = smooth 60 FPS");
         println!("  • < 100ms = user perceives as instantaneous");
         println!("  • > 100ms = noticeable lag");
@@ -682,7 +906,7 @@ fn bench_user_guide_rendering() {
             selection: None,
             track_all_positions: false,
         };
-        let _ = render::render_document_direct(&doc, 80, 0, &[], tracking, None);
+        let _ = render::render_document_direct(&doc, 80, 0, &[], tracking);
         durations.push(start.elapsed());
     }
 
@@ -703,43 +927,9 @@ fn bench_user_guide_rendering() {
         println!("  ✅ GOOD: Rendering is fast enough for 60 FPS");
     }
 
-    // Test with cache
-    println!("\nWith render cache:");
-    let mut cache = render::RenderCache::new();
-
-    // First render - cold cache
-    let start = Instant::now();
-    let tracking = DirectCursorTracking {
-        cursor: None,
-        selection: None,
-        track_all_positions: false,
-    };
-    let _ = render::render_document_direct(&doc, 80, 0, &[], tracking, Some(&mut cache));
-    let first_render = start.elapsed();
-
-    // Subsequent renders - warm cache
-    let mut cached_durations = Vec::new();
-    for _ in 0..iterations {
-        let start = Instant::now();
-        let tracking = DirectCursorTracking {
-            cursor: None,
-            selection: None,
-            track_all_positions: false,
-        };
-        let _ = render::render_document_direct(&doc, 80, 0, &[], tracking, Some(&mut cache));
-        cached_durations.push(start.elapsed());
-    }
-
-    let cached_total: Duration = cached_durations.iter().sum();
-    let cached_avg = cached_total / iterations as u32;
-
-    println!("  First render: {:?}", first_render);
-    println!("  Cached average: {:?}", cached_avg);
-    println!(
-        "  Speedup: {:.2}x",
-        first_render.as_secs_f64() / cached_avg.as_secs_f64()
-    );
-    println!("  Cache hit rate: {:.1}%", cache.hit_rate() * 100.0);
+    // Note: In production, render caching is handled by EditorDisplay's layout cache
+    println!("\nNote: Direct rendering doesn't have per-paragraph caching,");
+    println!("      but EditorDisplay provides layout caching for real-world use.");
 }
 
 #[test]
@@ -758,7 +948,6 @@ fn bench_real_world_render_flow() {
         tdoc::markdown::parse(std::io::Cursor::new(&content)).expect("Failed to parse markdown");
 
     let editor = editor::DocumentEditor::new(doc);
-    let mut cache = render::RenderCache::new();
 
     println!("\nDocument stats:");
     println!("  Paragraphs: {}", editor.document().paragraphs.len());
@@ -785,14 +974,7 @@ fn bench_real_world_render_flow() {
 
         // Step 2: Render the document directly with cache
         let render_start = Instant::now();
-        let render_result = render::render_document_direct(
-            editor.document(),
-            80,
-            0,
-            &[],
-            tracking,
-            Some(&mut cache),
-        );
+        let render_result = render::render_document_direct(editor.document(), 80, 0, &[], tracking);
         render_times.push(render_start.elapsed());
 
         // Step 3: Clone rendered lines (for ratatui widget)
@@ -827,23 +1009,6 @@ fn bench_real_world_render_flow() {
     println!("  ─────────────────────────────────────");
     println!("  TOTAL per frame:      {:>8?}  (100.0%)", total_avg);
 
-    println!("\n📈 Cache statistics:");
-    println!("  Cache hits:     {}", cache.hits);
-    println!("  Cache misses:   {}", cache.misses);
-    println!("  Hit rate:       {:.1}%", cache.hit_rate() * 100.0);
-    println!(
-        "  Expected hits:  {} (if only 1 para with cursor changes per frame)",
-        iterations * (editor.document().paragraphs.len() - 1)
-    );
-    println!(
-        "  Expected misses: {} (1 para with cursor per frame)",
-        iterations
-    );
-    println!(
-        "  Actual misses/iter: {:.1} paragraphs",
-        cache.misses as f64 / iterations as f64
-    );
-
     println!("\n🔍 Analysis:");
     println!("  ✨ Direct rendering eliminates document cloning overhead!");
     println!("     Cursor tracking is now negligible compared to old cloning approach.");
@@ -854,5 +1019,285 @@ fn bench_real_world_render_flow() {
         println!("  ⚠️  TOTAL time > 16ms - may drop frames");
     } else {
         println!("  ✅ TOTAL time < 16ms - smooth 60 FPS");
+    }
+}
+
+#[test]
+fn bench_scrolling_cursor_movement() {
+    println!("\n\n╔════════════════════════════════════════════════════════════════╗");
+    println!("║      SCROLLING BENCHMARK: CURSOR MOVEMENT (Down Arrow)         ║");
+    println!("╚════════════════════════════════════════════════════════════════╝");
+    println!("\nThis simulates scrolling through USER-GUIDE.md by pressing");
+    println!("Down arrow repeatedly until reaching the bottom of the document.");
+
+    use pure_tui::editor_display::EditorDisplay;
+    use ratatui::layout::Rect;
+
+    // Load USER-GUIDE.md
+    let content = std::fs::read_to_string("USER-GUIDE.md").expect("Failed to read USER-GUIDE.md");
+    let doc =
+        tdoc::markdown::parse(std::io::Cursor::new(&content)).expect("Failed to parse markdown");
+
+    let editor = editor::DocumentEditor::new(doc);
+    let mut display = EditorDisplay::new(editor);
+
+    // Initial render to populate visual positions
+    let text_area = Rect {
+        x: 0,
+        y: 0,
+        width: 100,
+        height: 30,
+    };
+    display.render_document(80, 0, None);
+    display.update_after_render(text_area);
+
+    println!("\nDocument stats:");
+    println!("  Paragraphs: {}", display.document().paragraphs.len());
+    println!("  Total visual lines: {}", display.get_layout().lines.len());
+    println!("  File size: {} bytes", content.len());
+
+    // Track timing for each down arrow press
+    let mut move_times = Vec::new();
+    let mut render_times = Vec::new();
+    let overall_start = Instant::now();
+
+    let max_iterations = 10000; // Safety limit
+    for iteration in 0..max_iterations {
+        // Remember where we were
+        let before_pointer = display.cursor_pointer();
+
+        // Time the cursor movement
+        let move_start = Instant::now();
+        display.move_cursor_vertical(1);
+        move_times.push(move_start.elapsed());
+
+        // Time the render (which happens after each keypress)
+        let render_start = Instant::now();
+        display.render_document(80, 0, None);
+        render_times.push(render_start.elapsed());
+        display.update_after_render(text_area);
+
+        // Check if we've reached the end (cursor didn't move)
+        let after_pointer = display.cursor_pointer();
+        if before_pointer == after_pointer {
+            println!("\nReached end of document after {} moves", iteration);
+            break;
+        }
+    }
+
+    let overall_time = overall_start.elapsed();
+
+    // Calculate statistics
+    let total_moves = move_times.len();
+    let move_avg: Duration = move_times.iter().sum::<Duration>() / total_moves as u32;
+    let move_min = *move_times.iter().min().unwrap();
+    let move_max = *move_times.iter().max().unwrap();
+
+    let render_avg: Duration = render_times.iter().sum::<Duration>() / total_moves as u32;
+    let render_min = *render_times.iter().min().unwrap();
+    let render_max = *render_times.iter().max().unwrap();
+
+    let combined_avg = move_avg + render_avg;
+
+    println!("\n╔════════════════════════════════════════════════════════════════╗");
+    println!("║                         RESULTS                                ║");
+    println!("╚════════════════════════════════════════════════════════════════╝");
+    println!("\n📊 Overall:");
+    println!("  Total moves:        {}", total_moves);
+    println!("  Total time:         {:?}", overall_time);
+    println!("  Avg per keypress:   {:?}", combined_avg);
+    println!();
+    println!("📈 Cursor Movement (move_cursor_vertical):");
+    println!("  Average:  {:?}", move_avg);
+    println!("  Min:      {:?}", move_min);
+    println!("  Max:      {:?}", move_max);
+    println!();
+    println!("🎨 Rendering (render_document):");
+    println!("  Average:  {:?}", render_avg);
+    println!("  Min:      {:?}", render_min);
+    println!("  Max:      {:?}", render_max);
+    println!();
+    println!("⚡ Combined per keypress:");
+    println!("  Average:  {:?}", combined_avg);
+
+    // Performance assessment
+    println!("\n🎯 Performance Assessment:");
+    if combined_avg.as_millis() > 10 {
+        println!(
+            "  ❌ FAILED: Average > 10ms target ({:.2}ms)",
+            combined_avg.as_secs_f64() * 1000.0
+        );
+        println!("     Users will experience noticeable lag when scrolling.");
+    } else {
+        println!(
+            "  ✅ PASSED: Average < 10ms target ({:.2}ms)",
+            combined_avg.as_secs_f64() * 1000.0
+        );
+        println!("     Scrolling should feel smooth and responsive.");
+    }
+
+    if combined_avg.as_millis() > 16 {
+        println!("  ⚠️  WARNING: Average > 16ms - will drop below 60 FPS");
+    }
+}
+
+#[test]
+fn bench_scrolling_page_down() {
+    println!("\n\n╔════════════════════════════════════════════════════════════════╗");
+    println!("║         SCROLLING BENCHMARK: PAGE DOWN (Page Down Key)        ║");
+    println!("╚════════════════════════════════════════════════════════════════╝");
+    println!("\nThis simulates scrolling through USER-GUIDE.md by pressing");
+    println!("Page Down repeatedly until reaching the bottom of the document.");
+
+    use pure_tui::editor_display::EditorDisplay;
+    use ratatui::layout::Rect;
+
+    // Load USER-GUIDE.md
+    let content = std::fs::read_to_string("USER-GUIDE.md").expect("Failed to read USER-GUIDE.md");
+    let doc =
+        tdoc::markdown::parse(std::io::Cursor::new(&content)).expect("Failed to parse markdown");
+
+    let editor = editor::DocumentEditor::new(doc);
+    let mut display = EditorDisplay::new(editor);
+
+    // Initial render to populate visual positions
+    let text_area = Rect {
+        x: 0,
+        y: 0,
+        width: 100,
+        height: 30,
+    };
+    display.render_document(80, 0, None);
+    display.update_after_render(text_area);
+
+    println!("\nDocument stats:");
+    println!("  Paragraphs: {}", display.document().paragraphs.len());
+    println!("  Total visual lines: {}", display.get_layout().lines.len());
+    println!(
+        "  Page jump distance: {} lines",
+        display.page_jump_distance()
+    );
+    println!("  File size: {} bytes", content.len());
+
+    // Track timing for each page down press
+    let mut move_times = Vec::new();
+    let mut render_times = Vec::new();
+    let overall_start = Instant::now();
+
+    let max_iterations = 1000; // Safety limit
+    for iteration in 0..max_iterations {
+        // Remember where we were
+        let before_pointer = display.cursor_pointer();
+
+        // Time the page movement
+        let move_start = Instant::now();
+        display.move_page(1);
+        move_times.push(move_start.elapsed());
+
+        // Time the render (which happens after each keypress)
+        let render_start = Instant::now();
+        display.render_document(80, 0, None);
+        render_times.push(render_start.elapsed());
+        display.update_after_render(text_area);
+
+        // Check if we've reached the end (cursor didn't move)
+        let after_pointer = display.cursor_pointer();
+        if before_pointer == after_pointer {
+            println!("\nReached end of document after {} page downs", iteration);
+            break;
+        }
+    }
+
+    let overall_time = overall_start.elapsed();
+
+    // Calculate statistics
+    let total_moves = move_times.len();
+    let move_avg: Duration = move_times.iter().sum::<Duration>() / total_moves as u32;
+    let move_min = *move_times.iter().min().unwrap();
+    let move_max = *move_times.iter().max().unwrap();
+
+    let render_avg: Duration = render_times.iter().sum::<Duration>() / total_moves as u32;
+    let render_min = *render_times.iter().min().unwrap();
+    let render_max = *render_times.iter().max().unwrap();
+
+    let combined_avg = move_avg + render_avg;
+
+    println!("\n╔════════════════════════════════════════════════════════════════╗");
+    println!("║                         RESULTS                                ║");
+    println!("╚════════════════════════════════════════════════════════════════╝");
+    println!("\n📊 Overall:");
+    println!("  Total page downs:   {}", total_moves);
+    println!("  Total time:         {:?}", overall_time);
+    println!("  Avg per keypress:   {:?}", combined_avg);
+    println!();
+    println!("📈 Page Movement (move_page):");
+    println!("  Average:  {:?}", move_avg);
+    println!("  Min:      {:?}", move_min);
+    println!("  Max:      {:?}", move_max);
+    println!();
+    println!("🎨 Rendering (render_document):");
+    println!("  Average:  {:?}", render_avg);
+    println!("  Min:      {:?}", render_min);
+    println!("  Max:      {:?}", render_max);
+    println!();
+    println!("⚡ Combined per keypress:");
+    println!("  Average:  {:?}", combined_avg);
+
+    // Performance assessment
+    println!("\n🎯 Performance Assessment:");
+    if combined_avg.as_millis() > 10 {
+        println!(
+            "  ❌ FAILED: Average > 10ms target ({:.2}ms)",
+            combined_avg.as_secs_f64() * 1000.0
+        );
+        println!("     Users will experience noticeable lag when paging.");
+    } else {
+        println!(
+            "  ✅ PASSED: Average < 10ms target ({:.2}ms)",
+            combined_avg.as_secs_f64() * 1000.0
+        );
+        println!("     Paging should feel smooth and responsive.");
+    }
+
+    if combined_avg.as_millis() > 16 {
+        println!("  ⚠️  WARNING: Average > 16ms - will drop below 60 FPS");
+    }
+}
+
+#[test]
+fn benchmark_incremental_updates() {
+    use pure_tui::editor::DocumentEditor;
+    use pure_tui::editor_display::EditorDisplay;
+
+    println!("\n=== Incremental Update Performance ===\n");
+
+    // Test with medium document (584 paragraphs like USER-GUIDE.md)
+    let doc = create_test_document(584, 20);
+    let editor = DocumentEditor::new(doc);
+    let mut display = EditorDisplay::new(editor);
+
+    // Initial render
+    display.render_document(80, 0, None);
+
+    // Test incremental updates
+    let iterations = 100;
+    let start = Instant::now();
+    for _ in 0..iterations {
+        display.insert_char('x');
+        display.clear_render_cache();
+        display.render_document(80, 0, None);
+    }
+    let total = start.elapsed();
+    let avg = total / iterations as u32;
+
+    println!("Document: 584 paragraphs");
+    println!("Iterations: {}", iterations);
+    println!("Total time: {:?}", total);
+    println!("Average per keypress: {:.2}ms", avg.as_secs_f64() * 1000.0);
+
+    if avg.as_millis() > 10 {
+        println!("  ❌ WARNING: Incremental updates slower than 10ms target");
+    } else {
+        println!("  ✅ PASSED: Incremental updates < 10ms - should feel responsive");
     }
 }

@@ -26,7 +26,6 @@ use tdoc::{Document, InlineStyle, ParagraphType, markdown, parse, writer::Writer
 
 use pure_tui::editor::{CursorPointer, DocumentEditor};
 use pure_tui::editor_display::{CursorDisplay, EditorDisplay};
-use pure_tui::render::RenderResult;
 
 const STATUS_TIMEOUT: Duration = Duration::from_secs(4);
 const DOUBLE_CLICK_TIMEOUT: Duration = Duration::from_millis(400);
@@ -155,7 +154,6 @@ fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut A
         // Block waiting for events
         if event::poll(timeout).context("event poll failed")? {
             let evt = event::read().context("failed to read event")?;
-            eprintln!("Event: {:?}", evt);
 
             // Skip spurious Resize events that don't change size
             if let Event::Resize(_, _) = evt {
@@ -164,26 +162,10 @@ fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut A
                 continue;
             }
 
-            let is_page_down = matches!(
-                evt,
-                Event::Key(KeyEvent {
-                    code: KeyCode::PageDown,
-                    ..
-                })
-            );
-
-            let handle_start = Instant::now();
             app.handle_event(evt)?;
-            let handle_time = handle_start.elapsed();
 
             // Mark that we need to redraw after handling event
             needs_redraw = true;
-
-            // Log timing for PageDown operations
-            if is_page_down {
-                eprintln!("\n=== PageDown Timing ===");
-                eprintln!("  Handle event: {:?}", handle_time);
-            }
         }
 
         // Handle tick for status message updates
@@ -630,6 +612,8 @@ struct App {
     last_viewport_height: usize,
     last_total_lines: usize,
     last_scrollbar_column: u16,
+    /// Flag to track when we need to rebuild visual positions (after edits, mouse clicks, etc.)
+    needs_position_rebuild: bool,
 }
 
 impl App {
@@ -663,6 +647,7 @@ impl App {
             last_viewport_height: 0,
             last_total_lines: 0,
             last_scrollbar_column: 0,
+            needs_position_rebuild: true, // Rebuild on first render
         }
     }
 
@@ -743,15 +728,16 @@ impl App {
         });
     }
 
-    fn apply_pending_scroll_restore(&mut self, render: &RenderResult, viewport_height: usize) {
+    fn apply_pending_scroll_restore(&mut self, viewport_height: usize) {
         let Some(restore) = self.pending_scroll_restore.take() else {
             return;
         };
         let viewport = viewport_height.max(1);
-        let max_scroll = render
-            .total_lines
+        let max_scroll = self
+            .display
+            .get_total_lines()
             .saturating_sub(viewport)
-            .min(render.total_lines);
+            .min(self.display.get_total_lines());
         let mut target = if max_scroll == 0 {
             0
         } else {
@@ -762,7 +748,7 @@ impl App {
         }
         self.scroll_top = target;
         if restore.ensure_cursor_visible
-            && let Some(cursor) = &render.cursor
+            && let Some(cursor) = &self.display.cursor_visual()
         {
             self.scroll_top = self.scroll_top_for_cursor(cursor.line, viewport, max_scroll);
         }
@@ -793,36 +779,46 @@ impl App {
         let width = text_area.width.max(1) as usize;
         let (wrap_width, left_padding) = editor_wrap_configuration(width);
         let selection = self.current_selection();
-        let render = self
-            .display
-            .render_document(wrap_width, left_padding, selection);
+
+        // Use full position tracking when needed (after edits, mouse events, first render)
+        // Otherwise use fast rendering for smooth scrolling
+        if self.needs_position_rebuild {
+            self.needs_position_rebuild = false;
+            self.display
+                .render_document_with_positions(wrap_width, left_padding, selection);
+        } else {
+            self.display
+                .render_document(wrap_width, left_padding, selection);
+        };
+
         let render_time = render_start.elapsed();
         if render_time.as_millis() > 10 {
             // eprintln!("  render_document: {:?}", render_time);
         }
 
-        self.display
-            .update_after_render(text_area, render.total_lines);
-        let cursor_visual = self.display.last_cursor_visual();
+        self.display.update_after_render(text_area);
+        let _cursor_visual = self.display.cursor_visual();
         let viewport_height = text_area.height as usize;
-        self.apply_pending_scroll_restore(&render, viewport_height);
-        self.adjust_scroll(&render, viewport_height);
+        self.apply_pending_scroll_restore(viewport_height);
+        self.adjust_scroll(self.display.get_total_lines(), viewport_height);
 
         // Store viewport and total lines for scrollbar calculations
         self.last_viewport_height = viewport_height;
-        self.last_total_lines = render.total_lines;
+        self.last_total_lines = self.display.get_total_lines();
         self.last_scrollbar_column = scrollbar_area.x;
 
-        let paragraph = Paragraph::new(Text::from(render.lines.clone()))
-            .wrap(Wrap { trim: false })
-            .block(Block::default().borders(Borders::NONE))
-            .scroll((self.scroll_top as u16, 0));
-        frame.render_widget(paragraph, text_area);
+        if let Some(lines) = self.display.get_lines() {
+            let paragraph = Paragraph::new(Text::from(lines))
+                .wrap(Wrap { trim: false })
+                .block(Block::default().borders(Borders::NONE))
+                .scroll((self.scroll_top as u16, 0));
+            frame.render_widget(paragraph, text_area);
+        }
 
         // Draw custom scrollbar
         self.draw_scrollbar(frame, scrollbar_area);
 
-        if let Some(cursor) = cursor_visual
+        if let Some(cursor) = self.display.cursor_visual()
             && cursor.line >= self.scroll_top
             && cursor.line < self.scroll_top + viewport_height
             && text_area.width > 0
@@ -832,7 +828,8 @@ impl App {
             frame.set_cursor_position(Position::new(cursor_x, cursor_y));
         }
 
-        let status_line = self.status_line(render.content_lines, status_area.width as usize);
+        let status_line =
+            self.status_line(self.display.get_content_lines(), status_area.width as usize);
         let status_widget = Paragraph::new(status_line)
             .block(Block::default().borders(Borders::NONE))
             .style(Style::default().bg(Color::Blue).fg(Color::White));
@@ -1215,17 +1212,15 @@ impl App {
         }
     }
 
-    fn adjust_scroll(&mut self, render: &RenderResult, viewport_height: usize) {
+    fn adjust_scroll(&mut self, total_lines: usize, viewport_height: usize) {
         let viewport = viewport_height.max(1);
-        let max_scroll = render
-            .total_lines
-            .saturating_sub(viewport)
-            .min(render.total_lines);
+        let max_scroll = total_lines.saturating_sub(viewport).min(total_lines);
         if self.scroll_top > max_scroll {
             self.scroll_top = max_scroll;
         }
         if self.display.cursor_following() {
-            if let Some(cursor) = &render.cursor {
+            // Use cursor_visual() to get the visual cursor position from the cached layout
+            if let Some(cursor) = self.display.cursor_visual() {
                 self.scroll_top = self.scroll_top_for_cursor(cursor.line, viewport, max_scroll);
             }
             if self.scroll_top > max_scroll {
@@ -1461,6 +1456,9 @@ impl App {
     }
 
     fn handle_mouse_down(&mut self, event: MouseEvent) {
+        // Rebuild visual positions on next render for accurate click-to-cursor mapping
+        self.needs_position_rebuild = true;
+
         // Check if click is on scrollbar (rightmost column)
         if event.column == self.last_scrollbar_column
             && event.row < self.last_viewport_height as u16
@@ -1858,8 +1856,13 @@ impl App {
 
     fn mark_dirty(&mut self) {
         self.dirty = true;
-        // Clear render cache when document changes
-        self.display.clear_render_cache();
+        // Clear render cache when document changes (returns true if incremental update succeeded)
+        let incremental_succeeded = self.display.clear_render_cache();
+        // Only need to rebuild visual positions if incremental update failed
+        // (incremental updates already update positions correctly)
+        if !incremental_succeeded {
+            self.needs_position_rebuild = true;
+        }
     }
 
     fn count_words(&self) -> usize {
@@ -1917,7 +1920,7 @@ impl App {
     }
 
     fn cursor_position_text(&self) -> String {
-        if let Some(position) = self.display.last_cursor_visual() {
+        if let Some(position) = self.display.cursor_visual() {
             let line = position.content_line + 1;
             let column = usize::from(position.content_column) + 1;
             format!("{}:{}", line, column)

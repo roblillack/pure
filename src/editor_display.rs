@@ -1,10 +1,12 @@
 use std::ops::{Deref, DerefMut};
 
 use ratatui::layout::Rect;
+use ratatui::text::Line;
 
 use crate::editor::{CursorPointer, DocumentEditor};
 use crate::render::{
-    CursorVisualPosition, DirectCursorTracking, RenderCache, RenderResult, render_document_direct,
+    CursorVisualPosition, DirectCursorTracking, ParagraphLineInfo, RenderResult, layout_paragraph,
+    render_document_direct,
 };
 
 /// EditorDisplay wraps a DocumentEditor and manages all visual/rendering concerns.
@@ -12,14 +14,27 @@ use crate::render::{
 #[derive(Debug)]
 pub struct EditorDisplay {
     editor: DocumentEditor,
-    render_cache: RenderCache,
-    visual_positions: Vec<CursorDisplay>,
-    last_cursor_visual: Option<CursorVisualPosition>,
+    /// Cached layout result - only re-rendered when document changes or viewport resizes
+    layout: Option<RenderResult>,
+    /// Parameters used for cached_layout (to detect when re-render is needed)
+    wrap_width: usize,
+    left_padding: usize,
+
+    /// Last wrap_width used for rendering (needed for cache lookups)
+    last_wrap_width: usize,
+    /// Last left_padding used for rendering (needed for cache lookups)
+    last_left_padding: usize,
     preferred_column: Option<u16>,
     cursor_following: bool,
     last_view_height: usize,
     last_total_lines: usize,
     last_text_area: Rect,
+    /// Set to true when document changes to trigger re-render
+    layout_dirty: bool,
+    /// Track which paragraph was last modified for incremental updates
+    last_modified_paragraph: Option<usize>,
+    /// Track the last selection to detect selection changes
+    last_selection: Option<(CursorPointer, CursorPointer)>,
 }
 
 impl EditorDisplay {
@@ -27,26 +42,143 @@ impl EditorDisplay {
     pub fn new(editor: DocumentEditor) -> Self {
         Self {
             editor,
-            render_cache: RenderCache::new(),
-            visual_positions: Vec::new(),
-            last_cursor_visual: None,
+            layout: None,
+            wrap_width: 80,
+            left_padding: 0,
+            last_wrap_width: 80,
+            last_left_padding: 0,
             preferred_column: None,
             cursor_following: true,
             last_view_height: 1,
             last_total_lines: 0,
             last_text_area: Rect::default(),
+            layout_dirty: true,
+            last_modified_paragraph: None,
+            last_selection: None,
         }
     }
 
-    /// Get the current visual positions
+    /// Get all visual positions from paragraph_lines (for tests and legacy code)
     #[allow(dead_code)]
-    pub fn visual_positions(&self) -> &[CursorDisplay] {
-        &self.visual_positions
+    pub fn visual_positions(&self) -> Vec<CursorDisplay> {
+        if let Some(layout) = &self.layout {
+            layout
+                .paragraph_lines
+                .iter()
+                .flat_map(|info| {
+                    info.positions.iter().map(|(pointer, position)| {
+                        // Convert relative position to absolute
+                        let mut absolute_pos = *position;
+                        absolute_pos.line = info.start_line + position.line;
+                        CursorDisplay {
+                            pointer: pointer.clone(),
+                            position: absolute_pos,
+                        }
+                    })
+                })
+                .collect()
+        } else {
+            vec![]
+        }
+    }
+
+    pub fn get_layout(&self) -> &RenderResult {
+        self.layout.as_ref().unwrap()
+    }
+
+    pub fn get_total_lines(&self) -> usize {
+        if let Some(layout) = &self.layout {
+            layout.total_lines
+        } else {
+            0
+        }
+    }
+
+    pub fn get_content_lines(&self) -> usize {
+        if let Some(layout) = &self.layout {
+            layout.content_lines
+        } else {
+            0
+        }
+    }
+
+    pub fn get_lines(&self) -> Option<Vec<Line<'static>>> {
+        self.layout.as_ref().map(|layout| layout.lines.clone())
     }
 
     /// Get the last cursor visual position
-    pub fn last_cursor_visual(&self) -> Option<CursorVisualPosition> {
-        self.last_cursor_visual
+    pub fn cursor_visual(&self) -> Option<CursorVisualPosition> {
+        if let Some(layout) = &self.layout {
+            layout.cursor
+        } else {
+            None
+        }
+    }
+
+    /// Update the cached cursor visual position after cursor movement
+    /// Looks up the current logical cursor position in paragraph_lines and updates layout.cursor
+    fn update_cursor_visual_position(&mut self) {
+        let Some(layout) = &mut self.layout else {
+            return;
+        };
+
+        let cursor_pointer = self.editor.cursor_pointer();
+
+        // Search for the visual position of this pointer in paragraph_lines
+        let found = layout.paragraph_lines.iter().find_map(|info| {
+            info.positions
+                .iter()
+                .find(|(p, _)| p == &cursor_pointer)
+                .map(|(_, pos)| {
+                    // Convert relative position to absolute
+                    let mut absolute_pos = *pos;
+                    absolute_pos.line = info.start_line + pos.line;
+                    absolute_pos
+                })
+        });
+
+        layout.cursor = found;
+
+        // If cursor wasn't found (because track_all_positions was false during rendering),
+        // mark layout dirty and force a re-render to populate the cursor position
+        if found.is_none() {
+            self.layout_dirty = true;
+            self.render_document(self.wrap_width, self.left_padding, None);
+        }
+    }
+
+    /// Get cursor positions for a specific visual line.
+    /// Positions are read directly from the paragraph_lines structure populated during rendering.
+    fn get_positions_for_line(&self, line: usize) -> Vec<CursorDisplay> {
+        // Find which paragraph contains this line
+        let paragraph_info = self
+            .layout
+            .as_ref()
+            .unwrap()
+            .paragraph_lines
+            .iter()
+            .find(|info| line >= info.start_line && line <= info.end_line);
+
+        let Some(info) = paragraph_info else {
+            return Vec::new();
+        };
+
+        // Positions are stored relative to paragraph start, convert to absolute
+        let relative_line = line.saturating_sub(info.start_line);
+
+        info.positions
+            .iter()
+            .filter(|(_, position)| position.line == relative_line)
+            .map(|(pointer, position)| {
+                // Convert relative position back to absolute
+                let mut absolute_pos = *position;
+                absolute_pos.line = info.start_line + position.line;
+                CursorDisplay {
+                    pointer: pointer.clone(),
+                    position: absolute_pos,
+                }
+            })
+            .collect()
     }
 
     /// Get the preferred column
@@ -92,24 +224,237 @@ impl EditorDisplay {
     }
 
     /// Clear render cache (called when document changes)
-    pub fn clear_render_cache(&mut self) {
-        self.render_cache.clear();
+    ///
+    /// If a specific paragraph was modified (tracked in last_modified_paragraph),
+    /// tries to do an incremental update instead of marking the entire layout dirty.
+    ///
+    /// Returns true if an incremental update succeeded, false if a full re-render is needed.
+    pub fn clear_render_cache(&mut self) -> bool {
+        // Try incremental update if we know which paragraph changed
+        if let Some(para_index) = self.last_modified_paragraph
+            && self.update_paragraph_layout(para_index)
+        {
+            // Incremental update succeeded!
+            self.last_modified_paragraph = None;
+            return true; // Incremental update succeeded
+        }
+
+        // Fall back to full re-render
+        self.layout_dirty = true;
+        self.last_modified_paragraph = None;
+        false // Full re-render needed
+    }
+
+    /// Mark a specific paragraph as modified to enable incremental updates
+    /// Note: This only sets the tracking, clear_render_cache() must be called separately
+    pub fn mark_paragraph_modified(&mut self, paragraph_index: usize) {
+        self.last_modified_paragraph = Some(paragraph_index);
+    }
+
+    /// Update layout for a single paragraph (incremental update)
+    ///
+    /// This is much faster than re-rendering the entire document when only one paragraph changed.
+    /// Returns true if the update was successful, false if a full re-render is needed.
+    pub fn update_paragraph_layout(&mut self, paragraph_index: usize) -> bool {
+        // Need cached layout and valid parameters to do incremental update
+        let Some(cached_layout) = self.layout.as_mut() else {
+            return false;
+        };
+
+        // Get the paragraph
+        let Some(paragraph) = self.editor.document().paragraphs.get(paragraph_index) else {
+            return false;
+        };
+
+        // Find the paragraph info in cached layout
+        let Some(para_info) = cached_layout
+            .paragraph_lines
+            .iter()
+            .find(|info| info.paragraph_index == paragraph_index)
+        else {
+            return false;
+        };
+
+        let old_start_line = para_info.start_line;
+        let old_end_line = para_info.end_line;
+        let old_line_count = old_end_line - old_start_line + 1;
+
+        // Skip reveal tags for incremental updates to avoid expensive document clone
+        // Reveal codes will be updated on the next full render
+        let reveal_tags = Vec::new();
+
+        // Layout the paragraph
+        let cursor_pointer = self.editor.cursor_pointer();
+        let layout = layout_paragraph(
+            paragraph,
+            paragraph_index,
+            crate::editor::ParagraphPath::new_root(paragraph_index),
+            self.wrap_width,
+            self.left_padding,
+            "",
+            &reveal_tags,
+            DirectCursorTracking {
+                cursor: Some(&cursor_pointer),
+                selection: None,
+                track_all_positions: true,
+            },
+        );
+
+        let new_line_count = layout.line_count;
+        let line_count_delta = new_line_count as isize - old_line_count as isize;
+
+        // Replace the lines in the cached layout
+        let lines_start = old_start_line;
+        let lines_end = old_end_line + 1; // exclusive end
+        cached_layout
+            .lines
+            .splice(lines_start..lines_end, layout.lines.clone());
+
+        // Update paragraph_lines entry
+        let para_info_index = cached_layout
+            .paragraph_lines
+            .iter()
+            .position(|info| info.paragraph_index == paragraph_index)
+            .unwrap();
+
+        // Convert relative positions to absolute
+        let new_positions: Vec<_> = layout
+            .positions
+            .iter()
+            .map(|(pointer, pos)| {
+                let mut absolute_pos = *pos;
+                absolute_pos.line = old_start_line + pos.line;
+                // Recompute content_line from line_metrics
+                // For now, just use the line number (will be fixed in next full render)
+                absolute_pos.content_line = absolute_pos.line;
+                (pointer.clone(), absolute_pos)
+            })
+            .collect();
+
+        cached_layout.paragraph_lines[para_info_index] = ParagraphLineInfo {
+            paragraph_index,
+            start_line: old_start_line,
+            end_line: old_start_line + new_line_count.saturating_sub(1),
+            positions: new_positions
+                .iter()
+                .map(|(pointer, pos)| {
+                    let mut relative_pos = *pos;
+                    relative_pos.line = pos.line.saturating_sub(old_start_line);
+                    (pointer.clone(), relative_pos)
+                })
+                .collect(),
+        };
+
+        // If line count changed, adjust all subsequent paragraphs
+        if line_count_delta != 0 {
+            for info in cached_layout.paragraph_lines.iter_mut() {
+                // Adjust paragraphs that come after the edited one (by index, not by line number)
+                if info.paragraph_index > paragraph_index {
+                    let _old_start = info.start_line;
+                    let _old_end = info.end_line;
+                    info.start_line = (info.start_line as isize + line_count_delta) as usize;
+                    info.end_line = (info.end_line as isize + line_count_delta) as usize;
+                }
+            }
+
+            // Update total lines
+            cached_layout.total_lines =
+                (cached_layout.total_lines as isize + line_count_delta) as usize;
+        }
+
+        // Update cursor if it's in the cached layout
+        if let Some(ref mut cursor) = cached_layout.cursor {
+            if cursor.line >= old_start_line && cursor.line <= old_end_line {
+                // Cursor is in the updated paragraph - recompute from layout
+                if let Some(layout_cursor) = layout.cursor {
+                    cursor.line = old_start_line + layout_cursor.line;
+                    cursor.column = layout_cursor.column;
+                    cursor.content_column = layout_cursor.content_column;
+                    // content_line will be recomputed on next full render
+                }
+            } else if cursor.line > old_end_line && line_count_delta != 0 {
+                // Cursor is after the updated paragraph - adjust line number
+                cursor.line = (cursor.line as isize + line_count_delta) as usize;
+            }
+        }
+
+        true
     }
 
     /// Set reveal codes mode and clear cache
     /// This overrides the Deref implementation to ensure cache is cleared
     pub fn set_reveal_codes(&mut self, enabled: bool) {
         self.editor.set_reveal_codes(enabled);
-        self.render_cache.clear();
+        self.layout_dirty = true;
     }
 
     /// Render the document at the given width and update internal state
+    ///
+    /// Uses cached layout if available and parameters unchanged. Only re-renders when:
+    /// - Document content changed (layout_dirty=true)
+    /// - Viewport dimensions changed (wrap_width or left_padding)
+    /// - Selection changed
+    /// - First render (cached_layout=None)
     pub fn render_document(
         &mut self,
         wrap_width: usize,
         left_padding: usize,
         selection: Option<(CursorPointer, CursorPointer)>,
-    ) -> RenderResult {
+    ) {
+        // Check if selection has changed
+        let selection_changed = self.last_selection != selection;
+
+        // Check if we can reuse cached layout
+        let needs_rerender = self.layout_dirty
+            || self.layout.is_none()
+            || self.wrap_width != wrap_width
+            || self.left_padding != left_padding
+            || selection_changed;
+
+        if needs_rerender {
+            self.render_document_internal(wrap_width, left_padding, selection.clone(), false);
+            self.wrap_width = wrap_width;
+            self.left_padding = left_padding;
+            self.layout_dirty = false;
+            self.last_selection = selection;
+        } else {
+            let result = self.layout.as_ref().unwrap().clone();
+            // Update internal cursor state even when using cached layout
+            if self.preferred_column.is_none() {
+                self.preferred_column = result.cursor.map(|p| p.content_column);
+            }
+
+            // Return reference to cached layout - caller must clone if needed
+            // But since paragraph_lines is already in EditorDisplay, no need for full clone
+        }
+    }
+
+    /// Render the document with positions - always forces a re-render
+    ///
+    /// Use this after document edits to ensure changes are reflected.
+    /// For just viewing/scrolling, use render_document() which caches the layout.
+    pub fn render_document_with_positions(
+        &mut self,
+        wrap_width: usize,
+        left_padding: usize,
+        selection: Option<(CursorPointer, CursorPointer)>,
+    ) {
+        // Force re-render
+        self.render_document_internal(wrap_width, left_padding, selection.clone(), true);
+        self.wrap_width = wrap_width;
+        self.left_padding = left_padding;
+        self.layout_dirty = false;
+        self.last_selection = selection;
+    }
+
+    /// Internal render implementation
+    fn render_document_internal(
+        &mut self,
+        wrap_width: usize,
+        left_padding: usize,
+        selection: Option<(CursorPointer, CursorPointer)>,
+        track_all_positions: bool,
+    ) {
         // Use direct rendering - no document cloning needed!
         let cursor_pointer = self.editor.cursor_pointer();
 
@@ -133,74 +478,66 @@ impl EditorDisplay {
             DirectCursorTracking {
                 cursor: Some(&cursor_pointer),
                 selection: selection.as_ref().map(|(start, end)| (start, end)),
-                track_all_positions: true, // Track all positions for cursor_map
+                track_all_positions,
             },
-            Some(&mut self.render_cache),
         );
 
         // Update internal state from render result
-        self.visual_positions = result
-            .cursor_map
-            .iter()
-            .cloned()
-            .map(|(pointer, position)| CursorDisplay { pointer, position })
-            .collect();
+        // Always store paragraph_lines which now includes all cursor positions
+        self.layout = Some(result);
 
-        self.last_cursor_visual = result.cursor;
+        // Store rendering parameters for cache lookups
+        self.last_wrap_width = wrap_width;
+        self.last_left_padding = left_padding;
+
         if self.preferred_column.is_none() {
-            self.preferred_column = result.cursor.map(|p| p.content_column);
+            self.preferred_column = self
+                .layout
+                .as_ref()
+                .unwrap()
+                .cursor
+                .map(|p| p.content_column);
         }
-
-        result
     }
 
     /// Update tracking state after rendering (called from draw)
-    pub fn update_after_render(&mut self, text_area: Rect, total_lines: usize) {
+    pub fn update_after_render(&mut self, text_area: Rect) {
         self.last_text_area = text_area;
-        self.last_total_lines = total_lines;
+        self.last_total_lines = self.layout.as_ref().unwrap().total_lines;
         self.last_view_height = (text_area.height as usize).max(1);
     }
 
     /// Move cursor vertically by delta lines
     pub fn move_cursor_vertical(&mut self, delta: i32) {
-        if self.visual_positions.is_empty() {
-            // Fallback to logical cursor movement when visual positions aren't available
-            if delta < 0 {
-                self.editor.move_up();
-            } else if delta > 0 {
-                self.editor.move_down();
-            }
-            return;
+        // If layout is stale, force a re-render before cursor movement
+        // This can happen after paragraph breaks or structural changes
+        if self.layout_dirty || self.layout.is_none() {
+            // Force re-render using stored parameters
+            self.render_document(self.wrap_width, self.left_padding, None);
         }
 
-        let pointer = self.editor.cursor_pointer();
-
-        let current_position = self
-            .visual_positions
-            .iter()
-            .find(|entry| entry.pointer == pointer)
-            .map(|entry| entry.position)
-            .or(self.last_cursor_visual);
-
-        let Some(current) = current_position else {
-            // Fallback to logical cursor movement when current position is not found
+        // Use layout.cursor as the source of truth for current position
+        let Some(current) = self.cursor_visual() else {
+            // Fallback to logical cursor movement when visual position isn't available
             if delta < 0 {
                 self.editor.move_up();
             } else if delta > 0 {
                 self.editor.move_down();
             }
-            self.preferred_column = None;
             return;
         };
 
         // Use content_column (without left padding) for consistent vertical movement
         let desired_column = self.preferred_column.unwrap_or(current.content_column);
 
+        // Get max line from paragraph_lines (lightweight)
         let max_line = self
-            .visual_positions
-            .iter()
-            .map(|entry| entry.position.line)
-            .max()
+            .layout
+            .as_ref()
+            .unwrap()
+            .paragraph_lines
+            .last()
+            .map(|p| p.end_line)
             .unwrap_or(0);
 
         let mut target_line = current.line as i32 + delta;
@@ -212,9 +549,11 @@ impl EditorDisplay {
 
         let target_line_usize = target_line as usize;
 
-        let destination = self
-            .closest_pointer_on_line(target_line_usize, desired_column)
+        let from_closest = self.closest_pointer_on_line(target_line_usize, desired_column);
+        let destination = from_closest
             .or_else(|| self.search_nearest_line(target_line_usize, delta, desired_column));
+
+        let pointer = self.editor.cursor_pointer();
 
         if let Some(dest) = destination {
             // Check if destination is the same as current position
@@ -230,9 +569,6 @@ impl EditorDisplay {
                 self.preferred_column = None;
             } else if self.editor.move_to_pointer(&dest.pointer) {
                 self.preferred_column = Some(desired_column);
-                self.last_cursor_visual = Some(dest.position);
-            } else {
-                self.last_cursor_visual = Some(dest.position);
             }
         } else {
             // Fallback: If visual-based movement failed, try logical cursor movement
@@ -243,6 +579,9 @@ impl EditorDisplay {
             }
             self.preferred_column = None;
         }
+
+        // Update the cached cursor visual position after movement
+        self.update_cursor_visual_position();
     }
 
     /// Calculate the page jump distance based on viewport height
@@ -265,96 +604,109 @@ impl EditorDisplay {
     pub fn move_to_visual_line_start(&mut self) {
         self.preferred_column = None;
 
-        if self.visual_positions.is_empty() {
-            self.editor.move_to_segment_start();
-            return;
+        // If layout is stale, force re-render
+        if self.layout_dirty || self.layout.is_none() {
+            self.render_document(self.wrap_width, self.left_padding, None);
         }
 
-        let pointer = self.editor.cursor_pointer();
-        let current = self
-            .visual_positions
-            .iter()
-            .find(|entry| entry.pointer == pointer)
-            .map(|entry| entry.position)
-            .or(self.last_cursor_visual);
-
-        let Some(current_position) = current else {
+        let Some(current_position) = self.cursor_visual() else {
             self.editor.move_to_segment_start();
             return;
         };
 
-        let destination = self
-            .visual_positions
-            .iter()
-            .filter(|entry| entry.position.line == current_position.line)
-            .cloned()
-            .min_by_key(|entry| {
-                (
-                    entry.position.content_column as usize,
-                    entry.position.column as usize,
-                    entry.pointer.offset,
-                )
-            });
+        let positions_on_line = self.get_positions_for_line(current_position.line);
+        let destination = positions_on_line.into_iter().min_by_key(|entry| {
+            (
+                entry.position.content_column as usize,
+                entry.position.column as usize,
+                entry.pointer.offset,
+            )
+        });
 
         if let Some(target) = destination {
             self.editor.move_to_pointer(&target.pointer);
-            self.last_cursor_visual = Some(target.position);
         } else {
             self.editor.move_to_segment_start();
         }
+
+        // Update the cached cursor visual position after movement
+        self.update_cursor_visual_position();
     }
 
     /// Move cursor to the end of the current visual line
     pub fn move_to_visual_line_end(&mut self) {
         self.preferred_column = None;
 
-        if self.visual_positions.is_empty() {
-            self.editor.move_to_segment_end();
-            return;
+        // If layout is stale, force re-render
+        if self.layout_dirty || self.layout.is_none() {
+            self.render_document(self.wrap_width, self.left_padding, None);
         }
 
-        let pointer = self.editor.cursor_pointer();
-        let current = self
-            .visual_positions
-            .iter()
-            .find(|entry| entry.pointer == pointer)
-            .map(|entry| entry.position)
-            .or(self.last_cursor_visual);
-
-        let Some(current_position) = current else {
+        let Some(current_position) = self.cursor_visual() else {
             self.editor.move_to_segment_end();
             return;
         };
 
-        let destination = self
-            .visual_positions
-            .iter()
-            .filter(|entry| entry.position.line == current_position.line)
-            .cloned()
-            .max_by_key(|entry| {
-                (
-                    entry.position.content_column as usize,
-                    entry.position.column as usize,
-                    entry.pointer.offset,
-                )
-            });
+        let positions_on_line = self.get_positions_for_line(current_position.line);
+        let destination = positions_on_line.into_iter().max_by_key(|entry| {
+            (
+                entry.position.content_column as usize,
+                entry.position.column as usize,
+                entry.pointer.offset,
+            )
+        });
 
         if let Some(target) = destination {
             self.editor.move_to_pointer(&target.pointer);
-            self.last_cursor_visual = Some(target.position);
         } else {
             self.editor.move_to_segment_end();
         }
+
+        // Update the cached cursor visual position after movement
+        self.update_cursor_visual_position();
+    }
+
+    /// Move cursor left by one character
+    pub fn move_left(&mut self) -> bool {
+        let result = self.editor.move_left();
+        if result {
+            self.update_cursor_visual_position();
+        }
+        result
+    }
+
+    /// Move cursor right by one character
+    pub fn move_right(&mut self) -> bool {
+        let result = self.editor.move_right();
+        if result {
+            self.update_cursor_visual_position();
+        }
+        result
+    }
+
+    /// Move cursor left by one word
+    pub fn move_word_left(&mut self) -> bool {
+        let result = self.editor.move_word_left();
+        if result {
+            self.update_cursor_visual_position();
+        }
+        result
+    }
+
+    /// Move cursor right by one word
+    pub fn move_word_right(&mut self) -> bool {
+        let result = self.editor.move_word_right();
+        if result {
+            self.update_cursor_visual_position();
+        }
+        result
     }
 
     /// Find the closest pointer on a given line to a target column
     /// Uses content_column (without left padding) for comparison
     fn closest_pointer_on_line(&self, line: usize, column: u16) -> Option<CursorDisplay> {
-        let positions_on_line: Vec<_> = self
-            .visual_positions
-            .iter()
-            .filter(|entry| entry.position.line == line)
-            .collect();
+        // Get positions for this line on-demand
+        let positions_on_line = self.get_positions_for_line(line);
 
         if positions_on_line.is_empty() {
             return None;
@@ -408,20 +760,13 @@ impl EditorDisplay {
             return None;
         }
         let max_line = self
-            .visual_positions
-            .iter()
-            .map(|entry| entry.position.line)
-            .max()
+            .layout
+            .as_ref()
+            .unwrap()
+            .paragraph_lines
+            .last()
+            .map(|p| p.end_line)
             .unwrap_or(0);
-
-        // Debug: show which lines have positions
-        let mut lines_with_positions: Vec<usize> = self
-            .visual_positions
-            .iter()
-            .map(|vp| vp.position.line)
-            .collect();
-        lines_with_positions.sort();
-        lines_with_positions.dedup();
 
         let mut distance = 1usize;
         loop {
@@ -454,18 +799,18 @@ impl EditorDisplay {
 
     /// Find the closest pointer near a line (searching up and down if not found on exact line)
     fn closest_pointer_near_line(&self, line: usize, column: u16) -> Option<CursorDisplay> {
-        if self.visual_positions.is_empty() {
-            return None;
-        }
+        // Try exact line first
         if let Some(hit) = self.closest_pointer_on_line(line, column) {
             return Some(hit);
         }
-        let max_line = self
-            .visual_positions
-            .iter()
-            .map(|entry| entry.position.line)
-            .max()
-            .unwrap_or(0);
+
+        // Get max line from paragraph_lines (lightweight)
+        let max_line = if let Some(last_para) = self.layout.as_ref().unwrap().paragraph_lines.last()
+        {
+            last_para.end_line
+        } else {
+            0
+        };
         let mut distance = 1usize;
         while line.checked_sub(distance).is_some() || line + distance <= max_line {
             if let Some(prev) = line.checked_sub(distance)
@@ -493,9 +838,6 @@ impl EditorDisplay {
         row: u16,
         scroll_top: usize,
     ) -> Option<CursorDisplay> {
-        if self.visual_positions.is_empty() {
-            return None;
-        }
         let area = self.last_text_area;
         if area.width == 0 || area.height == 0 {
             return None;
@@ -512,12 +854,7 @@ impl EditorDisplay {
 
     /// Get the start and end boundaries of a visual line
     pub fn visual_line_boundaries(&self, line: usize) -> Option<(CursorDisplay, CursorDisplay)> {
-        let mut entries: Vec<_> = self
-            .visual_positions
-            .iter()
-            .filter(|entry| entry.position.line == line)
-            .cloned()
-            .collect();
+        let mut entries = self.get_positions_for_line(line);
         if entries.is_empty() {
             return None;
         }
@@ -536,29 +873,137 @@ impl EditorDisplay {
     /// Focus on a specific display position
     pub fn focus_display(&mut self, display: &CursorDisplay) {
         if self.editor.move_to_pointer(&display.pointer) {
-            self.last_cursor_visual = Some(display.position);
             self.preferred_column = Some(display.position.content_column);
             self.cursor_following = true;
+            self.update_cursor_visual_position();
         }
     }
 
     /// Focus on a specific pointer
     pub fn focus_pointer(&mut self, pointer: &CursorPointer) {
         if self.editor.move_to_pointer(pointer) {
-            if let Some(display) = self
-                .visual_positions
+            // Search for the visual position of this pointer in paragraph_lines
+            let found = self
+                .layout
+                .as_ref()
+                .unwrap()
+                .paragraph_lines
                 .iter()
-                .find(|entry| &entry.pointer == pointer)
-                .cloned()
-            {
-                self.last_cursor_visual = Some(display.position);
-                self.preferred_column = Some(display.position.content_column);
+                .find_map(|info| {
+                    info.positions
+                        .iter()
+                        .find(|(p, _)| p == pointer)
+                        .map(|(_, pos)| {
+                            // Convert relative position to absolute
+                            let mut absolute_pos = *pos;
+                            absolute_pos.line = info.start_line + pos.line;
+                            absolute_pos
+                        })
+                });
+
+            if let Some(position) = found {
+                self.preferred_column = Some(position.content_column);
             } else {
-                self.last_cursor_visual = None;
                 self.preferred_column = None;
             }
             self.cursor_following = true;
+            self.update_cursor_visual_position();
         }
+    }
+
+    /// Insert a character at the cursor position with incremental layout update
+    pub fn insert_char(&mut self, c: char) -> bool {
+        let para_index = self.editor.cursor_pointer().paragraph_path.root_index();
+        let result = self.editor.insert_char(c);
+        if let Some(index) = para_index {
+            self.mark_paragraph_modified(index);
+        }
+        // Note: mark_dirty() in pure.rs will call clear_render_cache() which will use the paragraph index
+        result
+    }
+
+    /// Delete character before cursor with incremental layout update
+    pub fn delete_char(&mut self) -> bool {
+        let para_index = self.editor.cursor_pointer().paragraph_path.root_index();
+        let result = self.editor.delete();
+        if let Some(index) = para_index {
+            self.mark_paragraph_modified(index);
+        }
+        // Note: mark_dirty() in pure.rs will call clear_render_cache() which will use the paragraph index
+        result
+    }
+
+    /// Backspace (delete character before cursor) with incremental layout update
+    pub fn backspace(&mut self) -> bool {
+        let para_count_before = self.editor.document().paragraphs.len();
+        let para_index = self.editor.cursor_pointer().paragraph_path.root_index();
+        let result = self.editor.backspace();
+        let para_count_after = self.editor.document().paragraphs.len();
+
+        // If paragraph count changed, force full re-render (paragraph merge/split)
+        if para_count_before != para_count_after {
+            self.last_modified_paragraph = None;
+        } else if let Some(index) = para_index {
+            self.mark_paragraph_modified(index);
+        }
+        result
+    }
+
+    /// Delete character at cursor with incremental layout update
+    pub fn delete(&mut self) -> bool {
+        let para_count_before = self.editor.document().paragraphs.len();
+        let para_index = self.editor.cursor_pointer().paragraph_path.root_index();
+        let result = self.editor.delete();
+        let para_count_after = self.editor.document().paragraphs.len();
+
+        // If paragraph count changed, force full re-render (paragraph merge/split)
+        if para_count_before != para_count_after {
+            self.last_modified_paragraph = None;
+        } else if let Some(index) = para_index {
+            self.mark_paragraph_modified(index);
+        }
+        result
+    }
+
+    /// Delete word backward with incremental layout update
+    pub fn delete_word_backward(&mut self) -> bool {
+        let para_count_before = self.editor.document().paragraphs.len();
+        let para_index = self.editor.cursor_pointer().paragraph_path.root_index();
+        let result = self.editor.delete_word_backward();
+        let para_count_after = self.editor.document().paragraphs.len();
+
+        // If paragraph count changed, force full re-render (paragraph merge/split)
+        if para_count_before != para_count_after {
+            self.last_modified_paragraph = None;
+        } else if let Some(index) = para_index {
+            self.mark_paragraph_modified(index);
+        }
+        result
+    }
+
+    /// Delete word forward with incremental layout update
+    pub fn delete_word_forward(&mut self) -> bool {
+        let para_count_before = self.editor.document().paragraphs.len();
+        let para_index = self.editor.cursor_pointer().paragraph_path.root_index();
+        let result = self.editor.delete_word_forward();
+        let para_count_after = self.editor.document().paragraphs.len();
+
+        // If paragraph count changed, force full re-render (paragraph merge/split)
+        if para_count_before != para_count_after {
+            self.last_modified_paragraph = None;
+        } else if let Some(index) = para_index {
+            self.mark_paragraph_modified(index);
+        }
+        result
+    }
+
+    /// Insert paragraph break with layout update (requires full re-render as it affects multiple paragraphs)
+    pub fn insert_paragraph_break(&mut self) -> bool {
+        let result = self.editor.insert_paragraph_break();
+        // Paragraph breaks affect structure - need full re-render
+        self.last_modified_paragraph = None;
+        self.clear_render_cache();
+        result
     }
 }
 
@@ -615,7 +1060,7 @@ mod tests {
         let mut display = create_test_display();
 
         // Render to populate visual positions
-        let _render = display.render_document(80, 0, None);
+        display.render_document_with_positions(80, 0, None);
 
         // Get initial cursor position
         let initial_pointer = display.cursor_pointer();
@@ -632,7 +1077,7 @@ mod tests {
         let mut display = create_test_display();
 
         // Render to populate visual positions
-        let _render = display.render_document(80, 0, None);
+        display.render_document_with_positions(80, 0, None);
 
         // Move to second paragraph first
         display.move_cursor_vertical(1);
@@ -650,7 +1095,7 @@ mod tests {
         let mut display = create_test_display();
 
         // Render to populate visual positions
-        let _render = display.render_document(80, 0, None);
+        display.render_document_with_positions(80, 0, None);
 
         // Move cursor to the middle of the line
         for _ in 0..5 {
@@ -672,7 +1117,7 @@ mod tests {
         let mut display = create_test_display();
 
         // Render to populate visual positions
-        let _render = display.render_document(80, 0, None);
+        display.render_document_with_positions(80, 0, None);
 
         let initial_offset = display.cursor_pointer().offset;
 
@@ -718,7 +1163,7 @@ mod tests {
         display.last_view_height = 10;
 
         // Render to populate visual positions
-        let _render = display.render_document(80, 0, None);
+        display.render_document_with_positions(80, 0, None);
 
         let initial_pointer = display.cursor_pointer();
 
@@ -738,7 +1183,7 @@ mod tests {
         let mut display = create_test_display();
 
         // Render to populate visual positions
-        let _render = display.render_document(80, 0, None);
+        display.render_document_with_positions(80, 0, None);
 
         // Move to the middle of the line
         for _ in 0..5 {
@@ -785,7 +1230,7 @@ mod tests {
         let mut display = create_test_display();
 
         // Render to populate visual positions
-        let _render = display.render_document(80, 0, None);
+        display.render_document_with_positions(80, 0, None);
 
         // Get boundaries of first visual line
         if let Some((start, end)) = display.visual_line_boundaries(0) {
@@ -812,7 +1257,7 @@ mod tests {
         let mut display = EditorDisplay::new(DocumentEditor::new(doc));
 
         // Render to populate visual_positions
-        let _ = display.render_document(80, 0, None);
+        display.render_document_with_positions(80, 0, None);
 
         // Try to navigate down to reach the checklist
         display.move_cursor_vertical(1);
@@ -846,7 +1291,7 @@ mod tests {
         let mut display = EditorDisplay::new(DocumentEditor::new(doc));
 
         // Render to populate visual_positions
-        let _ = display.render_document(80, 0, None);
+        display.render_document_with_positions(80, 0, None);
 
         // Try to navigate down to reach the checklist
         display.move_cursor_vertical(1);
@@ -885,7 +1330,7 @@ mod tests {
         let mut display = EditorDisplay::new(DocumentEditor::new(doc));
 
         // Render to populate visual_positions
-        let _ = display.render_document(80, 0, None);
+        display.render_document_with_positions(80, 0, None);
 
         // Try to navigate down to reach the checklist
         display.move_cursor_vertical(1);
@@ -919,7 +1364,7 @@ mod tests {
         let mut display = EditorDisplay::new(DocumentEditor::new(doc));
 
         // Render to populate visual_positions
-        let _ = display.render_document(80, 0, None);
+        display.render_document_with_positions(80, 0, None);
 
         // Try to navigate down to reach the checklist
         display.move_cursor_vertical(1);
@@ -950,13 +1395,13 @@ mod tests {
     fn test_empty_doc_has_cursor() {
         let doc = ftml! { p {} };
         let mut display = EditorDisplay::new(DocumentEditor::new(doc));
-        let _ = display.render_document(80, 0, None);
+        display.render_document_with_positions(80, 0, None);
         let pos1 = display.cursor_pointer();
         assert_eq!(pos1.paragraph_path.numeric_steps(), vec![0]);
         assert_eq!(pos1.span_path.indices(), vec![0]);
         assert_eq!(pos1.offset, 0);
 
-        if let Some(vis1) = display.last_cursor_visual() {
+        if let Some(vis1) = display.cursor_visual() {
             assert_eq!(vis1.line, 0);
             assert_eq!(vis1.column, 0);
         } else {
@@ -976,23 +1421,23 @@ mod tests {
         }
 
         fn get_pos(&mut self) -> Option<(usize, u16)> {
-            let _ = self.render_document(80, 0, None);
+            self.render_document_with_positions(80, 0, None);
 
-            self.last_cursor_visual().map(|v| (v.line, v.column))
+            self.cursor_visual().map(|v| (v.line, v.column))
         }
 
         fn get_content_pos(&mut self) -> Option<(usize, u16)> {
-            let _ = self.render_document(80, 0, None);
+            self.render_document_with_positions(80, 0, None);
 
-            self.last_cursor_visual()
+            self.cursor_visual()
                 .map(|v| (v.content_line, v.content_column))
         }
 
         fn get_txt(&mut self) -> String {
-            let r = self.render_document(80, 0, None);
+            self.render_document_with_positions(80, 0, None);
             let mut s = String::new();
-            for l in r.lines {
-                for i in l.spans {
+            for l in &self.layout.as_ref().unwrap().lines {
+                for i in &l.spans {
                     s.push_str(&i.content);
                 }
                 s.push('\n');
@@ -1005,7 +1450,7 @@ mod tests {
     fn test_adding_two_checklist_items() {
         let doc = ftml! { p {} };
         let mut display = EditorDisplay::new(DocumentEditor::new(doc));
-        let _ = display.render_document(80, 0, None);
+        display.render_document_with_positions(80, 0, None);
 
         assert!(
             display.set_paragraph_type(tdoc::ParagraphType::Checklist),
@@ -1042,7 +1487,7 @@ mod tests {
         let mut display = EditorDisplay::new(DocumentEditor::new(doc));
 
         // Render to populate visual_positions
-        let _ = display.render_document(80, 0, None);
+        display.render_document_with_positions(80, 0, None);
 
         // Find the H2 "Todos"
         let h2_path = ParagraphPath::new_root(1); // H1 is 0, H2 is 1
@@ -1084,7 +1529,7 @@ mod tests {
         let mut display = EditorDisplay::new(DocumentEditor::new(doc));
 
         // Render to populate visual_positions
-        let _ = display.render_document(80, 0, None);
+        display.render_document_with_positions(80, 0, None);
 
         // Try to navigate down to reach the checklist
         display.move_cursor_vertical(1);
@@ -1230,13 +1675,8 @@ mod tests {
         let doc = Document::new().with_paragraphs(vec![para1, para2, para3]);
         let mut display = EditorDisplay::new(DocumentEditor::new(doc));
 
-        // Render to populate visual positions
-        let result = display.render_document(80, 0, None);
-        display.visual_positions = result
-            .cursor_map
-            .into_iter()
-            .map(|(pointer, position)| CursorDisplay { pointer, position })
-            .collect();
+        // Render to populate paragraph_lines with positions
+        display.render_document_with_positions(80, 0, None);
 
         // Start from paragraph 1 (line 0), move to the 'T' in "Text"
         for _ in 0..10 {
