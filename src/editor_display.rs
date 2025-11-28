@@ -141,29 +141,146 @@ impl EditorDisplay {
                 })
         });
 
-        layout.cursor = found;
+        if found.is_some() {
+            layout.cursor = found;
+            return;
+        }
 
-        // If cursor wasn't found (because track_all_positions was false during rendering),
-        // mark layout dirty and force a re-render to populate the cursor position
-        if found.is_none() {
-            self.layout_dirty = true;
-            self.render_document(self.wrap_width, self.left_padding, None);
+        // If cursor wasn't found, re-layout just the paragraph containing the cursor
+        let paragraph_index = cursor_pointer.paragraph_path.root_index();
+        if let Some(para_idx) = paragraph_index {
+            self.ensure_paragraph_positions(para_idx);
+
+            // Try to find the cursor position again after re-layouting
+            let layout = self.layout.as_mut().unwrap();
+            let found = layout.paragraph_lines.iter().find_map(|info| {
+                info.positions
+                    .iter()
+                    .find(|(p, _)| p == &cursor_pointer)
+                    .map(|(_, pos)| {
+                        // Convert relative position to absolute
+                        let mut absolute_pos = *pos;
+                        absolute_pos.line = info.start_line + pos.line;
+                        absolute_pos
+                    })
+            });
+            layout.cursor = found;
+        }
+    }
+
+    /// Ensure positions are populated for a specific paragraph
+    /// Re-layouts just that paragraph with full position tracking if needed
+    fn ensure_paragraph_positions(&mut self, paragraph_index: usize) {
+        let layout = self.layout.as_mut().unwrap();
+
+        // Check if this paragraph already has positions tracked
+        if let Some(para_info) = layout.paragraph_lines.get(paragraph_index) {
+            if !para_info.positions.is_empty() {
+                return; // Already have positions
+            }
+        }
+
+        // Need to populate positions for this paragraph
+        let document = self.editor.document();
+        let Some(paragraph) = document.paragraphs.get(paragraph_index) else {
+            return;
+        };
+
+        // Get paragraph path
+        let paragraph_path = crate::editor::ParagraphPath::new_root(paragraph_index);
+
+        // Get reveal tags if in reveal codes mode
+        let reveal_tags = if self.editor.reveal_codes() {
+            let (_, _, tags, _) = self
+                .editor
+                .clone_with_markers('\u{F8FF}', None, '\u{F8FE}', '\u{F8FD}');
+            tags
+        } else {
+            Vec::new()
+        };
+
+        // Determine prefix based on paragraph type
+        let prefix = ""; // For text paragraphs; other types would need their specific prefixes
+
+        // Re-layout just this paragraph with full position tracking
+        let para_layout = crate::render::layout_paragraph(
+            paragraph,
+            paragraph_index,
+            paragraph_path,
+            self.wrap_width,
+            self.left_padding,
+            prefix,
+            &reveal_tags,
+            crate::render::DirectCursorTracking {
+                cursor: Some(&self.editor.cursor_pointer()),
+                selection: None,
+                track_all_positions: true,
+            },
+        );
+
+        // Calculate content_line values from the full document layout
+        let line_metrics = {
+            let lines = &layout.lines;
+            lines
+                .iter()
+                .enumerate()
+                .scan(0usize, |content_count, (idx, _)| {
+                    let current = *content_count;
+                    // All lines count as content in our current system
+                    *content_count += 1;
+                    Some((idx, current))
+                })
+                .collect::<std::collections::HashMap<_, _>>()
+        };
+
+        // Update the positions in the existing paragraph_lines entry
+        if let Some(para_info) = layout.paragraph_lines.get_mut(paragraph_index) {
+            let start_line = para_info.start_line;
+
+            // Update positions with correct content_line values
+            let updated_positions: Vec<_> = para_layout
+                .positions
+                .into_iter()
+                .map(|(pointer, mut pos)| {
+                    // Convert relative line to absolute
+                    let absolute_line = start_line + pos.line;
+                    // Look up the correct content_line
+                    if let Some(&content_line) = line_metrics.get(&absolute_line) {
+                        pos.content_line = content_line;
+                    }
+                    (pointer, pos)
+                })
+                .collect();
+
+            para_info.positions = updated_positions;
         }
     }
 
     /// Get cursor positions for a specific visual line.
     /// Positions are read directly from the paragraph_lines structure populated during rendering.
-    fn get_positions_for_line(&self, line: usize) -> Vec<CursorDisplay> {
+    /// If positions aren't available, this will re-layout just the containing paragraph.
+    fn get_positions_for_line(&mut self, line: usize) -> Vec<CursorDisplay> {
         // Find which paragraph contains this line
-        let paragraph_info = self
-            .layout
-            .as_ref()
-            .unwrap()
-            .paragraph_lines
-            .iter()
-            .find(|info| line >= info.start_line && line <= info.end_line);
+        let paragraph_index = {
+            let layout = self.layout.as_ref().unwrap();
+            layout
+                .paragraph_lines
+                .iter()
+                .enumerate()
+                .find(|(_, info)| line >= info.start_line && line <= info.end_line)
+                .map(|(idx, _)| idx)
+        };
 
-        let Some(info) = paragraph_info else {
+        let Some(para_idx) = paragraph_index else {
+            return Vec::new();
+        };
+
+        // Ensure positions are populated for this paragraph
+        self.ensure_paragraph_positions(para_idx);
+
+        // Now get the positions
+        let layout = self.layout.as_ref().unwrap();
+        let Some(info) = layout.paragraph_lines.get(para_idx) else {
             return Vec::new();
         };
 
@@ -574,10 +691,8 @@ impl EditorDisplay {
         let target_line_usize = target_line as usize;
 
         let from_closest = self.closest_pointer_on_line(target_line_usize, desired_column);
-        let destination = from_closest.or_else(|| {
-            let result = self.search_nearest_line(target_line_usize, delta, desired_column);
-            result
-        });
+        let destination = from_closest
+            .or_else(|| self.search_nearest_line(target_line_usize, delta, desired_column));
 
         let pointer = self.editor.cursor_pointer();
 
@@ -730,7 +845,7 @@ impl EditorDisplay {
 
     /// Find the closest pointer on a given line to a target column
     /// Uses content_column (without left padding) for comparison
-    fn closest_pointer_on_line(&self, line: usize, column: u16) -> Option<CursorDisplay> {
+    fn closest_pointer_on_line(&mut self, line: usize, column: u16) -> Option<CursorDisplay> {
         // Get positions for this line on-demand
         let positions_on_line = self.get_positions_for_line(line);
 
@@ -777,7 +892,7 @@ impl EditorDisplay {
 
     /// Search for the nearest line with content, starting from start_line and moving in delta direction
     fn search_nearest_line(
-        &self,
+        &mut self,
         start_line: usize,
         delta: i32,
         column: u16,
@@ -824,7 +939,7 @@ impl EditorDisplay {
     }
 
     /// Find the closest pointer near a line (searching up and down if not found on exact line)
-    fn closest_pointer_near_line(&self, line: usize, column: u16) -> Option<CursorDisplay> {
+    fn closest_pointer_near_line(&mut self, line: usize, column: u16) -> Option<CursorDisplay> {
         // Try exact line first
         if let Some(hit) = self.closest_pointer_on_line(line, column) {
             return Some(hit);
@@ -859,7 +974,7 @@ impl EditorDisplay {
 
     /// Convert mouse coordinates to a cursor pointer
     pub fn pointer_from_mouse(
-        &self,
+        &mut self,
         column: u16,
         row: u16,
         scroll_top: usize,
@@ -879,7 +994,10 @@ impl EditorDisplay {
     }
 
     /// Get the start and end boundaries of a visual line
-    pub fn visual_line_boundaries(&self, line: usize) -> Option<(CursorDisplay, CursorDisplay)> {
+    pub fn visual_line_boundaries(
+        &mut self,
+        line: usize,
+    ) -> Option<(CursorDisplay, CursorDisplay)> {
         let mut entries = self.get_positions_for_line(line);
         if entries.is_empty() {
             return None;
@@ -1912,6 +2030,72 @@ mod tests {
             "First paragraph\n\nThis will become the second paragraph\n"
         );
         assert_eq!(display.get_content_pos(), Some((2, 0)));
+    }
+
+    #[test]
+    fn test_trailing_newline_rendering() {
+        // Verify that a paragraph with a trailing newline creates an empty line
+        let doc = ftml! {
+            p { "Text with trailing newline\n" }
+        };
+        let mut editor = DocumentEditor::new(doc);
+        editor.ensure_cursor_selectable();
+        let mut display = EditorDisplay::new(editor);
+
+        display.render_document(80, 0, None);
+        let lines: Vec<String> = display
+            .layout
+            .as_ref()
+            .unwrap()
+            .lines
+            .iter()
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect();
+
+        eprintln!("Trailing newline test:");
+        for (i, line) in lines.iter().enumerate() {
+            eprintln!("  Line {}: {:?}", i, line);
+        }
+
+        // A trailing newline should create an empty line
+        assert_eq!(
+            lines.len(),
+            2,
+            "Paragraph with trailing newline should produce 2 lines"
+        );
+        assert_eq!(lines[0], "Text with trailing newline");
+        assert_eq!(lines[1], "");
+    }
+
+    #[test]
+    fn test_splitting_at_hard_breaks_works_as_expected() {
+        let doc = ftml! {
+            p { "First line\nSecond line\nThird line" }
+        };
+        let mut editor = DocumentEditor::new(doc);
+        editor.ensure_cursor_selectable();
+        let mut display = EditorDisplay::new(editor);
+
+        assert_eq!(display.get_txt(), "First line\nSecond line\nThird line\n");
+        assert_eq!(display.get_content_pos(), Some((0, 0)));
+
+        display.move_cursor_vertical(1);
+        assert_eq!(display.get_content_pos(), Some((1, 0)));
+
+        display.insert_paragraph_break();
+        assert_eq!(
+            display.get_txt(),
+            "First line\n\n\nSecond line\nThird line\n"
+        );
+        assert_eq!(display.get_content_pos(), Some((3, 0)));
+
+        display.move_to_visual_line_end();
+        assert_eq!(display.get_content_pos(), Some((3, 11)));
     }
 
     #[test]

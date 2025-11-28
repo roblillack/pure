@@ -969,7 +969,9 @@ impl DocumentEditor {
         let pointer = self.cursor.clone();
         if let Some(new_pointer) = split_paragraph_break(&mut self.document, &pointer, false) {
             self.rebuild_segments();
-            if !self.move_to_pointer(&new_pointer) && !self.fallback_move_to_text(&new_pointer, false) {
+            if !self.move_to_pointer(&new_pointer)
+                && !self.fallback_move_to_text(&new_pointer, false)
+            {
                 self.ensure_cursor_selectable();
             }
             true
@@ -985,7 +987,9 @@ impl DocumentEditor {
         let pointer = self.cursor.clone();
         if let Some(new_pointer) = split_paragraph_break(&mut self.document, &pointer, true) {
             self.rebuild_segments();
-            if !self.move_to_pointer(&new_pointer) && !self.fallback_move_to_text(&new_pointer, false) {
+            if !self.move_to_pointer(&new_pointer)
+                && !self.fallback_move_to_text(&new_pointer, false)
+            {
                 self.ensure_cursor_selectable();
             }
             true
@@ -1412,7 +1416,9 @@ impl DocumentEditor {
         }
 
         // Check if we found a different paragraph
-        if prev_segment_idx == 0 && self.segments[0].paragraph_path == current_segment.paragraph_path {
+        if prev_segment_idx == 0
+            && self.segments[0].paragraph_path == current_segment.paragraph_path
+        {
             return false;
         }
 
@@ -1455,10 +1461,12 @@ impl DocumentEditor {
             // Get the first (and should be only) paragraph from the entry
             if entry.is_empty() {
                 self.rebuild_segments();
-                if let Some(pointer) =
-                    self.pointer_at_paragraph_char_offset(&prev_segment.paragraph_path, prev_char_count)
+                if let Some(pointer) = self
+                    .pointer_at_paragraph_char_offset(&prev_segment.paragraph_path, prev_char_count)
                 {
-                    if !self.move_to_pointer(&pointer) && !self.fallback_move_to_text(&pointer, false) {
+                    if !self.move_to_pointer(&pointer)
+                        && !self.fallback_move_to_text(&pointer, false)
+                    {
                         self.ensure_cursor_selectable();
                     }
                 } else {
@@ -1490,7 +1498,9 @@ impl DocumentEditor {
 
             if is_prev_checklist {
                 // Merge into previous checklist item
-                let Some(prev_item) = checklist_item_mut(&mut self.document, &prev_segment.paragraph_path) else {
+                let Some(prev_item) =
+                    checklist_item_mut(&mut self.document, &prev_segment.paragraph_path)
+                else {
                     return false;
                 };
                 if prev_item.content.is_empty() {
@@ -1502,7 +1512,9 @@ impl DocumentEditor {
                 prune_and_merge_spans(&mut prev_item.content);
             } else {
                 // Merge into previous regular paragraph
-                let Some(prev_paragraph) = paragraph_mut(&mut self.document, &prev_segment.paragraph_path) else {
+                let Some(prev_paragraph) =
+                    paragraph_mut(&mut self.document, &prev_segment.paragraph_path)
+                else {
                     return false;
                 };
                 let spans = prev_paragraph.content_mut();
@@ -1548,7 +1560,9 @@ impl DocumentEditor {
         };
 
         // Take the current paragraph
-        let Some(current_paragraph) = take_paragraph_at(&mut self.document, &current_segment.paragraph_path) else {
+        let Some(current_paragraph) =
+            take_paragraph_at(&mut self.document, &current_segment.paragraph_path)
+        else {
             return false;
         };
 
@@ -1590,7 +1604,9 @@ impl DocumentEditor {
 
         if is_prev_checklist {
             // Merge into previous checklist item
-            let Some(prev_item) = checklist_item_mut(&mut self.document, &prev_segment.paragraph_path) else {
+            let Some(prev_item) =
+                checklist_item_mut(&mut self.document, &prev_segment.paragraph_path)
+            else {
                 return false;
             };
             if prev_item.content.is_empty() {
@@ -1602,7 +1618,9 @@ impl DocumentEditor {
             prune_and_merge_spans(&mut prev_item.content);
         } else {
             // Merge into previous regular paragraph
-            let Some(prev_paragraph) = paragraph_mut(&mut self.document, &prev_segment.paragraph_path) else {
+            let Some(prev_paragraph) =
+                paragraph_mut(&mut self.document, &prev_segment.paragraph_path)
+            else {
                 return false;
             };
             let spans = prev_paragraph.content_mut();
@@ -1700,10 +1718,13 @@ impl DocumentEditor {
             // Get the first (and should be only) paragraph from the entry
             if entry.is_empty() {
                 self.rebuild_segments();
-                if let Some(pointer) =
-                    self.pointer_at_paragraph_char_offset(&current_segment.paragraph_path, current_char_count)
-                {
-                    if !self.move_to_pointer(&pointer) && !self.fallback_move_to_text(&pointer, false) {
+                if let Some(pointer) = self.pointer_at_paragraph_char_offset(
+                    &current_segment.paragraph_path,
+                    current_char_count,
+                ) {
+                    if !self.move_to_pointer(&pointer)
+                        && !self.fallback_move_to_text(&pointer, false)
+                    {
                         self.ensure_cursor_selectable();
                     }
                 } else {
@@ -1735,7 +1756,9 @@ impl DocumentEditor {
 
             if is_current_checklist {
                 // Merge into current checklist item
-                let Some(current_item) = checklist_item_mut(&mut self.document, &current_segment.paragraph_path) else {
+                let Some(current_item) =
+                    checklist_item_mut(&mut self.document, &current_segment.paragraph_path)
+                else {
                     return false;
                 };
                 if current_item.content.is_empty() {
@@ -1747,7 +1770,9 @@ impl DocumentEditor {
                 prune_and_merge_spans(&mut current_item.content);
             } else {
                 // Merge into current regular paragraph
-                let Some(current_paragraph) = paragraph_mut(&mut self.document, &current_segment.paragraph_path) else {
+                let Some(current_paragraph) =
+                    paragraph_mut(&mut self.document, &current_segment.paragraph_path)
+                else {
                     return false;
                 };
                 let spans = current_paragraph.content_mut();
@@ -1763,9 +1788,10 @@ impl DocumentEditor {
             self.rebuild_segments();
 
             // Position cursor at the junction point
-            if let Some(pointer) =
-                self.pointer_at_paragraph_char_offset(&current_segment.paragraph_path, current_char_count)
-            {
+            if let Some(pointer) = self.pointer_at_paragraph_char_offset(
+                &current_segment.paragraph_path,
+                current_char_count,
+            ) {
                 if !self.move_to_pointer(&pointer) && !self.fallback_move_to_text(&pointer, false) {
                     self.ensure_cursor_selectable();
                 }
@@ -1818,7 +1844,9 @@ impl DocumentEditor {
 
             if is_current_checklist {
                 // Merge into current checklist item
-                let Some(current_item) = checklist_item_mut(&mut self.document, &current_segment.paragraph_path) else {
+                let Some(current_item) =
+                    checklist_item_mut(&mut self.document, &current_segment.paragraph_path)
+                else {
                     return false;
                 };
                 if current_item.content.is_empty() {
@@ -1834,7 +1862,9 @@ impl DocumentEditor {
                 }
             } else {
                 // Merge into current regular paragraph
-                let Some(current_paragraph) = paragraph_mut(&mut self.document, &current_segment.paragraph_path) else {
+                let Some(current_paragraph) =
+                    paragraph_mut(&mut self.document, &current_segment.paragraph_path)
+                else {
                     return false;
                 };
                 let spans = current_paragraph.content_mut();
@@ -1873,7 +1903,9 @@ impl DocumentEditor {
                 None
             };
 
-            let Some(next_paragraph) = take_paragraph_at(&mut self.document, &next_segment.paragraph_path) else {
+            let Some(next_paragraph) =
+                take_paragraph_at(&mut self.document, &next_segment.paragraph_path)
+            else {
                 return false;
             };
 
@@ -1915,7 +1947,9 @@ impl DocumentEditor {
 
             if is_current_checklist {
                 // Merge into current checklist item
-                let Some(current_item) = checklist_item_mut(&mut self.document, &current_segment.paragraph_path) else {
+                let Some(current_item) =
+                    checklist_item_mut(&mut self.document, &current_segment.paragraph_path)
+                else {
                     return false;
                 };
                 if current_item.content.is_empty() {
@@ -1927,7 +1961,9 @@ impl DocumentEditor {
                 prune_and_merge_spans(&mut current_item.content);
             } else {
                 // Merge into current regular paragraph
-                let Some(current_paragraph) = paragraph_mut(&mut self.document, &current_segment.paragraph_path) else {
+                let Some(current_paragraph) =
+                    paragraph_mut(&mut self.document, &current_segment.paragraph_path)
+                else {
                     return false;
                 };
                 let spans = current_paragraph.content_mut();
@@ -1944,8 +1980,8 @@ impl DocumentEditor {
         self.rebuild_segments();
 
         // Position cursor at the junction point
-        if let Some(pointer) =
-            self.pointer_at_paragraph_char_offset(&current_segment.paragraph_path, current_char_count)
+        if let Some(pointer) = self
+            .pointer_at_paragraph_char_offset(&current_segment.paragraph_path, current_char_count)
         {
             if !self.move_to_pointer(&pointer) && !self.fallback_move_to_text(&pointer, false) {
                 self.ensure_cursor_selectable();
@@ -2262,7 +2298,9 @@ impl DocumentEditor {
         // Adjust target pointer if needed: if we removed a root paragraph at index N,
         // all root paragraphs at index > N are now at index - 1
         let adjusted_target_pointer = if let Some(mut pointer) = target_pointer {
-            if let (Some(target_idx), Some(removed_idx)) = (pointer.paragraph_path.root_index(), removed_root_index) {
+            if let (Some(target_idx), Some(removed_idx)) =
+                (pointer.paragraph_path.root_index(), removed_root_index)
+            {
                 if target_idx > removed_idx {
                     // Create a new path with decremented root index
                     let steps = pointer.paragraph_path.steps();

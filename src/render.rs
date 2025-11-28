@@ -1296,7 +1296,8 @@ fn trim_layout_fragments(fragments: Vec<FragmentItem>) -> Vec<FragmentItem> {
 
 fn is_layout_fragment(item: &FragmentItem) -> bool {
     match item {
-        FragmentItem::LineBreak => true,
+        // Hard line breaks are meaningful content, not layout whitespace
+        FragmentItem::LineBreak => false,
         FragmentItem::Token(fragment) => {
             fragment.kind == FragmentKind::Whitespace
                 && fragment.events.is_empty()
