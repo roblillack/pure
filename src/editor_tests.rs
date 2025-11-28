@@ -2308,3 +2308,548 @@ fn test_cursor_down_after_incremental_wrap_no_line_skip() {
 
     eprintln!("\n✓ Cursor correctly landed on line 3 (no line skip bug)");
 }
+
+#[test]
+fn delete_joins_regular_paragraphs_and_maintains_cursor() {
+    let mut doc = Document::new();
+    doc.add_paragraph(
+        Paragraph::new_text().with_content(vec![Span::new_text("First paragraph")]),
+    );
+    doc.add_paragraph(
+        Paragraph::new_text().with_content(vec![Span::new_text("Second paragraph")]),
+    );
+
+    let mut editor = DocumentEditor::new(doc);
+
+    // Position cursor at the end of the first paragraph
+    let pointer = CursorPointer {
+        paragraph_path: ParagraphPath::new_root(0),
+        span_path: SpanPath::new(vec![0]),
+        offset: 15, // After "First paragraph"
+        segment_kind: SegmentKind::Text,
+    };
+    editor.move_to_pointer(&pointer);
+
+    // Press Delete to join the paragraphs
+    let result = editor.delete();
+    assert!(result, "Delete should successfully merge paragraphs");
+
+    // Verify that the paragraphs were merged
+    assert_eq!(
+        editor.document.paragraphs.len(),
+        1,
+        "Should have only one paragraph after merge"
+    );
+
+    // Verify the content
+    let merged_text = &editor.document.paragraphs[0].content()[0].text;
+    assert_eq!(
+        merged_text, "First paragraphSecond paragraph",
+        "Paragraphs should be merged correctly"
+    );
+
+    // Verify cursor position (should be at the junction point)
+    assert_eq!(
+        editor.cursor.offset, 15,
+        "Cursor should remain at the junction point"
+    );
+    assert_eq!(
+        editor.cursor.paragraph_path,
+        ParagraphPath::new_root(0),
+        "Cursor should be in the first (merged) paragraph"
+    );
+}
+
+#[test]
+fn delete_joins_checklist_items() {
+    let mut doc = Document::new();
+    doc.add_paragraph(Paragraph::new_checklist().with_checklist_items(vec![
+        ChecklistItem::new(false).with_content(vec![Span::new_text("First item")]),
+        ChecklistItem::new(false).with_content(vec![Span::new_text("Second item")]),
+    ]));
+
+    let mut editor = DocumentEditor::new(doc);
+
+    // Position cursor at the end of the first checklist item
+    let mut path = ParagraphPath::new_root(0);
+    path.push_checklist_item(vec![0]);
+    let pointer = CursorPointer {
+        paragraph_path: path,
+        span_path: SpanPath::new(vec![0]),
+        offset: 10, // After "First item"
+        segment_kind: SegmentKind::Text,
+    };
+    editor.move_to_pointer(&pointer);
+
+    // Press Delete to join the checklist items
+    let result = editor.delete();
+    assert!(result, "Delete should successfully merge checklist items");
+
+    // Verify that the items were merged
+    let Paragraph::Checklist { items } = &editor.document.paragraphs[0] else {
+        panic!("Should still be a checklist");
+    };
+    assert_eq!(items.len(), 1, "Should have only one item after merge");
+
+    // Verify the content
+    let merged_text = &items[0].content[0].text;
+    assert_eq!(
+        merged_text, "First itemSecond item",
+        "Checklist items should be merged correctly"
+    );
+
+    // Verify cursor position
+    assert_eq!(
+        editor.cursor.offset, 10,
+        "Cursor should remain at the junction point"
+    );
+}
+
+#[test]
+fn delete_joins_regular_paragraph_with_checklist_item() {
+    let mut doc = Document::new();
+    doc.add_paragraph(
+        Paragraph::new_text().with_content(vec![Span::new_text("Regular paragraph")]),
+    );
+    doc.add_paragraph(Paragraph::new_checklist().with_checklist_items(vec![
+        ChecklistItem::new(false).with_content(vec![Span::new_text("Checklist item")]),
+    ]));
+
+    let mut editor = DocumentEditor::new(doc);
+
+    // Position cursor at the end of the regular paragraph
+    let pointer = CursorPointer {
+        paragraph_path: ParagraphPath::new_root(0),
+        span_path: SpanPath::new(vec![0]),
+        offset: 17, // After "Regular paragraph"
+        segment_kind: SegmentKind::Text,
+    };
+    editor.move_to_pointer(&pointer);
+
+    // Press Delete to join the paragraphs
+    let result = editor.delete();
+    assert!(result, "Delete should successfully merge paragraphs");
+
+    // Verify that the checklist item was merged into the regular paragraph
+    assert_eq!(
+        editor.document.paragraphs.len(),
+        1,
+        "Should have only one paragraph after merge"
+    );
+
+    // Verify the content
+    let merged_text = &editor.document.paragraphs[0].content()[0].text;
+    assert_eq!(
+        merged_text, "Regular paragraphChecklist item",
+        "Paragraphs should be merged correctly"
+    );
+
+    // Verify cursor position
+    assert_eq!(
+        editor.cursor.offset, 17,
+        "Cursor should remain at the junction point"
+    );
+}
+
+#[test]
+fn delete_joins_text_paragraph_with_bullet_list_item() {
+    let mut doc = Document::new();
+    doc.add_paragraph(
+        Paragraph::new_text().with_content(vec![Span::new_text("Regular text")]),
+    );
+    doc.add_paragraph(
+        Paragraph::UnorderedList {
+            entries: vec![vec![
+                Paragraph::new_text().with_content(vec![Span::new_text("Bullet item")]),
+            ]],
+        },
+    );
+
+    let mut editor = DocumentEditor::new(doc);
+
+    // Position cursor at the end of the regular paragraph
+    let pointer = CursorPointer {
+        paragraph_path: ParagraphPath::new_root(0),
+        span_path: SpanPath::new(vec![0]),
+        offset: 12, // After "Regular text"
+        segment_kind: SegmentKind::Text,
+    };
+    editor.move_to_pointer(&pointer);
+
+    // Press Delete to join the paragraphs
+    let result = editor.delete();
+    assert!(result, "Delete should successfully merge paragraphs");
+
+    // Verify that the bullet list was removed (since it's now empty)
+    assert_eq!(
+        editor.document.paragraphs.len(),
+        1,
+        "Should have only one paragraph after merge (list should be removed)"
+    );
+
+    // Verify the content
+    let merged_text = &editor.document.paragraphs[0].content()[0].text;
+    assert_eq!(
+        merged_text, "Regular textBullet item",
+        "Text paragraph and bullet item should be merged correctly"
+    );
+
+    // Verify cursor position
+    assert_eq!(
+        editor.cursor.offset, 12,
+        "Cursor should remain at the junction point"
+    );
+}
+
+#[test]
+fn delete_joins_text_with_ordered_list_item() {
+    let mut doc = Document::new();
+    doc.add_paragraph(
+        Paragraph::new_text().with_content(vec![Span::new_text("Text here")]),
+    );
+    doc.add_paragraph(
+        Paragraph::OrderedList {
+            entries: vec![vec![
+                Paragraph::new_text().with_content(vec![Span::new_text("Numbered item")]),
+            ]],
+        },
+    );
+
+    let mut editor = DocumentEditor::new(doc);
+
+    // Position cursor at the end of the text paragraph
+    let pointer = CursorPointer {
+        paragraph_path: ParagraphPath::new_root(0),
+        span_path: SpanPath::new(vec![0]),
+        offset: 9, // After "Text here"
+        segment_kind: SegmentKind::Text,
+    };
+    editor.move_to_pointer(&pointer);
+
+    // Press Delete to join
+    let result = editor.delete();
+    assert!(result, "Delete should successfully merge");
+
+    // Verify the ordered list was removed
+    assert_eq!(
+        editor.document.paragraphs.len(),
+        1,
+        "Should have one paragraph (list removed)"
+    );
+
+    // Verify the content
+    let merged_text = &editor.document.paragraphs[0].content()[0].text;
+    assert_eq!(merged_text, "Text hereNumbered item");
+
+    // Verify cursor position
+    assert_eq!(editor.cursor.offset, 9);
+}
+
+#[test]
+fn delete_joins_text_with_quote_paragraph() {
+    let mut doc = Document::new();
+    doc.add_paragraph(
+        Paragraph::new_text().with_content(vec![Span::new_text("Regular text")]),
+    );
+    doc.add_paragraph(
+        Paragraph::Quote {
+            children: vec![
+                Paragraph::new_text().with_content(vec![Span::new_text("Quoted text")]),
+            ],
+        },
+    );
+
+    let mut editor = DocumentEditor::new(doc);
+
+    // Position cursor at the end of the regular paragraph
+    let pointer = CursorPointer {
+        paragraph_path: ParagraphPath::new_root(0),
+        span_path: SpanPath::new(vec![0]),
+        offset: 12, // After "Regular text"
+        segment_kind: SegmentKind::Text,
+    };
+    editor.move_to_pointer(&pointer);
+
+    // Press Delete to join the paragraphs
+    let result = editor.delete();
+    assert!(result, "Delete should successfully merge paragraphs");
+
+    // Verify that the quote was removed (since it's now empty)
+    assert_eq!(
+        editor.document.paragraphs.len(),
+        1,
+        "Should have only one paragraph after merge (quote should be removed)"
+    );
+
+    // Verify the content
+    let merged_text = &editor.document.paragraphs[0].content()[0].text;
+    assert_eq!(
+        merged_text, "Regular textQuoted text",
+        "Text paragraph and quote should be merged correctly"
+    );
+
+    // Verify cursor position
+    assert_eq!(
+        editor.cursor.offset, 12,
+        "Cursor should remain at the junction point"
+    );
+}
+
+#[test]
+fn delete_joins_text_with_quoted_header() {
+    let mut doc = Document::new();
+    doc.add_paragraph(
+        Paragraph::new_text().with_content(vec![Span::new_text("Hello")]),
+    );
+    doc.add_paragraph(
+        Paragraph::Quote {
+            children: vec![
+                Paragraph::Header3 {
+                    content: vec![Span::new_text("World")],
+                },
+            ],
+        },
+    );
+
+    let mut editor = DocumentEditor::new(doc);
+
+    // Position cursor at the end of "Hello"
+    let pointer = CursorPointer {
+        paragraph_path: ParagraphPath::new_root(0),
+        span_path: SpanPath::new(vec![0]),
+        offset: 5, // After "Hello"
+        segment_kind: SegmentKind::Text,
+    };
+    editor.move_to_pointer(&pointer);
+
+    // Press Delete to join the paragraphs
+    let result = editor.delete();
+    assert!(result, "Delete should successfully merge paragraphs");
+
+    // Verify that the quote was removed (since it's now empty)
+    assert_eq!(
+        editor.document.paragraphs.len(),
+        1,
+        "Should have only one paragraph after merge (quote should be removed)"
+    );
+
+    // Verify the content - header content should be merged into text paragraph
+    let merged_text = &editor.document.paragraphs[0].content()[0].text;
+    assert_eq!(
+        merged_text, "HelloWorld",
+        "Text and header should be merged correctly"
+    );
+
+    // Verify cursor position
+    assert_eq!(
+        editor.cursor.offset, 5,
+        "Cursor should remain at the junction point"
+    );
+}
+
+#[test]
+fn delete_joins_text_with_quote_containing_multiple_paragraphs() {
+    let mut doc = Document::new();
+    doc.add_paragraph(
+        Paragraph::new_text().with_content(vec![Span::new_text("Hello")]),
+    );
+    doc.add_paragraph(
+        Paragraph::Quote {
+            children: vec![
+                Paragraph::new_text().with_content(vec![Span::new_text("World")]),
+                Paragraph::new_text().with_content(vec![Span::new_text("More")]),
+            ],
+        },
+    );
+
+    let mut editor = DocumentEditor::new(doc);
+
+    // Position cursor at the end of "Hello"
+    let pointer = CursorPointer {
+        paragraph_path: ParagraphPath::new_root(0),
+        span_path: SpanPath::new(vec![0]),
+        offset: 5, // After "Hello"
+        segment_kind: SegmentKind::Text,
+    };
+    editor.move_to_pointer(&pointer);
+
+    // Press Delete to join with first paragraph in quote
+    let result = editor.delete();
+    assert!(result, "Delete should successfully merge paragraphs");
+
+    // Verify that we still have 2 paragraphs (merged text + quote with remaining child)
+    assert_eq!(
+        editor.document.paragraphs.len(),
+        2,
+        "Should have 2 paragraphs: merged text + quote with remaining child"
+    );
+
+    // Verify the first paragraph has merged content
+    let merged_text = &editor.document.paragraphs[0].content()[0].text;
+    assert_eq!(
+        merged_text, "HelloWorld",
+        "First paragraph should have merged content"
+    );
+
+    // Verify the quote still exists with one child
+    let Paragraph::Quote { children } = &editor.document.paragraphs[1] else {
+        panic!("Second paragraph should still be a quote");
+    };
+    assert_eq!(children.len(), 1, "Quote should have one remaining child");
+    assert_eq!(
+        children[0].content()[0].text, "More",
+        "Quote should contain the second paragraph"
+    );
+
+    // Verify cursor position
+    assert_eq!(
+        editor.cursor.offset, 5,
+        "Cursor should remain at the junction point"
+    );
+}
+
+#[test]
+fn delete_from_empty_paragraph_positions_cursor_correctly() {
+    let mut doc = Document::new();
+    doc.add_paragraph(
+        Paragraph::new_text().with_content(vec![Span::new_text("")]), // Empty paragraph
+    );
+    doc.add_paragraph(
+        Paragraph::new_text().with_content(vec![Span::new_text("Next paragraph")]),
+    );
+
+    let mut editor = DocumentEditor::new(doc);
+
+    // Position cursor at the empty paragraph
+    let pointer = CursorPointer {
+        paragraph_path: ParagraphPath::new_root(0),
+        span_path: SpanPath::new(vec![0]),
+        offset: 0,
+        segment_kind: SegmentKind::Text,
+    };
+    editor.move_to_pointer(&pointer);
+
+    // Press Delete - should remove empty paragraph and move to next one
+    let result = editor.delete();
+    assert!(result, "Delete should successfully remove empty paragraph");
+
+    // Verify only one paragraph remains
+    assert_eq!(
+        editor.document.paragraphs.len(),
+        1,
+        "Empty paragraph should be removed"
+    );
+
+    // Verify cursor is at the beginning of the remaining paragraph
+    assert_eq!(
+        editor.cursor.paragraph_path,
+        ParagraphPath::new_root(0),
+        "Cursor should be in the first (now only) paragraph"
+    );
+    assert_eq!(
+        editor.cursor.offset, 0,
+        "Cursor should be at the beginning (offset 0)"
+    );
+}
+
+#[test]
+fn delete_from_empty_paragraph_before_quote() {
+    let mut doc = Document::new();
+    doc.add_paragraph(
+        Paragraph::new_text().with_content(vec![Span::new_text("")]), // Empty
+    );
+    doc.add_paragraph(
+        Paragraph::Quote {
+            children: vec![
+                Paragraph::new_text().with_content(vec![Span::new_text("Quoted")]),
+            ],
+        },
+    );
+
+    let mut editor = DocumentEditor::new(doc);
+    let pointer = CursorPointer {
+        paragraph_path: ParagraphPath::new_root(0),
+        span_path: SpanPath::new(vec![0]),
+        offset: 0,
+        segment_kind: SegmentKind::Text,
+    };
+    editor.move_to_pointer(&pointer);
+
+    editor.delete();
+
+    assert_eq!(editor.document.paragraphs.len(), 1);
+    assert_eq!(editor.cursor.offset, 0, "Cursor should be at offset 0");
+}
+
+#[test]
+fn delete_from_empty_paragraph_before_list() {
+    let mut doc = Document::new();
+    doc.add_paragraph(
+        Paragraph::new_text().with_content(vec![Span::new_text("")]), // Empty
+    );
+    doc.add_paragraph(
+        Paragraph::UnorderedList {
+            entries: vec![vec![
+                Paragraph::new_text().with_content(vec![Span::new_text("List item")]),
+            ]],
+        },
+    );
+
+    let mut editor = DocumentEditor::new(doc);
+    let pointer = CursorPointer {
+        paragraph_path: ParagraphPath::new_root(0),
+        span_path: SpanPath::new(vec![0]),
+        offset: 0,
+        segment_kind: SegmentKind::Text,
+    };
+    editor.move_to_pointer(&pointer);
+
+    editor.delete();
+
+    assert_eq!(editor.document.paragraphs.len(), 1);
+    assert_eq!(editor.cursor.offset, 0, "Cursor should be at offset 0");
+}
+
+#[test]
+fn delete_from_empty_paragraph_with_multiple_following_paragraphs() {
+    let mut doc = Document::new();
+    doc.add_paragraph(
+        Paragraph::new_text().with_content(vec![Span::new_text("")]), // Empty
+    );
+    doc.add_paragraph(
+        Paragraph::new_text().with_content(vec![Span::new_text("2nd")]),
+    );
+    doc.add_paragraph(
+        Paragraph::new_text().with_content(vec![Span::new_text("3rd")]),
+    );
+
+    let mut editor = DocumentEditor::new(doc);
+    let pointer = CursorPointer {
+        paragraph_path: ParagraphPath::new_root(0),
+        span_path: SpanPath::new(vec![0]),
+        offset: 0,
+        segment_kind: SegmentKind::Text,
+    };
+    editor.move_to_pointer(&pointer);
+
+    editor.delete();
+
+    // Should have 2 paragraphs remaining
+    assert_eq!(editor.document.paragraphs.len(), 2);
+    
+    // Cursor should be at the beginning of "2nd" (now first paragraph)
+    assert_eq!(
+        editor.cursor.paragraph_path,
+        ParagraphPath::new_root(0),
+        "Cursor should be in first paragraph"
+    );
+    
+    // Verify it's the "2nd" paragraph
+    assert_eq!(
+        editor.document.paragraphs[0].content()[0].text,
+        "2nd",
+        "First paragraph should be '2nd'"
+    );
+    
+    assert_eq!(editor.cursor.offset, 0, "Cursor should be at offset 0");
+}

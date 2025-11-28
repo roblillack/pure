@@ -2246,7 +2246,7 @@ fn remove_nested_list_paragraph(document: &mut Document, parent_ctx: &EntryConte
     }
 }
 
-fn take_list_entry(document: &mut Document, ctx: &EntryContext) -> Option<(Vec<Paragraph>, bool)> {
+pub(crate) fn take_list_entry(document: &mut Document, ctx: &EntryContext) -> Option<(Vec<Paragraph>, bool)> {
     let list = paragraph_mut(document, &ctx.list_path)?;
     let entries = match list {
         Paragraph::OrderedList { entries } | Paragraph::UnorderedList { entries } => entries,

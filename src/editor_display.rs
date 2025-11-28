@@ -31,8 +31,8 @@ pub struct EditorDisplay {
     last_text_area: Rect,
     /// Set to true when document changes to trigger re-render
     layout_dirty: bool,
-    /// Track which paragraph was last modified for incremental updates
-    last_modified_paragraph: Option<usize>,
+    /// Track which paragraphs were last modified for incremental updates
+    last_modified_paragraphs: Vec<usize>,
     /// Track the last selection to detect selection changes
     last_selection: Option<(CursorPointer, CursorPointer)>,
 }
@@ -53,7 +53,7 @@ impl EditorDisplay {
             last_total_lines: 0,
             last_text_area: Rect::default(),
             layout_dirty: true,
-            last_modified_paragraph: None,
+            last_modified_paragraphs: Vec::new(),
             last_selection: None,
         }
     }
@@ -229,30 +229,41 @@ impl EditorDisplay {
 
     /// Clear render cache (called when document changes)
     ///
-    /// If a specific paragraph was modified (tracked in last_modified_paragraph),
+    /// If specific paragraphs were modified (tracked in last_modified_paragraphs),
     /// tries to do an incremental update instead of marking the entire layout dirty.
     ///
     /// Returns true if an incremental update succeeded, false if a full re-render is needed.
     pub fn clear_render_cache(&mut self) -> bool {
-        // Try incremental update if we know which paragraph changed
-        if let Some(para_index) = self.last_modified_paragraph {
-            if self.update_paragraph_layout(para_index) {
+        // Try incremental update if we know which paragraphs changed
+        if !self.last_modified_paragraphs.is_empty() {
+            let paragraphs_to_update = std::mem::take(&mut self.last_modified_paragraphs);
+            let mut all_succeeded = true;
+
+            for para_index in paragraphs_to_update {
+                if !self.update_paragraph_layout(para_index) {
+                    all_succeeded = false;
+                    break;
+                }
+            }
+
+            if all_succeeded {
                 // Incremental update succeeded!
-                self.last_modified_paragraph = None;
-                return true; // Incremental update succeeded
+                return true;
             }
         }
 
         // Fall back to full re-render
         self.layout_dirty = true;
-        self.last_modified_paragraph = None;
+        self.last_modified_paragraphs.clear();
         false // Full re-render needed
     }
 
     /// Mark a specific paragraph as modified to enable incremental updates
     /// Note: This only sets the tracking, clear_render_cache() must be called separately
     pub fn mark_paragraph_modified(&mut self, paragraph_index: usize) {
-        self.last_modified_paragraph = Some(paragraph_index);
+        if !self.last_modified_paragraphs.contains(&paragraph_index) {
+            self.last_modified_paragraphs.push(paragraph_index);
+        }
     }
 
     /// Update layout for a single paragraph (incremental update)
@@ -949,7 +960,7 @@ impl EditorDisplay {
 
         // If paragraph count changed, force full re-render (paragraph merge/split)
         if para_count_before != para_count_after {
-            self.last_modified_paragraph = None;
+            self.last_modified_paragraphs.clear();
         } else if let Some(index) = para_index {
             self.mark_paragraph_modified(index);
         }
@@ -960,12 +971,40 @@ impl EditorDisplay {
     pub fn delete(&mut self) -> bool {
         let para_count_before = self.editor.document().paragraphs.len();
         let para_index = self.editor.cursor_pointer().paragraph_path.root_index();
+
+        // Check if next paragraph is a quote or list that might be affected by merge
+        let next_para_needs_update = if let Some(idx) = para_index {
+            if idx + 1 < para_count_before {
+                matches!(
+                    self.editor.document().paragraphs.get(idx + 1),
+                    Some(tdoc::Paragraph::Quote { .. })
+                        | Some(tdoc::Paragraph::OrderedList { .. })
+                        | Some(tdoc::Paragraph::UnorderedList { .. })
+                        | Some(tdoc::Paragraph::Checklist { .. })
+                )
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+
         let result = self.editor.delete();
         let para_count_after = self.editor.document().paragraphs.len();
 
         // If paragraph count changed, force full re-render (paragraph merge/split)
         if para_count_before != para_count_after {
-            self.last_modified_paragraph = None;
+            self.last_modified_paragraphs.clear();
+        } else if next_para_needs_update {
+            // Merging with quote/list children affects both paragraphs
+            // Mark both for incremental update
+            self.last_modified_paragraphs.clear();
+            if let Some(idx) = para_index {
+                self.mark_paragraph_modified(idx);
+                if idx + 1 < para_count_after {
+                    self.mark_paragraph_modified(idx + 1);
+                }
+            }
         } else if let Some(index) = para_index {
             self.mark_paragraph_modified(index);
         }
@@ -981,7 +1020,7 @@ impl EditorDisplay {
 
         // If paragraph count changed, force full re-render (paragraph merge/split)
         if para_count_before != para_count_after {
-            self.last_modified_paragraph = None;
+            self.last_modified_paragraphs.clear();
         } else if let Some(index) = para_index {
             self.mark_paragraph_modified(index);
         }
@@ -997,7 +1036,7 @@ impl EditorDisplay {
 
         // If paragraph count changed, force full re-render (paragraph merge/split)
         if para_count_before != para_count_after {
-            self.last_modified_paragraph = None;
+            self.last_modified_paragraphs.clear();
         } else if let Some(index) = para_index {
             self.mark_paragraph_modified(index);
         }
@@ -1008,7 +1047,7 @@ impl EditorDisplay {
     pub fn insert_paragraph_break(&mut self) -> bool {
         let result = self.editor.insert_paragraph_break();
         // Paragraph breaks affect structure - need full re-render
-        self.last_modified_paragraph = None;
+        self.last_modified_paragraphs.clear();
         self.clear_render_cache();
         result
     }
