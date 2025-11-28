@@ -1194,6 +1194,28 @@ impl EditorDisplay {
         result
     }
 
+    /// Indent current paragraph with layout update
+    pub fn indent_current_paragraph(&mut self) -> bool {
+        let result = self.editor.indent_current_paragraph();
+        if result {
+            // Indentation changes structure and indentation levels - need full re-render
+            self.force_full_relayout();
+            self.clear_render_cache();
+        }
+        result
+    }
+
+    /// Unindent current paragraph with layout update
+    pub fn unindent_current_paragraph(&mut self) -> bool {
+        let result = self.editor.unindent_current_paragraph();
+        if result {
+            // Unindentation changes structure and indentation levels - need full re-render
+            self.force_full_relayout();
+            self.clear_render_cache();
+        }
+        result
+    }
+
     /// Set paragraph type with layout update
     pub fn set_paragraph_type(&mut self, target: tdoc::ParagraphType) -> bool {
         let para_index = self.editor.cursor_pointer().paragraph_path.root_index();
@@ -2154,6 +2176,72 @@ mod tests {
         // Verify the split happened
         let checklist = &display.editor.document().paragraphs[0];
         assert_eq!(checklist.checklist_items().len(), 2);
+    }
+
+    #[test]
+    fn test_indent_paragraph_updates_screen() {
+        use tdoc::{Document, Paragraph, Span as DocSpan};
+
+        let first = Paragraph::new_text().with_content(vec![DocSpan::new_text("First paragraph")]);
+        let second = Paragraph::new_text().with_content(vec![DocSpan::new_text("Second paragraph")]);
+        let list = Paragraph::new_unordered_list().with_entries(vec![vec![first]]);
+        let doc = Document::new().with_paragraphs(vec![list, second]);
+
+        let mut editor = DocumentEditor::new(doc);
+        editor.ensure_cursor_selectable();
+        let mut display = EditorDisplay::new(editor);
+
+        // Move to the second paragraph (after the list)
+        display.editor.move_down();
+
+        // Get initial render
+        display.render_document(80, 0, None);
+        let initial_text = display.get_txt();
+
+        // Indent the second paragraph into the list
+        assert!(display.indent_current_paragraph());
+
+        // Render and get text - should show the indentation
+        let after_text = display.get_txt();
+
+        // Should have changed the structure
+        assert_ne!(
+            initial_text, after_text,
+            "Screen should update after indenting paragraph"
+        );
+    }
+
+    #[test]
+    fn test_unindent_paragraph_updates_screen() {
+        use tdoc::{Document, Paragraph, Span as DocSpan};
+
+        let first = Paragraph::new_text().with_content(vec![DocSpan::new_text("First item")]);
+        let second = Paragraph::new_text().with_content(vec![DocSpan::new_text("Second paragraph")]);
+        let list = Paragraph::new_unordered_list().with_entries(vec![vec![first, second]]);
+        let doc = Document::new().with_paragraphs(vec![list]);
+
+        let mut editor = DocumentEditor::new(doc);
+        editor.ensure_cursor_selectable();
+        let mut display = EditorDisplay::new(editor);
+
+        // Move to the second paragraph in the list entry
+        display.editor.move_down();
+
+        // Get initial render
+        display.render_document(80, 0, None);
+        let initial_text = display.get_txt();
+
+        // Unindent the paragraph
+        assert!(display.unindent_current_paragraph());
+
+        // Render and get text - should show the unindentation
+        let after_text = display.get_txt();
+
+        // Should have changed the structure
+        assert_ne!(
+            initial_text, after_text,
+            "Screen should update after unindenting paragraph"
+        );
     }
 
     #[test]
