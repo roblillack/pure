@@ -1277,7 +1277,7 @@ fn benchmark_incremental_updates() {
     let mut display = EditorDisplay::new(editor);
 
     // Initial render
-    let _ = display.render_document(80, 0, None);
+    display.render_document(80, 0, None);
 
     // Test incremental updates
     let iterations = 100;
@@ -1285,7 +1285,7 @@ fn benchmark_incremental_updates() {
     for _ in 0..iterations {
         display.insert_char('x');
         display.clear_render_cache();
-        let _ = display.render_document(80, 0, None);
+        display.render_document(80, 0, None);
     }
     let total = start.elapsed();
     let avg = total / iterations as u32;

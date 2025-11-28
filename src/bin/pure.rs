@@ -162,17 +162,7 @@ fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut A
                 continue;
             }
 
-            let is_page_down = matches!(
-                evt,
-                Event::Key(KeyEvent {
-                    code: KeyCode::PageDown,
-                    ..
-                })
-            );
-
-            let handle_start = Instant::now();
             app.handle_event(evt)?;
-            let handle_time = handle_start.elapsed();
 
             // Mark that we need to redraw after handling event
             needs_redraw = true;
