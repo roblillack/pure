@@ -1216,6 +1216,23 @@ impl EditorDisplay {
         result
     }
 
+    /// Set checklist item checked state with layout update
+    pub fn set_current_checklist_item_checked(&mut self, checked: bool) -> bool {
+        // Get the root paragraph index before modifying
+        let paragraph_index = self.editor.cursor_pointer().paragraph_path.root_index();
+
+        let result = self.editor.set_current_checklist_item_checked(checked);
+        if result {
+            // Checking/unchecking only affects the visual checkbox in the containing paragraph
+            // Use incremental update for just that paragraph
+            if let Some(para_idx) = paragraph_index {
+                self.mark_paragraph_modified(para_idx);
+            }
+            self.clear_render_cache();
+        }
+        result
+    }
+
     /// Set paragraph type with layout update
     pub fn set_paragraph_type(&mut self, target: tdoc::ParagraphType) -> bool {
         let para_index = self.editor.cursor_pointer().paragraph_path.root_index();
@@ -2241,6 +2258,66 @@ mod tests {
         assert_ne!(
             initial_text, after_text,
             "Screen should update after unindenting paragraph"
+        );
+    }
+
+    #[test]
+    fn test_check_checklist_item_updates_screen() {
+        use tdoc::{ChecklistItem, Document, Paragraph, Span as DocSpan};
+
+        let item = ChecklistItem::new(false).with_content(vec![DocSpan::new_text("Task to do")]);
+        let checklist = Paragraph::new_checklist().with_checklist_items(vec![item]);
+        let doc = Document::new().with_paragraphs(vec![checklist]);
+
+        let mut editor = DocumentEditor::new(doc);
+        editor.ensure_cursor_selectable();
+        let mut display = EditorDisplay::new(editor);
+
+        // Get initial render (unchecked)
+        display.render_document(80, 0, None);
+        let initial_text = display.get_txt();
+        assert!(initial_text.contains("[ ]"), "Should show unchecked box");
+
+        // Check the item
+        assert!(display.set_current_checklist_item_checked(true));
+
+        // Render and get text - should show checked box
+        let after_text = display.get_txt();
+
+        // Should have changed from [ ] to [✓]
+        assert_ne!(
+            initial_text, after_text,
+            "Screen should update after checking item"
+        );
+        assert!(after_text.contains("[✓]") || after_text.contains("[x]"), "Should show checked box");
+    }
+
+    #[test]
+    fn test_uncheck_checklist_item_updates_screen() {
+        use tdoc::{ChecklistItem, Document, Paragraph, Span as DocSpan};
+
+        let item = ChecklistItem::new(true).with_content(vec![DocSpan::new_text("Done task")]);
+        let checklist = Paragraph::new_checklist().with_checklist_items(vec![item]);
+        let doc = Document::new().with_paragraphs(vec![checklist]);
+
+        let mut editor = DocumentEditor::new(doc);
+        editor.ensure_cursor_selectable();
+        let mut display = EditorDisplay::new(editor);
+
+        // Get initial render (checked)
+        display.render_document(80, 0, None);
+        let initial_text = display.get_txt();
+
+        // Uncheck the item
+        assert!(display.set_current_checklist_item_checked(false));
+
+        // Render and get text - should show the change
+        let after_text = display.get_txt();
+
+        // Text should change after toggling
+        assert_ne!(
+            initial_text, after_text,
+            "Screen should update after unchecking item"
         );
     }
 
