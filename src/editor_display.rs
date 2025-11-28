@@ -266,6 +266,11 @@ impl EditorDisplay {
         }
     }
 
+    pub fn force_full_relayout(&mut self) {
+        self.last_modified_paragraphs.clear();
+        self.layout_dirty = true;
+    }
+
     /// Update layout for a single paragraph (incremental update)
     ///
     /// This is much faster than re-rendering the entire document when only one paragraph changed.
@@ -411,6 +416,9 @@ impl EditorDisplay {
     /// - Viewport dimensions changed (wrap_width or left_padding)
     /// - Selection changed
     /// - First render (cached_layout=None)
+    ///
+    /// Note: The layout should already be up-to-date because wrapper methods
+    /// (insert_char, delete, etc.) automatically trigger incremental updates.
     pub fn render_document(
         &mut self,
         wrap_width: usize,
@@ -433,7 +441,7 @@ impl EditorDisplay {
             self.left_padding = left_padding;
             self.layout_dirty = false;
             self.last_selection = selection;
-        } else{
+        } else {
             let result = self.layout.as_ref().unwrap().clone();
             // Update internal cursor state even when using cached layout
             if self.preferred_column.is_none() {
@@ -936,7 +944,7 @@ impl EditorDisplay {
         if let Some(index) = para_index {
             self.mark_paragraph_modified(index);
         }
-        // Note: mark_dirty() in pure.rs will call clear_render_cache() which will use the paragraph index
+        self.clear_render_cache();
         result
     }
 
@@ -947,23 +955,27 @@ impl EditorDisplay {
         if let Some(index) = para_index {
             self.mark_paragraph_modified(index);
         }
-        // Note: mark_dirty() in pure.rs will call clear_render_cache() which will use the paragraph index
+        self.clear_render_cache();
         result
     }
 
     /// Backspace (delete character before cursor) with incremental layout update
     pub fn backspace(&mut self) -> bool {
         let para_count_before = self.editor.document().paragraphs.len();
-        let para_index = self.editor.cursor_pointer().paragraph_path.root_index();
+        let para_index_before = self.editor.cursor_pointer().paragraph_path.root_index();
+
         let result = self.editor.backspace();
         let para_count_after = self.editor.document().paragraphs.len();
+        let para_index_after = self.editor.cursor_pointer().paragraph_path.root_index();
 
-        // If paragraph count changed, force full re-render (paragraph merge/split)
-        if para_count_before != para_count_after {
-            self.last_modified_paragraphs.clear();
-        } else if let Some(index) = para_index {
+        // If paragraph count changed or cursor moved to different paragraph, force full re-render
+        // (paragraph merge/split/removal affects structure and cursor tracking)
+        if para_count_before != para_count_after || para_index_before != para_index_after {
+            self.force_full_relayout();
+        } else if let Some(index) = para_index_after {
             self.mark_paragraph_modified(index);
         }
+        self.clear_render_cache();
         result
     }
 
@@ -992,9 +1004,9 @@ impl EditorDisplay {
         let result = self.editor.delete();
         let para_count_after = self.editor.document().paragraphs.len();
 
-        // If paragraph count changed, force full re-render (paragraph merge/split)
+        // If paragraph count changed, force full re-render (paragraph merge/split/removal)
         if para_count_before != para_count_after {
-            self.last_modified_paragraphs.clear();
+            self.force_full_relayout();
         } else if next_para_needs_update {
             // Merging with quote/list children affects both paragraphs
             // Mark both for incremental update
@@ -1008,6 +1020,7 @@ impl EditorDisplay {
         } else if let Some(index) = para_index {
             self.mark_paragraph_modified(index);
         }
+        self.clear_render_cache();
         result
     }
 
@@ -1020,10 +1033,11 @@ impl EditorDisplay {
 
         // If paragraph count changed, force full re-render (paragraph merge/split)
         if para_count_before != para_count_after {
-            self.last_modified_paragraphs.clear();
+            self.force_full_relayout();
         } else if let Some(index) = para_index {
             self.mark_paragraph_modified(index);
         }
+        self.clear_render_cache();
         result
     }
 
@@ -1036,10 +1050,11 @@ impl EditorDisplay {
 
         // If paragraph count changed, force full re-render (paragraph merge/split)
         if para_count_before != para_count_after {
-            self.last_modified_paragraphs.clear();
+            self.force_full_relayout();
         } else if let Some(index) = para_index {
             self.mark_paragraph_modified(index);
         }
+        self.clear_render_cache();
         result
     }
 
@@ -1047,7 +1062,19 @@ impl EditorDisplay {
     pub fn insert_paragraph_break(&mut self) -> bool {
         let result = self.editor.insert_paragraph_break();
         // Paragraph breaks affect structure - need full re-render
-        self.last_modified_paragraphs.clear();
+        self.force_full_relayout();
+        self.clear_render_cache();
+        result
+    }
+
+    /// Set paragraph type with layout update
+    pub fn set_paragraph_type(&mut self, target: tdoc::ParagraphType) -> bool {
+        let para_index = self.editor.cursor_pointer().paragraph_path.root_index();
+        let result = self.editor.set_paragraph_type(target);
+        // Changing paragraph type affects structure and rendering
+        if let Some(index) = para_index {
+            self.mark_paragraph_modified(index);
+        }
         self.clear_render_cache();
         result
     }
@@ -1440,10 +1467,13 @@ mod tests {
     #[test]
     fn test_empty_doc_has_cursor() {
         let doc = ftml! { p {} };
-        let mut display = EditorDisplay::new(DocumentEditor::new(doc));
+        let mut editor = DocumentEditor::new(doc);
+        editor.ensure_cursor_selectable();
+        let mut display = EditorDisplay::new(editor);
         let _ = display.render_document_with_positions(80, 0, None);
         let pos1 = display.cursor_pointer();
         assert_eq!(pos1.paragraph_path.numeric_steps(), vec![0]);
+        // After ensure_cursor_selectable(), empty paragraphs get a placeholder span at index 0
         assert_eq!(pos1.span_path.indices(), vec![0]);
         assert_eq!(pos1.offset, 0);
 
@@ -1473,14 +1503,14 @@ mod tests {
         }
 
         fn get_content_pos(&mut self) -> Option<(usize, u16)> {
-            let _ = self.render_document_with_positions(80, 0, None);
+            let _ = self.render_document(80, 0, None);
 
             self.cursor_visual()
                 .map(|v| (v.content_line, v.content_column))
         }
 
         fn get_txt(&mut self) -> String {
-            self.render_document_with_positions(80, 0, None);
+            self.render_document(80, 0, None);
             let mut s = String::new();
             for l in &self.layout.as_ref().unwrap().lines {
                 for i in &l.spans {
@@ -1751,6 +1781,160 @@ mod tests {
             "Cursor should land at the same position when moving vertically to a line with nested styles. \
             First move: {:?}, Second move: {:?}",
             after_first_move, after_second_move
+        );
+    }
+
+    #[test]
+    fn backspace_from_beginning_merges_with_previous_paragraph() {
+        let doc = ftml! {
+            p { "First paragraph" }
+            p { "Next paragraph" }
+        };
+
+        let mut editor = DocumentEditor::new(doc);
+        editor.ensure_cursor_selectable();
+        let mut display = EditorDisplay::new(editor);
+
+        display.move_cursor_vertical(1);
+        assert_eq!(display.get_content_pos(), Some((1, 0)));
+
+        assert!(
+            display.backspace(),
+            "Backspace should successfully merge paragraphs"
+        );
+
+        assert_eq!(display.get_txt(), "First paragraphNext paragraph\n");
+        assert_eq!(display.get_content_pos(), Some((0, 15)));
+    }
+
+    #[test]
+    fn backspace_from_beginning_of_multi_entry_list_merges_with_previous_paragraph() {
+        let doc = ftml! {
+            p { "First paragraph" }
+            ul {
+                li { p { "Next paragraph" } }
+                li { p { "Another paragraph" } }
+            }
+        };
+
+        let mut editor = DocumentEditor::new(doc);
+        editor.ensure_cursor_selectable();
+        let mut display = EditorDisplay::new(editor);
+
+        display.move_cursor_vertical(1);
+        assert_eq!(display.get_content_pos(), Some((1, 0)));
+
+        assert!(
+            display.backspace(),
+            "Backspace should successfully merge paragraphs"
+        );
+
+        assert_eq!(
+            display.get_txt(),
+            "First paragraphNext paragraph\n\n• Another paragraph\n"
+        );
+        assert_eq!(display.get_content_pos(), Some((0, 15)));
+    }
+
+    #[test]
+    fn backspace_from_beginning_of_list_merges_with_previous_paragraph() {
+        let doc = ftml! {
+            p { "First paragraph" }
+            ul { li { p { "Next paragraph" } } }
+        };
+
+        let mut editor = DocumentEditor::new(doc);
+        editor.ensure_cursor_selectable();
+        let mut display = EditorDisplay::new(editor);
+
+        display.move_cursor_vertical(1);
+        assert_eq!(display.get_content_pos(), Some((1, 0)));
+
+        assert!(
+            display.backspace(),
+            "Backspace should successfully merge paragraphs"
+        );
+
+        assert_eq!(display.get_txt(), "First paragraphNext paragraph\n");
+        assert_eq!(display.get_content_pos(), Some((0, 15)));
+    }
+
+    #[test]
+    fn backspace_from_beginning_merges_with_empty_paragraph() {
+        let doc = ftml! {
+            p { }
+            p { "Next paragraph" }
+        };
+
+        let mut editor = DocumentEditor::new(doc);
+        editor.ensure_cursor_selectable();
+        let mut display = EditorDisplay::new(editor);
+
+        display.move_cursor_vertical(1);
+        assert_eq!(display.get_content_pos(), Some((1, 0)));
+
+        // Press Backspace - should remove empty paragraph and stay at beginning
+        assert!(
+            display.backspace(),
+            "Backspace should successfully remove empty paragraph"
+        );
+
+        assert_eq!(display.get_txt(), "Next paragraph\n");
+        assert_eq!(display.get_content_pos(), Some((0, 0)));
+    }
+
+    #[test]
+    fn test_delete_joins_two_text_paragraphs() {
+        let doc = ftml! {
+            p { "First paragraph" }
+            p { "Second paragraph" }
+        };
+        let mut editor = DocumentEditor::new(doc);
+        editor.ensure_cursor_selectable();
+        let mut display = EditorDisplay::new(editor);
+
+        // Move to the end of the first paragraph
+        for _ in 0..15 {
+            // Length of "First paragraph"
+            display.editor.move_right();
+        }
+
+        // Clear layout_dirty to test if delete sets it
+        display.layout_dirty = false;
+        display.last_modified_paragraphs.clear();
+
+        eprintln!("Before delete:");
+        eprintln!(
+            "  Paragraph count: {}",
+            display.editor.document().paragraphs.len()
+        );
+        eprintln!("  Cursor: {:?}", display.editor.cursor_pointer());
+        eprintln!("  layout_dirty: {}", display.layout_dirty);
+
+        // Delete should merge the paragraphs
+        let result = display.delete();
+        assert!(result, "Delete should successfully merge paragraphs");
+
+        eprintln!("\nAfter delete:");
+        eprintln!(
+            "  Paragraph count: {}",
+            display.editor.document().paragraphs.len()
+        );
+        eprintln!("  Cursor: {:?}", display.editor.cursor_pointer());
+        eprintln!("  layout_dirty: {}", display.layout_dirty);
+        eprintln!(
+            "  last_modified_paragraphs: {:?}",
+            display.last_modified_paragraphs
+        );
+
+        assert_eq!(
+            display.editor.document().paragraphs.len(),
+            1,
+            "Should have 1 paragraph after merge"
+        );
+        assert!(
+            display.layout_dirty,
+            "layout_dirty should be true after paragraph merge"
         );
     }
 }

@@ -1890,7 +1890,7 @@ fn test_paragraph_break_updates_subsequent_paragraph_lines() {
 
     // Now try to move down to the original second paragraph (now third paragraph)
     // We should be able to reach it
-    let initial_para = display
+    let _initial_para = display
         .cursor_pointer()
         .paragraph_path
         .root_index()
@@ -2312,12 +2312,8 @@ fn test_cursor_down_after_incremental_wrap_no_line_skip() {
 #[test]
 fn delete_joins_regular_paragraphs_and_maintains_cursor() {
     let mut doc = Document::new();
-    doc.add_paragraph(
-        Paragraph::new_text().with_content(vec![Span::new_text("First paragraph")]),
-    );
-    doc.add_paragraph(
-        Paragraph::new_text().with_content(vec![Span::new_text("Second paragraph")]),
-    );
+    doc.add_paragraph(Paragraph::new_text().with_content(vec![Span::new_text("First paragraph")]));
+    doc.add_paragraph(Paragraph::new_text().with_content(vec![Span::new_text("Second paragraph")]));
 
     let mut editor = DocumentEditor::new(doc);
 
@@ -2454,16 +2450,12 @@ fn delete_joins_regular_paragraph_with_checklist_item() {
 #[test]
 fn delete_joins_text_paragraph_with_bullet_list_item() {
     let mut doc = Document::new();
-    doc.add_paragraph(
-        Paragraph::new_text().with_content(vec![Span::new_text("Regular text")]),
-    );
-    doc.add_paragraph(
-        Paragraph::UnorderedList {
-            entries: vec![vec![
-                Paragraph::new_text().with_content(vec![Span::new_text("Bullet item")]),
-            ]],
-        },
-    );
+    doc.add_paragraph(Paragraph::new_text().with_content(vec![Span::new_text("Regular text")]));
+    doc.add_paragraph(Paragraph::UnorderedList {
+        entries: vec![vec![
+            Paragraph::new_text().with_content(vec![Span::new_text("Bullet item")]),
+        ]],
+    });
 
     let mut editor = DocumentEditor::new(doc);
 
@@ -2504,16 +2496,12 @@ fn delete_joins_text_paragraph_with_bullet_list_item() {
 #[test]
 fn delete_joins_text_with_ordered_list_item() {
     let mut doc = Document::new();
-    doc.add_paragraph(
-        Paragraph::new_text().with_content(vec![Span::new_text("Text here")]),
-    );
-    doc.add_paragraph(
-        Paragraph::OrderedList {
-            entries: vec![vec![
-                Paragraph::new_text().with_content(vec![Span::new_text("Numbered item")]),
-            ]],
-        },
-    );
+    doc.add_paragraph(Paragraph::new_text().with_content(vec![Span::new_text("Text here")]));
+    doc.add_paragraph(Paragraph::OrderedList {
+        entries: vec![vec![
+            Paragraph::new_text().with_content(vec![Span::new_text("Numbered item")]),
+        ]],
+    });
 
     let mut editor = DocumentEditor::new(doc);
 
@@ -2548,16 +2536,10 @@ fn delete_joins_text_with_ordered_list_item() {
 #[test]
 fn delete_joins_text_with_quote_paragraph() {
     let mut doc = Document::new();
-    doc.add_paragraph(
-        Paragraph::new_text().with_content(vec![Span::new_text("Regular text")]),
-    );
-    doc.add_paragraph(
-        Paragraph::Quote {
-            children: vec![
-                Paragraph::new_text().with_content(vec![Span::new_text("Quoted text")]),
-            ],
-        },
-    );
+    doc.add_paragraph(Paragraph::new_text().with_content(vec![Span::new_text("Regular text")]));
+    doc.add_paragraph(Paragraph::Quote {
+        children: vec![Paragraph::new_text().with_content(vec![Span::new_text("Quoted text")])],
+    });
 
     let mut editor = DocumentEditor::new(doc);
 
@@ -2598,18 +2580,12 @@ fn delete_joins_text_with_quote_paragraph() {
 #[test]
 fn delete_joins_text_with_quoted_header() {
     let mut doc = Document::new();
-    doc.add_paragraph(
-        Paragraph::new_text().with_content(vec![Span::new_text("Hello")]),
-    );
-    doc.add_paragraph(
-        Paragraph::Quote {
-            children: vec![
-                Paragraph::Header3 {
-                    content: vec![Span::new_text("World")],
-                },
-            ],
-        },
-    );
+    doc.add_paragraph(Paragraph::new_text().with_content(vec![Span::new_text("Hello")]));
+    doc.add_paragraph(Paragraph::Quote {
+        children: vec![Paragraph::Header3 {
+            content: vec![Span::new_text("World")],
+        }],
+    });
 
     let mut editor = DocumentEditor::new(doc);
 
@@ -2650,17 +2626,13 @@ fn delete_joins_text_with_quoted_header() {
 #[test]
 fn delete_joins_text_with_quote_containing_multiple_paragraphs() {
     let mut doc = Document::new();
-    doc.add_paragraph(
-        Paragraph::new_text().with_content(vec![Span::new_text("Hello")]),
-    );
-    doc.add_paragraph(
-        Paragraph::Quote {
-            children: vec![
-                Paragraph::new_text().with_content(vec![Span::new_text("World")]),
-                Paragraph::new_text().with_content(vec![Span::new_text("More")]),
-            ],
-        },
-    );
+    doc.add_paragraph(Paragraph::new_text().with_content(vec![Span::new_text("Hello")]));
+    doc.add_paragraph(Paragraph::Quote {
+        children: vec![
+            Paragraph::new_text().with_content(vec![Span::new_text("World")]),
+            Paragraph::new_text().with_content(vec![Span::new_text("More")]),
+        ],
+    });
 
     let mut editor = DocumentEditor::new(doc);
 
@@ -2697,7 +2669,8 @@ fn delete_joins_text_with_quote_containing_multiple_paragraphs() {
     };
     assert_eq!(children.len(), 1, "Quote should have one remaining child");
     assert_eq!(
-        children[0].content()[0].text, "More",
+        children[0].content()[0].text,
+        "More",
         "Quote should contain the second paragraph"
     );
 
@@ -2714,9 +2687,7 @@ fn delete_from_empty_paragraph_positions_cursor_correctly() {
     doc.add_paragraph(
         Paragraph::new_text().with_content(vec![Span::new_text("")]), // Empty paragraph
     );
-    doc.add_paragraph(
-        Paragraph::new_text().with_content(vec![Span::new_text("Next paragraph")]),
-    );
+    doc.add_paragraph(Paragraph::new_text().with_content(vec![Span::new_text("Next paragraph")]));
 
     let mut editor = DocumentEditor::new(doc);
 
@@ -2758,13 +2729,9 @@ fn delete_from_empty_paragraph_before_quote() {
     doc.add_paragraph(
         Paragraph::new_text().with_content(vec![Span::new_text("")]), // Empty
     );
-    doc.add_paragraph(
-        Paragraph::Quote {
-            children: vec![
-                Paragraph::new_text().with_content(vec![Span::new_text("Quoted")]),
-            ],
-        },
-    );
+    doc.add_paragraph(Paragraph::Quote {
+        children: vec![Paragraph::new_text().with_content(vec![Span::new_text("Quoted")])],
+    });
 
     let mut editor = DocumentEditor::new(doc);
     let pointer = CursorPointer {
@@ -2787,13 +2754,11 @@ fn delete_from_empty_paragraph_before_list() {
     doc.add_paragraph(
         Paragraph::new_text().with_content(vec![Span::new_text("")]), // Empty
     );
-    doc.add_paragraph(
-        Paragraph::UnorderedList {
-            entries: vec![vec![
-                Paragraph::new_text().with_content(vec![Span::new_text("List item")]),
-            ]],
-        },
-    );
+    doc.add_paragraph(Paragraph::UnorderedList {
+        entries: vec![vec![
+            Paragraph::new_text().with_content(vec![Span::new_text("List item")]),
+        ]],
+    });
 
     let mut editor = DocumentEditor::new(doc);
     let pointer = CursorPointer {
@@ -2816,12 +2781,8 @@ fn delete_from_empty_paragraph_with_multiple_following_paragraphs() {
     doc.add_paragraph(
         Paragraph::new_text().with_content(vec![Span::new_text("")]), // Empty
     );
-    doc.add_paragraph(
-        Paragraph::new_text().with_content(vec![Span::new_text("2nd")]),
-    );
-    doc.add_paragraph(
-        Paragraph::new_text().with_content(vec![Span::new_text("3rd")]),
-    );
+    doc.add_paragraph(Paragraph::new_text().with_content(vec![Span::new_text("2nd")]));
+    doc.add_paragraph(Paragraph::new_text().with_content(vec![Span::new_text("3rd")]));
 
     let mut editor = DocumentEditor::new(doc);
     let pointer = CursorPointer {
@@ -2836,20 +2797,122 @@ fn delete_from_empty_paragraph_with_multiple_following_paragraphs() {
 
     // Should have 2 paragraphs remaining
     assert_eq!(editor.document.paragraphs.len(), 2);
-    
+
     // Cursor should be at the beginning of "2nd" (now first paragraph)
     assert_eq!(
         editor.cursor.paragraph_path,
         ParagraphPath::new_root(0),
         "Cursor should be in first paragraph"
     );
-    
+
     // Verify it's the "2nd" paragraph
     assert_eq!(
         editor.document.paragraphs[0].content()[0].text,
         "2nd",
         "First paragraph should be '2nd'"
     );
-    
+
+    assert_eq!(editor.cursor.offset, 0, "Cursor should be at offset 0");
+}
+
+#[test]
+fn backspace_from_beginning_with_empty_paragraph_before_quote() {
+    let mut doc = Document::new();
+    doc.add_paragraph(
+        Paragraph::new_text().with_content(vec![Span::new_text("")]), // Empty
+    );
+    doc.add_paragraph(Paragraph::Quote {
+        children: vec![Paragraph::new_text().with_content(vec![Span::new_text("Quoted")])],
+    });
+
+    let mut editor = DocumentEditor::new(doc);
+
+    // Position cursor at the beginning of the quote's first child
+    let mut path = ParagraphPath::new_root(1);
+    path.push_child(0);
+    let pointer = CursorPointer {
+        paragraph_path: path,
+        span_path: SpanPath::new(vec![0]),
+        offset: 0,
+        segment_kind: SegmentKind::Text,
+    };
+    editor.move_to_pointer(&pointer);
+
+    editor.backspace();
+
+    assert_eq!(editor.document.paragraphs.len(), 1);
+    assert_eq!(editor.cursor.offset, 0, "Cursor should be at offset 0");
+}
+
+#[test]
+fn backspace_from_beginning_with_empty_paragraph_before_list() {
+    let mut doc = Document::new();
+    doc.add_paragraph(
+        Paragraph::new_text().with_content(vec![Span::new_text("")]), // Empty
+    );
+    doc.add_paragraph(Paragraph::UnorderedList {
+        entries: vec![vec![
+            Paragraph::new_text().with_content(vec![Span::new_text("List item")]),
+        ]],
+    });
+
+    let mut editor = DocumentEditor::new(doc);
+
+    // Position cursor at the beginning of the list entry
+    let mut path = ParagraphPath::new_root(1);
+    path.push_entry(0, 0);
+    let pointer = CursorPointer {
+        paragraph_path: path,
+        span_path: SpanPath::new(vec![0]),
+        offset: 0,
+        segment_kind: SegmentKind::Text,
+    };
+    editor.move_to_pointer(&pointer);
+
+    editor.backspace();
+
+    assert_eq!(editor.document.paragraphs.len(), 1);
+    assert_eq!(editor.cursor.offset, 0, "Cursor should be at offset 0");
+}
+
+#[test]
+fn backspace_from_beginning_with_multiple_preceding_paragraphs() {
+    let mut doc = Document::new();
+    doc.add_paragraph(Paragraph::new_text().with_content(vec![Span::new_text("1st")]));
+    doc.add_paragraph(
+        Paragraph::new_text().with_content(vec![Span::new_text("")]), // Empty
+    );
+    doc.add_paragraph(Paragraph::new_text().with_content(vec![Span::new_text("3rd")]));
+
+    let mut editor = DocumentEditor::new(doc);
+
+    // Position cursor at the beginning of the 3rd paragraph
+    let pointer = CursorPointer {
+        paragraph_path: ParagraphPath::new_root(2),
+        span_path: SpanPath::new(vec![0]),
+        offset: 0,
+        segment_kind: SegmentKind::Text,
+    };
+    editor.move_to_pointer(&pointer);
+
+    editor.backspace();
+
+    // Should have 2 paragraphs remaining
+    assert_eq!(editor.document.paragraphs.len(), 2);
+
+    // Cursor should be at the beginning of "3rd" (now second paragraph)
+    assert_eq!(
+        editor.cursor.paragraph_path,
+        ParagraphPath::new_root(1),
+        "Cursor should be in second paragraph"
+    );
+
+    // Verify it's the "3rd" paragraph
+    assert_eq!(
+        editor.document.paragraphs[1].content()[0].text,
+        "3rd",
+        "Second paragraph should be '3rd'"
+    );
+
     assert_eq!(editor.cursor.offset, 0, "Cursor should be at offset 0");
 }

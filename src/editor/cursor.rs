@@ -11,9 +11,22 @@ use tdoc::{Paragraph, Span};
 
 impl DocumentEditor {
     pub fn ensure_cursor_selectable(&mut self) {
-        if self.segments.is_empty() {
+        let needs_placeholder = if self.segments.is_empty() {
+            true
+        } else if let Some(first) = self.segments.first() {
+            // If the first segment has an empty span_path (completely empty paragraph),
+            // add a placeholder span to make it properly editable
+            first.span_path.indices().is_empty()
+        } else {
+            false
+        };
+
+        if needs_placeholder {
             self.ensure_placeholder_segment();
+            // Rebuild segments after modifying the document
+            self.rebuild_segments();
         }
+
         if let Some(first) = self.segments.first() {
             self.cursor = CursorPointer {
                 paragraph_path: first.paragraph_path.clone(),
