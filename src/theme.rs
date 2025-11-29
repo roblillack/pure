@@ -89,7 +89,7 @@ impl Default for Theme {
             link_color: Color::Blue,
             reveal_tag_fg: Color::Black,
             reveal_tag_bg: Color::Gray,
-            scrollbar_knob_fg: Color::Reset,
+            scrollbar_knob_fg: Color::Gray,
             scrollbar_knob_bg: Color::Reset,
             scrollbar_track_fg: Color::Reset,
             scrollbar_track_bg: Color::Reset,
