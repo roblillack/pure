@@ -68,6 +68,10 @@ pub struct Theme {
 
     /// Foreground color for disabled selected menu entry
     pub menu_selected_disabled_fg: Color,
+
+    /// Foreground color for structural/decorative characters
+    /// (checklist brackets, bullets, heading underlines, code separators, quote bars)
+    pub structural_fg: Color,
 }
 
 impl Default for Theme {
@@ -95,6 +99,7 @@ impl Default for Theme {
             menu_selected_fg: Color::White,
             menu_selected_bg: Color::LightBlue,
             menu_selected_disabled_fg: Color::DarkGray,
+            structural_fg: Color::Gray,
         }
     }
 }
@@ -175,5 +180,13 @@ impl Theme {
         Style::default()
             .fg(self.menu_selected_disabled_fg)
             .bg(self.menu_selected_bg)
+    }
+
+    /// Get the style for structural/decorative characters
+    pub fn structural_style(&self) -> Style {
+        use ratatui::style::Modifier;
+        Style::default()
+            .fg(self.structural_fg)
+            .add_modifier(Modifier::DIM)
     }
 }

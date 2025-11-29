@@ -444,13 +444,13 @@ impl<'a> DirectRenderer<'a> {
             };
             let underline_width = width.saturating_sub(self.left_padding);
             let underline = underline_string(underline_width, underline_char);
-            self.push_plain_line(&underline, false);
+            self.push_styled_line(&underline, self.theme.structural_style(), false);
         }
     }
 
     fn render_code_block(&mut self, paragraph: &Paragraph, prefix: &str) {
         let fence = self.code_block_fence(prefix);
-        self.push_plain_line(&fence, false);
+        self.push_styled_line(&fence, self.theme.structural_style(), false);
 
         let mut fragments = Vec::new();
         let base_span_path = SpanPath {
@@ -465,7 +465,7 @@ impl<'a> DirectRenderer<'a> {
         let lines = self.wrap_fragments_direct(&fragments, prefix, prefix, usize::MAX / 4);
         self.consume_lines_direct(lines);
 
-        self.push_plain_line(&fence, false);
+        self.push_styled_line(&fence, self.theme.structural_style(), false);
     }
 
     fn render_quote(&mut self, paragraph: &Paragraph, prefix: &str) {
@@ -1020,7 +1020,8 @@ impl<'a> DirectRenderer<'a> {
         for output in outputs {
             let mut spans: Vec<Span<'static>> = Vec::with_capacity(output.spans.len());
             for segment in output.spans {
-                spans.push(Span::styled(segment.text.clone(), segment.style).to_owned());
+                let styled_spans = self.style_structural_prefix(&segment.text, segment.style);
+                spans.extend(styled_spans);
             }
             let spans = self.prepend_padding(spans);
             let line = Line::from(spans);
@@ -1083,6 +1084,65 @@ impl<'a> DirectRenderer<'a> {
         self.lines.push(line);
         self.line_metrics.push(LineMetric { counts_as_content });
         self.current_line_index += 1;
+    }
+
+    fn push_styled_line(&mut self, content: &str, style: Style, counts_as_content: bool) {
+        let mut spans = Vec::new();
+        if !content.is_empty() {
+            spans.push(Span::styled(content.to_string(), style).to_owned());
+        }
+        let spans = self.prepend_padding(spans);
+        let line = Line::from(spans);
+        self.lines.push(line);
+        self.line_metrics.push(LineMetric { counts_as_content });
+        self.current_line_index += 1;
+    }
+
+    /// Detects and styles structural prefix characters in a segment
+    /// Returns a vector of styled spans (may be just one if no structural prefix found)
+    fn style_structural_prefix(&self, text: &str, base_style: Style) -> Vec<Span<'static>> {
+        // Check for common structural prefixes
+        // - Bullets: "• "
+        // - Checklist: "[✓] " or "[ ] "
+        // - Ordered list: "1. ", "2. ", etc.
+        // - Quote: "| "
+
+        if let Some(rest) = text.strip_prefix("• ") {
+            vec![
+                Span::styled("• ".to_string(), self.theme.structural_style()).to_owned(),
+                Span::styled(rest.to_string(), base_style).to_owned(),
+            ]
+        } else if let Some(rest) = text.strip_prefix("[✓] ") {
+            vec![
+                Span::styled("[✓] ".to_string(), self.theme.structural_style()).to_owned(),
+                Span::styled(rest.to_string(), base_style).to_owned(),
+            ]
+        } else if let Some(rest) = text.strip_prefix("[ ] ") {
+            vec![
+                Span::styled("[ ] ".to_string(), self.theme.structural_style()).to_owned(),
+                Span::styled(rest.to_string(), base_style).to_owned(),
+            ]
+        } else if let Some(rest) = text.strip_prefix("| ") {
+            vec![
+                Span::styled("| ".to_string(), self.theme.structural_style()).to_owned(),
+                Span::styled(rest.to_string(), base_style).to_owned(),
+            ]
+        } else if let Some(prefix_end) = text.find(". ") {
+            // Check if it's a number followed by ". "
+            let prefix = &text[..prefix_end];
+            if prefix.chars().all(|c| c.is_ascii_digit()) && !prefix.is_empty() {
+                let number_dot = &text[..prefix_end + 2]; // Include ". "
+                let rest = &text[prefix_end + 2..];
+                vec![
+                    Span::styled(number_dot.to_string(), self.theme.structural_style()).to_owned(),
+                    Span::styled(rest.to_string(), base_style).to_owned(),
+                ]
+            } else {
+                vec![Span::styled(text.to_string(), base_style).to_owned()]
+            }
+        } else {
+            vec![Span::styled(text.to_string(), base_style).to_owned()]
+        }
     }
 
     fn code_block_fence(&self, prefix: &str) -> String {
