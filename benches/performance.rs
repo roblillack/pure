@@ -1357,7 +1357,7 @@ fn bench_mouse_cursor_positioning() {
 
             for _ in 0..iterations {
                 let start = Instant::now();
-                let _ = display.pointer_from_mouse(40, line as u16, 0);
+                display.pointer_from_mouse(40, line, 0);
                 durations.push(start.elapsed());
             }
 
