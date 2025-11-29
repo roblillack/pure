@@ -1090,55 +1090,54 @@ impl DocumentEditor {
                 let prev_para_path = &prev_segment.paragraph_path;
 
                 // Only check if it's a different paragraph
-                if prev_para_path != &self.cursor.paragraph_path {
-                    if let Some(prev_para) = paragraph_ref(&self.document, prev_para_path) {
-                        if paragraph_is_empty(prev_para) {
-                            // Save current position info
-                            let current_path = self.cursor.paragraph_path.clone();
-                            let current_offset = self.cursor.offset;
-                            let removed_root_index = prev_para_path.root_index();
+                if prev_para_path != &self.cursor.paragraph_path
+                    && let Some(prev_para) = paragraph_ref(&self.document, prev_para_path)
+                    && paragraph_is_empty(prev_para)
+                {
+                    // Save current position info
+                    let current_path = self.cursor.paragraph_path.clone();
+                    let current_offset = self.cursor.offset;
+                    let removed_root_index = prev_para_path.root_index();
 
-                            // Remove the empty previous paragraph
-                            if remove_paragraph_by_path(&mut self.document, prev_para_path) {
-                                self.rebuild_segments();
+                    // Remove the empty previous paragraph
+                    if remove_paragraph_by_path(&mut self.document, prev_para_path) {
+                        self.rebuild_segments();
 
-                                // Adjust current path if needed (same logic as delete)
-                                let adjusted_path = if let (Some(current_idx), Some(removed_idx)) =
-                                    (current_path.root_index(), removed_root_index)
-                                {
-                                    if current_idx > removed_idx {
-                                        let steps = current_path.steps();
-                                        if let Some(PathStep::Root(idx)) = steps.first() {
-                                            let mut new_steps = steps.to_vec();
-                                            new_steps[0] = PathStep::Root(idx - 1);
-                                            ParagraphPath::from_steps(new_steps)
-                                        } else {
-                                            current_path
-                                        }
-                                    } else {
-                                        current_path
-                                    }
+                        // Adjust current path if needed (same logic as delete)
+                        let adjusted_path = if let (Some(current_idx), Some(removed_idx)) =
+                            (current_path.root_index(), removed_root_index)
+                        {
+                            if current_idx > removed_idx {
+                                let steps = current_path.steps();
+                                if let Some(PathStep::Root(idx)) = steps.first() {
+                                    let mut new_steps = steps.to_vec();
+                                    new_steps[0] = PathStep::Root(idx - 1);
+                                    ParagraphPath::from_steps(new_steps)
                                 } else {
                                     current_path
-                                };
-
-                                // Move to adjusted position
-                                let pointer = CursorPointer {
-                                    paragraph_path: adjusted_path,
-                                    span_path: self.cursor.span_path.clone(),
-                                    offset: current_offset,
-                                    segment_kind: SegmentKind::Text,
-                                };
-
-                                if self.move_to_pointer(&pointer)
-                                    || self.fallback_move_to_text(&pointer, false)
-                                {
-                                    return true;
                                 }
-                                self.ensure_cursor_selectable();
-                                return true;
+                            } else {
+                                current_path
                             }
+                        } else {
+                            current_path
+                        };
+
+                        // Move to adjusted position
+                        let pointer = CursorPointer {
+                            paragraph_path: adjusted_path,
+                            span_path: self.cursor.span_path.clone(),
+                            offset: current_offset,
+                            segment_kind: SegmentKind::Text,
+                        };
+
+                        if self.move_to_pointer(&pointer)
+                            || self.fallback_move_to_text(&pointer, false)
+                        {
+                            return true;
                         }
+                        self.ensure_cursor_selectable();
+                        return true;
                     }
                 }
             }
@@ -2300,15 +2299,14 @@ impl DocumentEditor {
         let adjusted_target_pointer = if let Some(mut pointer) = target_pointer {
             if let (Some(target_idx), Some(removed_idx)) =
                 (pointer.paragraph_path.root_index(), removed_root_index)
+                && target_idx > removed_idx
             {
-                if target_idx > removed_idx {
-                    // Create a new path with decremented root index
-                    let steps = pointer.paragraph_path.steps();
-                    if let Some(PathStep::Root(idx)) = steps.first() {
-                        let mut new_steps = steps.to_vec();
-                        new_steps[0] = PathStep::Root(idx - 1);
-                        pointer.paragraph_path = ParagraphPath::from_steps(new_steps);
-                    }
+                // Create a new path with decremented root index
+                let steps = pointer.paragraph_path.steps();
+                if let Some(PathStep::Root(idx)) = steps.first() {
+                    let mut new_steps = steps.to_vec();
+                    new_steps[0] = PathStep::Root(idx - 1);
+                    pointer.paragraph_path = ParagraphPath::from_steps(new_steps);
                 }
             }
             Some(pointer)

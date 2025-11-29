@@ -117,6 +117,7 @@ pub fn render_document_direct(
 
 /// Layout a single paragraph in isolation
 /// Returns the rendered lines and cursor positions with RELATIVE line numbers (starting from 0)
+#[allow(clippy::too_many_arguments)]
 pub fn layout_paragraph(
     paragraph: &Paragraph,
     paragraph_index: usize,
@@ -151,18 +152,18 @@ pub fn layout_paragraph(
     // Extract positions with relative line numbers (already relative since we start at line 0)
     let mut positions = Vec::new();
     for (marker_id, pending) in renderer.marker_pending.iter() {
-        if *marker_id >= start_marker_id {
-            if let Some(pointer) = renderer.marker_to_pointer.get(marker_id) {
-                positions.push((
-                    pointer.clone(),
-                    CursorVisualPosition {
-                        line: pending.line, // Already relative since renderer starts at line 0
-                        column: pending.column,
-                        content_line: 0, // Will be computed later when assembled into full document
-                        content_column: pending.content_column,
-                    },
-                ));
-            }
+        if *marker_id >= start_marker_id
+            && let Some(pointer) = renderer.marker_to_pointer.get(marker_id)
+        {
+            positions.push((
+                pointer.clone(),
+                CursorVisualPosition {
+                    line: pending.line, // Already relative since renderer starts at line 0
+                    column: pending.column,
+                    content_line: 0, // Will be computed later when assembled into full document
+                    content_column: pending.content_column,
+                },
+            ));
         }
     }
 
@@ -325,19 +326,19 @@ impl<'a> DirectRenderer<'a> {
             // Build paragraph positions with relative line numbers
             let mut paragraph_positions = Vec::new();
             for (marker_id, pending) in self.marker_pending.iter() {
-                if *marker_id >= paragraph_start_marker_id {
-                    if let Some(pointer) = self.marker_to_pointer.get(marker_id) {
-                        let relative_line = pending.line.saturating_sub(paragraph_start_line);
-                        paragraph_positions.push((
-                            pointer.clone(),
-                            CursorVisualPosition {
-                                line: relative_line,
-                                column: pending.column,
-                                content_line: 0, // Will be computed in finish()
-                                content_column: pending.content_column,
-                            },
-                        ));
-                    }
+                if *marker_id >= paragraph_start_marker_id
+                    && let Some(pointer) = self.marker_to_pointer.get(marker_id)
+                {
+                    let relative_line = pending.line.saturating_sub(paragraph_start_line);
+                    paragraph_positions.push((
+                        pointer.clone(),
+                        CursorVisualPosition {
+                            line: relative_line,
+                            column: pending.column,
+                            content_line: 0, // Will be computed in finish()
+                            content_column: pending.content_column,
+                        },
+                    ));
                 }
             }
 

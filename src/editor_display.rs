@@ -103,11 +103,7 @@ impl EditorDisplay {
     }
 
     pub fn get_lines(&self) -> Option<Vec<Line<'static>>> {
-        if let Some(layout) = &self.layout {
-            Some(layout.lines.clone())
-        } else {
-            None
-        }
+        self.layout.as_ref().map(|layout| layout.lines.clone())
     }
 
     /// Get the last cursor visual position
@@ -174,10 +170,10 @@ impl EditorDisplay {
         let layout = self.layout.as_mut().unwrap();
 
         // Check if this paragraph already has positions tracked
-        if let Some(para_info) = layout.paragraph_lines.get(paragraph_index) {
-            if !para_info.positions.is_empty() {
-                return; // Already have positions
-            }
+        if let Some(para_info) = layout.paragraph_lines.get(paragraph_index)
+            && !para_info.positions.is_empty()
+        {
+            return; // Already have positions
         }
 
         // Need to populate positions for this paragraph
@@ -383,7 +379,7 @@ impl EditorDisplay {
         }
     }
 
-    pub fn force_full_relayout(&mut self) {
+    fn force_full_relayout(&mut self) {
         self.last_modified_paragraphs.clear();
         self.layout_dirty = true;
     }
@@ -512,7 +508,6 @@ impl EditorDisplay {
             } else if cursor.line > old_end_line && line_count_delta != 0 {
                 // Cursor is after the updated paragraph - adjust line number
                 cursor.line = (cursor.line as isize + line_count_delta) as usize;
-            } else {
             }
         }
 

@@ -1142,7 +1142,7 @@ impl App {
         let word_count = self.count_words();
 
         // Shortcuts ordered from least to most important (reversed order for display)
-        let all_shortcuts = vec!["^S:Save", "^Q:Quit"];
+        let all_shortcuts = ["^S:Save", "^Q:Quit"];
 
         // Build the left part of the status line
         let mut spans = Vec::new();
