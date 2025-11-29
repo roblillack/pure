@@ -114,6 +114,50 @@ pub fn previous_word_boundary(text: &str, offset: usize) -> usize {
     idx
 }
 
+/// Find the start of the word at the given offset (for word selection).
+pub fn word_start_boundary(text: &str, offset: usize) -> usize {
+    let chars: Vec<char> = text.chars().collect();
+    let mut idx = offset.min(chars.len());
+    if idx == 0 {
+        return 0;
+    }
+
+    // If we're on whitespace, skip backward to find the previous word
+    if idx < chars.len() && chars[idx].is_whitespace() {
+        // Skip backward through whitespace
+        while idx > 0 && chars[idx - 1].is_whitespace() {
+            idx -= 1;
+        }
+        if idx == 0 {
+            return 0;
+        }
+    }
+
+    // Check what character we're on/before
+    let check_idx = if idx < chars.len() { idx } else { idx - 1 };
+
+    // If we're on/in a word character, move to the start of this word
+    if check_idx < chars.len() && is_word_char(chars[check_idx]) {
+        while idx > 0 && is_word_char(chars[idx - 1]) {
+            idx -= 1;
+        }
+        return idx;
+    }
+
+    // If we're on punctuation or other non-word, non-whitespace character
+    if check_idx < chars.len()
+        && !chars[check_idx].is_whitespace()
+        && !is_word_char(chars[check_idx])
+    {
+        while idx > 0 && !chars[idx - 1].is_whitespace() && !is_word_char(chars[idx - 1]) {
+            idx -= 1;
+        }
+        return idx;
+    }
+
+    idx
+}
+
 pub fn next_word_boundary(text: &str, offset: usize) -> usize {
     let chars: Vec<char> = text.chars().collect();
     let len = chars.len();
@@ -146,6 +190,40 @@ pub fn next_word_boundary(text: &str, offset: usize) -> usize {
         idx += 1;
     }
     while idx < len && chars[idx].is_whitespace() {
+        idx += 1;
+    }
+    idx
+}
+
+/// Find the end of the word at the given offset (for word selection).
+pub fn word_end_boundary(text: &str, offset: usize) -> usize {
+    let chars: Vec<char> = text.chars().collect();
+    let len = chars.len();
+    let mut idx = offset.min(len);
+    if idx >= len {
+        return len;
+    }
+
+    // If we're on whitespace, skip it to find the next word
+    if chars[idx].is_whitespace() {
+        while idx < len && chars[idx].is_whitespace() {
+            idx += 1;
+        }
+        if idx >= len {
+            return len;
+        }
+    }
+
+    // If we're on a word character, move to the end of the word
+    if is_word_char(chars[idx]) {
+        while idx < len && is_word_char(chars[idx]) {
+            idx += 1;
+        }
+        return idx;
+    }
+
+    // If we're on punctuation or other non-word, non-whitespace character
+    while idx < len && !chars[idx].is_whitespace() && !is_word_char(chars[idx]) {
         idx += 1;
     }
     idx

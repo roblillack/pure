@@ -1440,7 +1440,10 @@ fn bench_mouse_selection_drag() {
         let drag_end = 100u16.min((total_lines - 1) as u16);
         let num_positions = (drag_end - drag_start + 1) as usize;
 
-        println!("\nSimulating drag from line {} to line {}", drag_start, drag_end);
+        println!(
+            "\nSimulating drag from line {} to line {}",
+            drag_start, drag_end
+        );
         println!("Total positions to check: {}", num_positions);
 
         let iterations = if name.contains("Huge") { 3 } else { 10 };
