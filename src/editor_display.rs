@@ -1262,12 +1262,35 @@ impl EditorDisplay {
 
     /// Set paragraph type with layout update
     pub fn set_paragraph_type(&mut self, target: tdoc::ParagraphType) -> bool {
-        let para_index = self.editor.cursor_pointer().paragraph_path.root_index();
+        // Track the paragraph count and affected paragraph before the change
+        let para_count_before = self.editor.document().paragraphs.len();
+        let para_index_before = self.editor.cursor_pointer().paragraph_path.root_index();
+
         let result = self.editor.set_paragraph_type(target);
-        // Changing paragraph type affects structure and rendering
-        if let Some(index) = para_index {
-            self.mark_paragraph_modified(index);
+
+        if !result {
+            return false;
         }
+
+        let para_count_after = self.editor.document().paragraphs.len();
+        let para_index_after = self.editor.cursor_pointer().paragraph_path.root_index();
+
+        // Determine which paragraphs were affected by the structural change
+        if para_count_before == para_count_after {
+            // No structural change in paragraph count - simple type change
+            // Mark the paragraph that changed (could be before or after cursor position)
+            if let Some(idx) = para_index_before.or(para_index_after) {
+                self.mark_paragraph_modified(idx);
+            }
+        } else {
+            // Structural change occurred (list split, merge, etc.)
+            // We need to force a full re-render because:
+            // 1. Paragraph indices have shifted
+            // 2. Multiple paragraphs may have been created/merged
+            // 3. The paragraph_lines cache is now misaligned with the document structure
+            self.force_full_relayout();
+        }
+
         self.clear_render_cache();
         result
     }
@@ -2422,6 +2445,323 @@ mod tests {
         assert!(
             display.layout_dirty,
             "layout_dirty should be true after paragraph merge"
+        );
+    }
+
+    #[test]
+    fn test_convert_list_item_to_text_updates_display() {
+        // Test converting a list item (from a multi-item list) to a text paragraph
+        // This tests the bug where incremental update can't track structural changes
+        let doc = ftml! {
+            ul {
+                li { p { "First item" } }
+                li { p { "Second item" } }
+                li { p { "Third item" } }
+            }
+        };
+        let mut editor = DocumentEditor::new(doc);
+        editor.ensure_cursor_selectable();
+        let mut display = EditorDisplay::new(editor);
+
+        // Render initial state
+        display.render_document_with_positions(80, 0, None);
+        let initial_text = display.get_txt();
+        eprintln!("Initial text:\n{}", initial_text);
+        eprintln!("Initial paragraph count: {}", display.editor.document().paragraphs.len());
+
+        // Should have bullet points
+        assert!(initial_text.contains("•"), "Should have bullet points initially");
+
+        // Move to the second list item
+        display.move_cursor_vertical(1);
+        let cursor_pos = display.cursor_pointer();
+        let para_index_before = cursor_pos.paragraph_path.root_index();
+        eprintln!("Cursor at second item: {:?}", cursor_pos);
+        eprintln!("Root paragraph index before: {:?}", para_index_before);
+
+        // Convert the second item to a text paragraph
+        // This will cause a structural change - the list gets split
+        assert!(
+            display.set_paragraph_type(tdoc::ParagraphType::Text),
+            "Should successfully convert list item to text paragraph"
+        );
+
+        eprintln!("After conversion paragraph count: {}", display.editor.document().paragraphs.len());
+        eprintln!("layout_dirty: {}", display.layout_dirty);
+        eprintln!("last_modified_paragraphs: {:?}", display.last_modified_paragraphs);
+
+        // The bug: last_modified_paragraphs contains index 0 (the old list paragraph),
+        // but the structure has changed dramatically - the list was split into 3 paragraphs
+        // Incremental update will try to update paragraph 0, but that's not sufficient
+
+        // Verify that layout_dirty was set to true (indicating a full re-render is needed)
+        assert!(
+            display.layout_dirty,
+            "layout_dirty should be true after structural change in set_paragraph_type"
+        );
+
+        // Render to see the change
+        display.render_document(80, 0, None);
+        let after_text = display.get_txt();
+        eprintln!("After conversion:\n{}", after_text);
+
+        // Count bullet points - should be 2 (first and third items), not 3
+        let bullet_count = after_text.matches('•').count();
+        assert_eq!(
+            bullet_count, 2,
+            "After converting second item to text, should have 2 bullets, but found {}. Text:\n{}",
+            bullet_count, after_text
+        );
+
+        // Verify the structure is correct
+        assert_ne!(
+            initial_text, after_text,
+            "Display should update after converting list item to text paragraph"
+        );
+    }
+
+    #[test]
+    fn test_convert_checklist_item_to_text_updates_display() {
+        // Test converting a checklist item to a text paragraph
+        let doc = ftml! {
+            checklist {
+                todo { "First task" }
+                todo { "Second task" }
+                done { "Third task" }
+            }
+        };
+        let mut editor = DocumentEditor::new(doc);
+        editor.ensure_cursor_selectable();
+        let mut display = EditorDisplay::new(editor);
+
+        // Render initial state
+        display.render_document_with_positions(80, 0, None);
+        let initial_text = display.get_txt();
+        eprintln!("Initial checklist:\n{}", initial_text);
+
+        // Should have checkboxes
+        assert!(initial_text.contains("[ ]") || initial_text.contains("[✓]"),
+                "Should have checkboxes initially");
+
+        // Move to the second checklist item
+        display.move_cursor_vertical(1);
+
+        // Convert to text paragraph
+        assert!(
+            display.set_paragraph_type(tdoc::ParagraphType::Text),
+            "Should successfully convert checklist item to text paragraph"
+        );
+
+        // Render to see the change
+        display.render_document_with_positions(80, 0, None);
+        let after_text = display.get_txt();
+        eprintln!("After conversion:\n{}", after_text);
+
+        // Count checkboxes - should be 2 (first and third items), not 3
+        let checkbox_count = after_text.matches("[ ]").count() + after_text.matches("[✓]").count();
+        assert_eq!(
+            checkbox_count, 2,
+            "After converting second item to text, should have 2 checkboxes, but found {}. Text:\n{}",
+            checkbox_count, after_text
+        );
+
+        assert_ne!(
+            initial_text, after_text,
+            "Display should update after converting checklist item to text paragraph"
+        );
+    }
+
+    #[test]
+    fn test_simple_paragraph_type_change_uses_incremental_update() {
+        // Test that simple type changes (no structural change) use incremental update
+        let doc = ftml! {
+            p { "This is a text paragraph" }
+        };
+        let mut editor = DocumentEditor::new(doc);
+        editor.ensure_cursor_selectable();
+        let mut display = EditorDisplay::new(editor);
+
+        // Render initial state
+        display.render_document_with_positions(80, 0, None);
+        let initial_text = display.get_txt();
+        eprintln!("Initial text:\n{}", initial_text);
+
+        let para_count_before = display.editor.document().paragraphs.len();
+
+        // Convert to quote (should not change paragraph count, but has visible indentation)
+        assert!(
+            display.set_paragraph_type(tdoc::ParagraphType::Quote),
+            "Should successfully convert text to quote"
+        );
+
+        let para_count_after = display.editor.document().paragraphs.len();
+        eprintln!("Paragraph count: before={}, after={}", para_count_before, para_count_after);
+        eprintln!("layout_dirty: {}", display.layout_dirty);
+        eprintln!("last_modified_paragraphs: {:?}", display.last_modified_paragraphs);
+
+        // Should have same paragraph count (no structural change)
+        assert_eq!(para_count_before, para_count_after, "Paragraph count should not change");
+
+        // Should use incremental update (layout_dirty false, last_modified_paragraphs cleared after update)
+        assert!(!display.layout_dirty,
+                "Should use incremental update for simple type change (layout_dirty should be false)");
+
+        // Verify the display updates correctly
+        display.render_document(80, 0, None);
+        let after_text = display.get_txt();
+        eprintln!("After conversion:\n{}", after_text);
+
+        // Quote should have vertical bar prefix
+        assert!(after_text.contains("|"), "Quote should have | prefix");
+        assert_ne!(initial_text, after_text, "Display should update after type change");
+    }
+
+    #[test]
+    fn test_convert_quote_to_text_uses_incremental_update() {
+        // Test converting quote back to text also uses incremental update
+        let doc = ftml! {
+            quote { p { "Quoted text" } }
+        };
+        let mut editor = DocumentEditor::new(doc);
+        editor.ensure_cursor_selectable();
+        let mut display = EditorDisplay::new(editor);
+
+        display.render_document_with_positions(80, 0, None);
+        let para_count_before = display.editor.document().paragraphs.len();
+
+        assert!(
+            display.set_paragraph_type(tdoc::ParagraphType::Text),
+            "Should successfully convert quote to text"
+        );
+
+        let para_count_after = display.editor.document().paragraphs.len();
+
+        // Should have same paragraph count
+        assert_eq!(para_count_before, para_count_after);
+
+        // Should use incremental update (layout_dirty should be false)
+        assert!(!display.layout_dirty,
+                "Should use incremental update (layout_dirty should be false)");
+    }
+
+    #[test]
+    fn test_convert_single_item_list_to_text_uses_incremental_update() {
+        // Test converting a single-item list to text uses incremental update (promotes to parent)
+        let doc = ftml! {
+            ul { li { p { "Only item" } } }
+        };
+        let mut editor = DocumentEditor::new(doc);
+        editor.ensure_cursor_selectable();
+        let mut display = EditorDisplay::new(editor);
+
+        display.render_document_with_positions(80, 0, None);
+        let para_count_before = display.editor.document().paragraphs.len();
+
+        assert!(
+            display.set_paragraph_type(tdoc::ParagraphType::Text),
+            "Should successfully convert single-item list to text"
+        );
+
+        let para_count_after = display.editor.document().paragraphs.len();
+
+        // Should have same paragraph count (promotion replaces list with text)
+        assert_eq!(para_count_before, para_count_after);
+
+        // Should use incremental update
+        assert!(!display.layout_dirty,
+                "Should use incremental update for single-item list promotion");
+    }
+
+    #[test]
+    fn test_list_split_forces_full_relayout() {
+        // Test that structural changes (list splitting) force full relayout
+        let doc = ftml! {
+            ul {
+                li { p { "First item" } }
+                li { p { "Second item" } }
+                li { p { "Third item" } }
+            }
+        };
+        let mut editor = DocumentEditor::new(doc);
+        editor.ensure_cursor_selectable();
+        let mut display = EditorDisplay::new(editor);
+
+        display.render_document_with_positions(80, 0, None);
+        let para_count_before = display.editor.document().paragraphs.len();
+
+        // Move to second item
+        display.move_cursor_vertical(1);
+
+        // Convert to text - this will split the list
+        assert!(
+            display.set_paragraph_type(tdoc::ParagraphType::Text),
+            "Should successfully convert list item to text"
+        );
+
+        let para_count_after = display.editor.document().paragraphs.len();
+
+        // Paragraph count should have changed (list was split)
+        assert_ne!(para_count_before, para_count_after,
+                   "Paragraph count should change when list is split");
+
+        // Should force full relayout (layout_dirty should be true)
+        assert!(display.layout_dirty,
+                "Should force full relayout when structure changes (layout_dirty should be true)");
+    }
+
+    #[test]
+    fn test_convert_numbered_list_item_to_text_updates_display() {
+        // Test converting a numbered list item to a text paragraph
+        let doc = ftml! {
+            ol {
+                li { p { "First step" } }
+                li { p { "Second step" } }
+                li { p { "Third step" } }
+            }
+        };
+        let mut editor = DocumentEditor::new(doc);
+        editor.ensure_cursor_selectable();
+        let mut display = EditorDisplay::new(editor);
+
+        // Render initial state
+        display.render_document_with_positions(80, 0, None);
+        let initial_text = display.get_txt();
+        eprintln!("Initial numbered list:\n{}", initial_text);
+
+        // Should have numbers
+        assert!(initial_text.contains("1.") && initial_text.contains("2.") && initial_text.contains("3."),
+                "Should have numbered items initially");
+
+        // Move to the second list item
+        display.move_cursor_vertical(1);
+
+        // Convert to text paragraph
+        assert!(
+            display.set_paragraph_type(tdoc::ParagraphType::Text),
+            "Should successfully convert numbered item to text paragraph"
+        );
+
+        // Render to see the change
+        display.render_document_with_positions(80, 0, None);
+        let after_text = display.get_txt();
+        eprintln!("After conversion:\n{}", after_text);
+
+        // The list gets split into two separate numbered lists (before and after the converted item)
+        // Each new list starts numbering from 1.
+        let numbered_items = after_text.matches("1.").count();
+        assert_eq!(
+            numbered_items, 2,
+            "Should have two '1.' items (one in each split list), but found {}. Text:\n{}",
+            numbered_items, after_text
+        );
+        assert!(
+            !after_text.contains("2.") && !after_text.contains("3."),
+            "Should not have 2. or 3. since each split list starts from 1"
+        );
+
+        assert_ne!(
+            initial_text, after_text,
+            "Display should update after converting numbered item to text paragraph"
         );
     }
 }
