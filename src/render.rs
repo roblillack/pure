@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use ratatui::{
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
 };
 use unicode_width::UnicodeWidthChar;
@@ -11,6 +11,7 @@ use tdoc::{Document, InlineStyle, Paragraph, ParagraphType, Span as DocSpan};
 use crate::editor::{
     CursorPointer, ParagraphPath, RevealTagKind, RevealTagRef, SegmentKind, SpanPath,
 };
+use crate::theme::Theme;
 
 #[derive(Clone, Copy)]
 #[allow(dead_code)]
@@ -104,12 +105,14 @@ pub fn render_document_direct(
     left_padding: usize,
     reveal_tags: &[RevealTagRef],
     direct_tracking: DirectCursorTracking,
+    theme: &Theme,
 ) -> RenderResult {
     let mut renderer = DirectRenderer::new(
         wrap_width.max(1),
         left_padding,
         reveal_tags,
         direct_tracking,
+        theme,
     );
     renderer.render_document(document);
     renderer.finish()
@@ -127,6 +130,7 @@ pub fn layout_paragraph(
     prefix: &str,
     reveal_tags: &[RevealTagRef],
     direct_tracking: DirectCursorTracking,
+    theme: &Theme,
 ) -> ParagraphLayout {
     // Create a temporary renderer for this paragraph only
     let mut renderer = DirectRenderer::new(
@@ -134,6 +138,7 @@ pub fn layout_paragraph(
         left_padding,
         reveal_tags,
         direct_tracking,
+        theme,
     );
 
     renderer.current_paragraph_index = paragraph_index;
@@ -213,6 +218,9 @@ struct DirectRenderer<'a> {
 
     // Paragraph line range tracking
     paragraph_lines: Vec<ParagraphLineInfo>,
+
+    // Theme for styling
+    theme: Theme,
 }
 
 impl<'a> DirectRenderer<'a> {
@@ -222,6 +230,7 @@ impl<'a> DirectRenderer<'a> {
         left_padding: usize,
         reveal_tags: &[RevealTagRef],
         direct_tracking: DirectCursorTracking<'a>,
+        theme: &Theme,
     ) -> Self {
         let wrap_limit = if wrap_width > 1 { wrap_width - 1 } else { 1 };
         let padding = if left_padding > 0 {
@@ -254,6 +263,7 @@ impl<'a> DirectRenderer<'a> {
             next_marker_id: 0,
             marker_to_pointer: HashMap::new(),
             paragraph_lines: Vec::new(),
+            theme: theme.clone(),
         }
     }
 
@@ -288,6 +298,7 @@ impl<'a> DirectRenderer<'a> {
                 "",
                 &reveal_tags,
                 direct_tracking,
+                &self.theme,
             );
 
             // Add the lines and metrics to our result
@@ -692,13 +703,13 @@ impl<'a> DirectRenderer<'a> {
         base_style: Style,
         fragments: &mut Vec<FragmentItem>,
     ) {
-        let style = merge_style(base_style, span.style, span.link_target.as_deref());
+        let style = self.merge_style(base_style, span.style, span.link_target.as_deref());
 
         // Insert reveal tag for style start if this span has a style
         let has_style = span.style != InlineStyle::None;
         if has_style && !self.reveal_tags.is_empty() {
             let display = reveal_tag_display(span.style, RevealTagKind::Start);
-            let tag_style = Style::default().fg(Color::Yellow).bg(Color::Blue);
+            let tag_style = self.theme.reveal_tag_style();
             let width = visible_width(&display);
             fragments.push(FragmentItem::Token(Fragment {
                 text: display,
@@ -746,7 +757,7 @@ impl<'a> DirectRenderer<'a> {
         // Insert reveal tag for style end if this span has a style
         if has_style && !self.reveal_tags.is_empty() {
             let display = reveal_tag_display(span.style, RevealTagKind::End);
-            let tag_style = Style::default().fg(Color::Yellow).bg(Color::Blue);
+            let tag_style = self.theme.reveal_tag_style();
             let width = visible_width(&display);
             fragments.push(FragmentItem::Token(Fragment {
                 text: display,
@@ -995,7 +1006,13 @@ impl<'a> DirectRenderer<'a> {
     ) -> Vec<LineOutput> {
         // Fragments are already converted to Fragment type in tokenize_text_direct,
         // so we can just call wrap_fragments directly
-        wrap_fragments(fragments, first_prefix, continuation_prefix, width)
+        wrap_fragments(
+            fragments,
+            first_prefix,
+            continuation_prefix,
+            width,
+            &self.theme,
+        )
     }
 
     fn consume_lines_direct(&mut self, outputs: Vec<LineOutput>) {
@@ -1073,6 +1090,30 @@ impl<'a> DirectRenderer<'a> {
         let available_width = self.wrap_width.saturating_sub(prefix.chars().count());
         let dash_count = available_width.max(MIN_FENCE_WIDTH);
         format!("{}{}", prefix, "-".repeat(dash_count))
+    }
+
+    fn merge_style(&self, base: Style, inline: InlineStyle, _link_target: Option<&str>) -> Style {
+        match inline {
+            InlineStyle::None => base,
+            InlineStyle::Bold => base.add_modifier(Modifier::BOLD),
+            InlineStyle::Italic => base.add_modifier(Modifier::ITALIC),
+            InlineStyle::Highlight => self.theme.highlight_style().patch(base),
+            InlineStyle::Underline => base.add_modifier(Modifier::UNDERLINED),
+            InlineStyle::Strike => base.add_modifier(Modifier::CROSSED_OUT),
+            InlineStyle::Link => base
+                .add_modifier(Modifier::UNDERLINED)
+                .fg(self.theme.link_color),
+            InlineStyle::Code => base.add_modifier(Modifier::DIM),
+        }
+    }
+
+    #[allow(dead_code)]
+    fn apply_selection_style(&self, style: Style, selected: bool) -> Style {
+        if selected {
+            style.add_modifier(Modifier::REVERSED)
+        } else {
+            style
+        }
     }
 
     fn finish(mut self) -> RenderResult {
@@ -1307,22 +1348,13 @@ fn is_layout_fragment(item: &FragmentItem) -> bool {
     }
 }
 
-fn merge_style(base: Style, inline: InlineStyle, _link_target: Option<&str>) -> Style {
-    match inline {
-        InlineStyle::None => base,
-        InlineStyle::Bold => base.add_modifier(Modifier::BOLD),
-        InlineStyle::Italic => base.add_modifier(Modifier::ITALIC),
-        InlineStyle::Highlight => base.add_modifier(Modifier::REVERSED),
-        InlineStyle::Underline => base.add_modifier(Modifier::UNDERLINED),
-        InlineStyle::Strike => base.add_modifier(Modifier::CROSSED_OUT),
-        InlineStyle::Link => base.add_modifier(Modifier::UNDERLINED).fg(Color::Blue),
-        InlineStyle::Code => base.add_modifier(Modifier::DIM),
-    }
-}
-
-fn apply_selection_style(style: Style, selected: bool) -> Style {
+fn apply_selection_style(style: Style, selected: bool, theme: &Theme) -> Style {
     if selected {
-        style.add_modifier(Modifier::REVERSED)
+        // Selection should override all colors, but preserve modifiers from the base style
+        theme
+            .selection_style()
+            .add_modifier(style.add_modifier)
+            .remove_modifier(style.sub_modifier)
     } else {
         style
     }
@@ -1333,9 +1365,10 @@ fn wrap_fragments(
     first_prefix: &str,
     continuation_prefix: &str,
     width: usize,
+    theme: &Theme,
 ) -> Vec<LineOutput> {
     let mut outputs = Vec::new();
-    let mut builder = LineBuilder::new(first_prefix.to_string(), width, false);
+    let mut builder = LineBuilder::new(first_prefix.to_string(), width, false, theme);
     let mut pending_whitespace: Vec<Fragment> = Vec::new();
 
     for fragment in fragments {
@@ -1344,8 +1377,12 @@ fn wrap_fragments(
                 builder.consume_pending(&mut pending_whitespace);
                 let (line, active_selection) = builder.build_line();
                 outputs.push(line);
-                builder =
-                    LineBuilder::new(continuation_prefix.to_string(), width, active_selection);
+                builder = LineBuilder::new(
+                    continuation_prefix.to_string(),
+                    width,
+                    active_selection,
+                    theme,
+                );
             }
             FragmentItem::Token(token) => match token.kind {
                 FragmentKind::Whitespace => {
@@ -1366,6 +1403,7 @@ fn wrap_fragments(
                                 continuation_prefix.to_string(),
                                 width,
                                 active_selection,
+                                theme,
                             );
                             continue;
                         }
@@ -1386,6 +1424,7 @@ fn wrap_fragments(
                                 continuation_prefix.to_string(),
                                 width,
                                 active_selection,
+                                theme,
                             );
                             if let Some(tail) = tail_opt {
                                 token = tail;
@@ -1493,17 +1532,18 @@ fn split_fragment(fragment: Fragment, limit: usize) -> (Fragment, Option<Fragmen
     (head_fragment, tail_fragment)
 }
 
-struct LineBuilder {
+struct LineBuilder<'a> {
     segments: Vec<LineSegment>,
     events: Vec<LocatedEvent>,
     width: usize,
     prefix_width: usize,
     content_width: usize,
     selection_active: bool,
+    theme: &'a Theme,
 }
 
-impl LineBuilder {
-    fn new(prefix: String, _width_limit: usize, selection_active: bool) -> Self {
+impl<'a> LineBuilder<'a> {
+    fn new(prefix: String, _width_limit: usize, selection_active: bool, theme: &'a Theme) -> Self {
         let prefix_width = visible_width(&prefix);
         let prefix_segment = if prefix.is_empty() {
             None
@@ -1524,6 +1564,7 @@ impl LineBuilder {
             prefix_width,
             content_width: 0,
             selection_active,
+            theme,
         }
     }
 
@@ -1610,7 +1651,7 @@ impl LineBuilder {
 
         if !buffer.is_empty() {
             let text_segment = std::mem::take(&mut buffer);
-            let segment_style = apply_selection_style(style, buffer_selected);
+            let segment_style = apply_selection_style(style, buffer_selected, self.theme);
             self.push_segment(text_segment, segment_style, counts_content);
         }
     }
@@ -1630,7 +1671,7 @@ impl LineBuilder {
             TextEventKind::SelectionStart => {
                 if !buffer.is_empty() {
                     let text = std::mem::take(buffer);
-                    let style = apply_selection_style(fragment_style, *buffer_selected);
+                    let style = apply_selection_style(fragment_style, *buffer_selected, self.theme);
                     self.push_segment(text, style, counts_content);
                 }
                 self.selection_active = true;
@@ -1639,7 +1680,7 @@ impl LineBuilder {
             TextEventKind::SelectionEnd => {
                 if !buffer.is_empty() {
                     let text = std::mem::take(buffer);
-                    let style = apply_selection_style(fragment_style, *buffer_selected);
+                    let style = apply_selection_style(fragment_style, *buffer_selected, self.theme);
                     self.push_segment(text, style, counts_content);
                 }
                 self.selection_active = false;
@@ -1738,7 +1779,8 @@ mod tests {
             selection: None,
             track_all_positions: false,
         };
-        render_document_direct(&document, 120, 0, &[], tracking)
+        let theme = Theme::default();
+        render_document_direct(&document, 120, 0, &[], tracking, &theme)
     }
 
     fn lines_to_strings(lines: &[Line<'_>]) -> Vec<String> {
@@ -1810,7 +1852,8 @@ mod tests {
             selection: None,
             track_all_positions: false,
         };
-        let rendered = render_document_direct(editor.document(), 120, 0, &[], tracking);
+        let theme = Theme::default();
+        let rendered = render_document_direct(editor.document(), 120, 0, &[], tracking, &theme);
         let lines = lines_to_strings(&rendered.lines);
         assert_eq!(lines, vec!["• Alpha", "", "  Beta"]);
     }
@@ -1829,7 +1872,8 @@ mod tests {
             selection: None,
             track_all_positions: false,
         };
-        let rendered = render_document_direct(editor.document(), 120, 0, &[], tracking);
+        let theme = Theme::default();
+        let rendered = render_document_direct(editor.document(), 120, 0, &[], tracking, &theme);
         assert!(
             rendered.cursor.is_some(),
             "expected cursor to be rendered for checklist content"
@@ -1860,7 +1904,8 @@ mod tests {
             selection: None,
             track_all_positions: false,
         };
-        let rendered = render_document_direct(editor.document(), 120, 0, &[], tracking);
+        let theme = Theme::default();
+        let rendered = render_document_direct(editor.document(), 120, 0, &[], tracking, &theme);
         let cursor = rendered.cursor.expect("cursor position missing");
 
         assert_eq!(cursor.line, 2, "visual line should match second list item");
@@ -1890,7 +1935,8 @@ mod tests {
             selection: None,
             track_all_positions: false,
         };
-        let rendered = render_document_direct(editor.document(), 120, 0, &[], tracking);
+        let theme = Theme::default();
+        let rendered = render_document_direct(editor.document(), 120, 0, &[], tracking, &theme);
         let cursor = rendered.cursor.expect("cursor position missing");
 
         assert_eq!(cursor.line, 0);
@@ -1911,7 +1957,8 @@ mod tests {
             selection: None,
             track_all_positions: true,
         };
-        let rendered = render_document_direct(editor.document(), 12, 0, &[], tracking);
+        let theme = Theme::default();
+        let rendered = render_document_direct(editor.document(), 12, 0, &[], tracking, &theme);
 
         let mut columns_per_line: Vec<Vec<(u16, u16)>> = Vec::new();
         // Extract positions from paragraph_lines
@@ -1956,7 +2003,8 @@ mod tests {
             selection: None,
             track_all_positions: true,
         };
-        let rendered = render_document_direct(editor.document(), 10, 0, &[], tracking);
+        let theme = Theme::default();
+        let rendered = render_document_direct(editor.document(), 10, 0, &[], tracking, &theme);
         let cursor = rendered.cursor.expect("cursor position missing");
         let lines = lines_to_strings(&rendered.lines);
 
@@ -2001,7 +2049,9 @@ mod tests {
             selection: None,
             track_all_positions: false,
         };
-        let rendered = render_document_direct(editor.document(), 120, 0, &reveal_tags, tracking);
+        let theme = Theme::default();
+        let rendered =
+            render_document_direct(editor.document(), 120, 0, &reveal_tags, tracking, &theme);
         let lines = lines_to_strings(&rendered.lines);
         assert_eq!(lines, vec!["Hello [Bold>World<Bold]!"]);
 
@@ -2060,7 +2110,9 @@ mod tests {
                 selection: None,
                 track_all_positions: false,
             };
-            let rendered = render_document_direct(editor.document(), 120, 0, reveal_tags, tracking);
+            let theme = Theme::default();
+            let rendered =
+                render_document_direct(editor.document(), 120, 0, reveal_tags, tracking, &theme);
             let cursor = rendered.cursor.expect("cursor should be rendered");
             let actual_position = usize::from(cursor.content_column) + 1;
 

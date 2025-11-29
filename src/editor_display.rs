@@ -8,6 +8,7 @@ use crate::render::{
     CursorVisualPosition, DirectCursorTracking, ParagraphLineInfo, RenderResult, layout_paragraph,
     render_document_direct,
 };
+use crate::theme::Theme;
 
 /// EditorDisplay wraps a DocumentEditor and manages all visual/rendering concerns.
 /// This includes cursor movement in visual space, wrapping, and rendering.
@@ -35,6 +36,8 @@ pub struct EditorDisplay {
     last_modified_paragraphs: Vec<usize>,
     /// Track the last selection to detect selection changes
     last_selection: Option<(CursorPointer, CursorPointer)>,
+    /// Theme for rendering
+    theme: Theme,
 }
 
 impl EditorDisplay {
@@ -55,7 +58,19 @@ impl EditorDisplay {
             layout_dirty: true,
             last_modified_paragraphs: Vec::new(),
             last_selection: None,
+            theme: Theme::default(),
         }
+    }
+
+    /// Set the theme for this display
+    pub fn set_theme(&mut self, theme: Theme) {
+        self.theme = theme;
+        self.layout_dirty = true; // Force re-render with new theme
+    }
+
+    /// Get the current theme
+    pub fn theme(&self) -> &Theme {
+        &self.theme
     }
 
     /// Get all visual positions from paragraph_lines (for tests and legacy code)
@@ -212,6 +227,7 @@ impl EditorDisplay {
                 selection: None,
                 track_all_positions: true,
             },
+            &self.theme,
         );
 
         // Calculate content_line values from the full document layout
@@ -431,6 +447,7 @@ impl EditorDisplay {
                 selection: None,
                 track_all_positions: true,
             },
+            &self.theme,
         );
 
         let new_line_count = layout.line_count;
@@ -616,6 +633,7 @@ impl EditorDisplay {
                 selection: selection.as_ref().map(|(start, end)| (start, end)),
                 track_all_positions,
             },
+            &self.theme,
         );
 
         // Update internal state from render result

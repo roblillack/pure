@@ -1,6 +1,7 @@
 use pure_tui::{
     editor,
     render::{self, DirectCursorTracking},
+    theme::Theme,
 };
 use std::time::{Duration, Instant};
 use tdoc::{Document, InlineStyle, Paragraph, ParagraphType, Span};
@@ -229,13 +230,14 @@ fn bench_rendering_performance() {
                     selection: None,
                     track_all_positions: false,
                 };
+                let theme = Theme::default();
                 let _ = render::render_document_direct(
                     &doc,
                     80,  // wrap_width
                     0,   // left_padding
                     &[], // reveal_tags
                     tracking,
-                    // None
+                    &theme,
                 );
             },
         );
@@ -271,7 +273,8 @@ fn bench_rendering_with_styles() {
                 selection: None,
                 track_all_positions: false,
             };
-            let _ = render::render_document_direct(&doc, 80, 0, &[], tracking);
+            let theme = Theme::default();
+            let _ = render::render_document_direct(&doc, 80, 0, &[], tracking, &theme);
         });
         result.print();
     }
@@ -291,7 +294,8 @@ fn bench_rendering_reveal_codes() {
             selection: None,
             track_all_positions: false,
         };
-        let _ = render::render_document_direct(&doc, 80, 0, &[], tracking);
+        let theme = Theme::default();
+        let _ = render::render_document_direct(&doc, 80, 0, &[], tracking, &theme);
     });
     result_normal.print();
 
@@ -301,7 +305,8 @@ fn bench_rendering_reveal_codes() {
             selection: None,
             track_all_positions: false,
         };
-        let _ = render::render_document_direct(&doc, 80, 0, &[], tracking);
+        let theme = Theme::default();
+        let _ = render::render_document_direct(&doc, 80, 0, &[], tracking, &theme);
     });
     result_reveal.print();
 
@@ -508,7 +513,8 @@ fn bench_wrap_width_impact() {
                     selection: None,
                     track_all_positions: false,
                 };
-                let _ = render::render_document_direct(&doc, width, 0, &[], tracking);
+                let theme = Theme::default();
+                let _ = render::render_document_direct(&doc, width, 0, &[], tracking, &theme);
             },
         );
         result.print();
@@ -534,7 +540,8 @@ fn bench_memory_allocations() {
         selection: None,
         track_all_positions: false,
     };
-    let render_result = render::render_document_direct(&doc, 80, 0, &[], tracking);
+    let theme = Theme::default();
+    let render_result = render::render_document_direct(&doc, 80, 0, &[], tracking, &theme);
     println!("  Rendered lines: {}", render_result.lines.len());
     println!(
         "  Cursor map entries: {}",
@@ -906,7 +913,8 @@ fn bench_user_guide_rendering() {
             selection: None,
             track_all_positions: false,
         };
-        render::render_document_direct(&doc, 80, 0, &[], tracking);
+        let theme = Theme::default();
+        render::render_document_direct(&doc, 80, 0, &[], tracking, &theme);
         durations.push(start.elapsed());
     }
 
@@ -974,7 +982,9 @@ fn bench_real_world_render_flow() {
 
         // Step 2: Render the document directly with cache
         let render_start = Instant::now();
-        let render_result = render::render_document_direct(editor.document(), 80, 0, &[], tracking);
+        let theme = Theme::default();
+        let render_result =
+            render::render_document_direct(editor.document(), 80, 0, &[], tracking, &theme);
         render_times.push(render_start.elapsed());
 
         // Step 3: Clone rendered lines (for ratatui widget)

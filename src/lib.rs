@@ -4,3 +4,4 @@
 pub mod editor;
 pub mod editor_display;
 pub mod render;
+pub mod theme;
