@@ -31,8 +31,8 @@ pub struct EditorDisplay {
     last_text_area: Rect,
     /// Set to true when document changes to trigger re-render
     layout_dirty: bool,
-    /// Track which paragraph was last modified for incremental updates
-    last_modified_paragraph: Option<usize>,
+    /// Track which paragraphs were last modified for incremental updates
+    last_modified_paragraphs: Vec<usize>,
     /// Track the last selection to detect selection changes
     last_selection: Option<(CursorPointer, CursorPointer)>,
 }
@@ -53,7 +53,7 @@ impl EditorDisplay {
             last_total_lines: 0,
             last_text_area: Rect::default(),
             layout_dirty: true,
-            last_modified_paragraph: None,
+            last_modified_paragraphs: Vec::new(),
             last_selection: None,
         }
     }
@@ -137,29 +137,146 @@ impl EditorDisplay {
                 })
         });
 
-        layout.cursor = found;
+        if found.is_some() {
+            layout.cursor = found;
+            return;
+        }
 
-        // If cursor wasn't found (because track_all_positions was false during rendering),
-        // mark layout dirty and force a re-render to populate the cursor position
-        if found.is_none() {
-            self.layout_dirty = true;
-            self.render_document(self.wrap_width, self.left_padding, None);
+        // If cursor wasn't found, re-layout just the paragraph containing the cursor
+        let paragraph_index = cursor_pointer.paragraph_path.root_index();
+        if let Some(para_idx) = paragraph_index {
+            self.ensure_paragraph_positions(para_idx);
+
+            // Try to find the cursor position again after re-layouting
+            let layout = self.layout.as_mut().unwrap();
+            let found = layout.paragraph_lines.iter().find_map(|info| {
+                info.positions
+                    .iter()
+                    .find(|(p, _)| p == &cursor_pointer)
+                    .map(|(_, pos)| {
+                        // Convert relative position to absolute
+                        let mut absolute_pos = *pos;
+                        absolute_pos.line = info.start_line + pos.line;
+                        absolute_pos
+                    })
+            });
+            layout.cursor = found;
+        }
+    }
+
+    /// Ensure positions are populated for a specific paragraph
+    /// Re-layouts just that paragraph with full position tracking if needed
+    fn ensure_paragraph_positions(&mut self, paragraph_index: usize) {
+        let layout = self.layout.as_mut().unwrap();
+
+        // Check if this paragraph already has positions tracked
+        if let Some(para_info) = layout.paragraph_lines.get(paragraph_index)
+            && !para_info.positions.is_empty()
+        {
+            return; // Already have positions
+        }
+
+        // Need to populate positions for this paragraph
+        let document = self.editor.document();
+        let Some(paragraph) = document.paragraphs.get(paragraph_index) else {
+            return;
+        };
+
+        // Get paragraph path
+        let paragraph_path = crate::editor::ParagraphPath::new_root(paragraph_index);
+
+        // Get reveal tags if in reveal codes mode
+        let reveal_tags = if self.editor.reveal_codes() {
+            let (_, _, tags, _) = self
+                .editor
+                .clone_with_markers('\u{F8FF}', None, '\u{F8FE}', '\u{F8FD}');
+            tags
+        } else {
+            Vec::new()
+        };
+
+        // Determine prefix based on paragraph type
+        let prefix = ""; // For text paragraphs; other types would need their specific prefixes
+
+        // Re-layout just this paragraph with full position tracking
+        let para_layout = crate::render::layout_paragraph(
+            paragraph,
+            paragraph_index,
+            paragraph_path,
+            self.wrap_width,
+            self.left_padding,
+            prefix,
+            &reveal_tags,
+            crate::render::DirectCursorTracking {
+                cursor: Some(&self.editor.cursor_pointer()),
+                selection: None,
+                track_all_positions: true,
+            },
+        );
+
+        // Calculate content_line values from the full document layout
+        let line_metrics = {
+            let lines = &layout.lines;
+            lines
+                .iter()
+                .enumerate()
+                .scan(0usize, |content_count, (idx, _)| {
+                    let current = *content_count;
+                    // All lines count as content in our current system
+                    *content_count += 1;
+                    Some((idx, current))
+                })
+                .collect::<std::collections::HashMap<_, _>>()
+        };
+
+        // Update the positions in the existing paragraph_lines entry
+        if let Some(para_info) = layout.paragraph_lines.get_mut(paragraph_index) {
+            let start_line = para_info.start_line;
+
+            // Update positions with correct content_line values
+            let updated_positions: Vec<_> = para_layout
+                .positions
+                .into_iter()
+                .map(|(pointer, mut pos)| {
+                    // Convert relative line to absolute
+                    let absolute_line = start_line + pos.line;
+                    // Look up the correct content_line
+                    if let Some(&content_line) = line_metrics.get(&absolute_line) {
+                        pos.content_line = content_line;
+                    }
+                    (pointer, pos)
+                })
+                .collect();
+
+            para_info.positions = updated_positions;
         }
     }
 
     /// Get cursor positions for a specific visual line.
     /// Positions are read directly from the paragraph_lines structure populated during rendering.
-    fn get_positions_for_line(&self, line: usize) -> Vec<CursorDisplay> {
+    /// If positions aren't available, this will re-layout just the containing paragraph.
+    fn get_positions_for_line(&mut self, line: usize) -> Vec<CursorDisplay> {
         // Find which paragraph contains this line
-        let paragraph_info = self
-            .layout
-            .as_ref()
-            .unwrap()
-            .paragraph_lines
-            .iter()
-            .find(|info| line >= info.start_line && line <= info.end_line);
+        let paragraph_index = {
+            let layout = self.layout.as_ref().unwrap();
+            layout
+                .paragraph_lines
+                .iter()
+                .enumerate()
+                .find(|(_, info)| line >= info.start_line && line <= info.end_line)
+                .map(|(idx, _)| idx)
+        };
 
-        let Some(info) = paragraph_info else {
+        let Some(para_idx) = paragraph_index else {
+            return Vec::new();
+        };
+
+        // Ensure positions are populated for this paragraph
+        self.ensure_paragraph_positions(para_idx);
+
+        // Now get the positions
+        let layout = self.layout.as_ref().unwrap();
+        let Some(info) = layout.paragraph_lines.get(para_idx) else {
             return Vec::new();
         };
 
@@ -225,30 +342,46 @@ impl EditorDisplay {
 
     /// Clear render cache (called when document changes)
     ///
-    /// If a specific paragraph was modified (tracked in last_modified_paragraph),
+    /// If specific paragraphs were modified (tracked in last_modified_paragraphs),
     /// tries to do an incremental update instead of marking the entire layout dirty.
     ///
     /// Returns true if an incremental update succeeded, false if a full re-render is needed.
     pub fn clear_render_cache(&mut self) -> bool {
-        // Try incremental update if we know which paragraph changed
-        if let Some(para_index) = self.last_modified_paragraph
-            && self.update_paragraph_layout(para_index)
-        {
-            // Incremental update succeeded!
-            self.last_modified_paragraph = None;
-            return true; // Incremental update succeeded
+        // Try incremental update if we know which paragraphs changed
+        if !self.last_modified_paragraphs.is_empty() {
+            let paragraphs_to_update = std::mem::take(&mut self.last_modified_paragraphs);
+            let mut all_succeeded = true;
+
+            for para_index in paragraphs_to_update {
+                if !self.update_paragraph_layout(para_index) {
+                    all_succeeded = false;
+                    break;
+                }
+            }
+
+            if all_succeeded {
+                // Incremental update succeeded!
+                return true;
+            }
         }
 
         // Fall back to full re-render
         self.layout_dirty = true;
-        self.last_modified_paragraph = None;
+        self.last_modified_paragraphs.clear();
         false // Full re-render needed
     }
 
     /// Mark a specific paragraph as modified to enable incremental updates
     /// Note: This only sets the tracking, clear_render_cache() must be called separately
     pub fn mark_paragraph_modified(&mut self, paragraph_index: usize) {
-        self.last_modified_paragraph = Some(paragraph_index);
+        if !self.last_modified_paragraphs.contains(&paragraph_index) {
+            self.last_modified_paragraphs.push(paragraph_index);
+        }
+    }
+
+    fn force_full_relayout(&mut self) {
+        self.last_modified_paragraphs.clear();
+        self.layout_dirty = true;
     }
 
     /// Update layout for a single paragraph (incremental update)
@@ -395,6 +528,9 @@ impl EditorDisplay {
     /// - Viewport dimensions changed (wrap_width or left_padding)
     /// - Selection changed
     /// - First render (cached_layout=None)
+    ///
+    /// Note: The layout should already be up-to-date because wrapper methods
+    /// (insert_char, delete, etc.) automatically trigger incremental updates.
     pub fn render_document(
         &mut self,
         wrap_width: usize,
@@ -704,7 +840,7 @@ impl EditorDisplay {
 
     /// Find the closest pointer on a given line to a target column
     /// Uses content_column (without left padding) for comparison
-    fn closest_pointer_on_line(&self, line: usize, column: u16) -> Option<CursorDisplay> {
+    fn closest_pointer_on_line(&mut self, line: usize, column: u16) -> Option<CursorDisplay> {
         // Get positions for this line on-demand
         let positions_on_line = self.get_positions_for_line(line);
 
@@ -751,7 +887,7 @@ impl EditorDisplay {
 
     /// Search for the nearest line with content, starting from start_line and moving in delta direction
     fn search_nearest_line(
-        &self,
+        &mut self,
         start_line: usize,
         delta: i32,
         column: u16,
@@ -798,7 +934,7 @@ impl EditorDisplay {
     }
 
     /// Find the closest pointer near a line (searching up and down if not found on exact line)
-    fn closest_pointer_near_line(&self, line: usize, column: u16) -> Option<CursorDisplay> {
+    fn closest_pointer_near_line(&mut self, line: usize, column: u16) -> Option<CursorDisplay> {
         // Try exact line first
         if let Some(hit) = self.closest_pointer_on_line(line, column) {
             return Some(hit);
@@ -833,7 +969,7 @@ impl EditorDisplay {
 
     /// Convert mouse coordinates to a cursor pointer
     pub fn pointer_from_mouse(
-        &self,
+        &mut self,
         column: u16,
         row: u16,
         scroll_top: usize,
@@ -853,7 +989,10 @@ impl EditorDisplay {
     }
 
     /// Get the start and end boundaries of a visual line
-    pub fn visual_line_boundaries(&self, line: usize) -> Option<(CursorDisplay, CursorDisplay)> {
+    pub fn visual_line_boundaries(
+        &mut self,
+        line: usize,
+    ) -> Option<(CursorDisplay, CursorDisplay)> {
         let mut entries = self.get_positions_for_line(line);
         if entries.is_empty() {
             return None;
@@ -918,7 +1057,7 @@ impl EditorDisplay {
         if let Some(index) = para_index {
             self.mark_paragraph_modified(index);
         }
-        // Note: mark_dirty() in pure.rs will call clear_render_cache() which will use the paragraph index
+        self.clear_render_cache();
         result
     }
 
@@ -929,23 +1068,27 @@ impl EditorDisplay {
         if let Some(index) = para_index {
             self.mark_paragraph_modified(index);
         }
-        // Note: mark_dirty() in pure.rs will call clear_render_cache() which will use the paragraph index
+        self.clear_render_cache();
         result
     }
 
     /// Backspace (delete character before cursor) with incremental layout update
     pub fn backspace(&mut self) -> bool {
         let para_count_before = self.editor.document().paragraphs.len();
-        let para_index = self.editor.cursor_pointer().paragraph_path.root_index();
+        let para_index_before = self.editor.cursor_pointer().paragraph_path.root_index();
+
         let result = self.editor.backspace();
         let para_count_after = self.editor.document().paragraphs.len();
+        let para_index_after = self.editor.cursor_pointer().paragraph_path.root_index();
 
-        // If paragraph count changed, force full re-render (paragraph merge/split)
-        if para_count_before != para_count_after {
-            self.last_modified_paragraph = None;
-        } else if let Some(index) = para_index {
+        // If paragraph count changed or cursor moved to different paragraph, force full re-render
+        // (paragraph merge/split/removal affects structure and cursor tracking)
+        if para_count_before != para_count_after || para_index_before != para_index_after {
+            self.force_full_relayout();
+        } else if let Some(index) = para_index_after {
             self.mark_paragraph_modified(index);
         }
+        self.clear_render_cache();
         result
     }
 
@@ -953,15 +1096,44 @@ impl EditorDisplay {
     pub fn delete(&mut self) -> bool {
         let para_count_before = self.editor.document().paragraphs.len();
         let para_index = self.editor.cursor_pointer().paragraph_path.root_index();
+
+        // Check if next paragraph is a quote or list that might be affected by merge
+        let next_para_needs_update = if let Some(idx) = para_index {
+            if idx + 1 < para_count_before {
+                matches!(
+                    self.editor.document().paragraphs.get(idx + 1),
+                    Some(tdoc::Paragraph::Quote { .. })
+                        | Some(tdoc::Paragraph::OrderedList { .. })
+                        | Some(tdoc::Paragraph::UnorderedList { .. })
+                        | Some(tdoc::Paragraph::Checklist { .. })
+                )
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+
         let result = self.editor.delete();
         let para_count_after = self.editor.document().paragraphs.len();
 
-        // If paragraph count changed, force full re-render (paragraph merge/split)
+        // If paragraph count changed, force full re-render (paragraph merge/split/removal)
         if para_count_before != para_count_after {
-            self.last_modified_paragraph = None;
+            self.force_full_relayout();
+        } else if next_para_needs_update {
+            // Merging with quote/list children affects both paragraphs
+            // Mark both for incremental update
+            self.last_modified_paragraphs.clear();
+            if let Some(idx) = para_index {
+                self.mark_paragraph_modified(idx);
+                if idx + 1 < para_count_after {
+                    self.mark_paragraph_modified(idx + 1);
+                }
+            }
         } else if let Some(index) = para_index {
             self.mark_paragraph_modified(index);
         }
+        self.clear_render_cache();
         result
     }
 
@@ -974,10 +1146,11 @@ impl EditorDisplay {
 
         // If paragraph count changed, force full re-render (paragraph merge/split)
         if para_count_before != para_count_after {
-            self.last_modified_paragraph = None;
+            self.force_full_relayout();
         } else if let Some(index) = para_index {
             self.mark_paragraph_modified(index);
         }
+        self.clear_render_cache();
         result
     }
 
@@ -990,10 +1163,11 @@ impl EditorDisplay {
 
         // If paragraph count changed, force full re-render (paragraph merge/split)
         if para_count_before != para_count_after {
-            self.last_modified_paragraph = None;
+            self.force_full_relayout();
         } else if let Some(index) = para_index {
             self.mark_paragraph_modified(index);
         }
+        self.clear_render_cache();
         result
     }
 
@@ -1001,7 +1175,99 @@ impl EditorDisplay {
     pub fn insert_paragraph_break(&mut self) -> bool {
         let result = self.editor.insert_paragraph_break();
         // Paragraph breaks affect structure - need full re-render
-        self.last_modified_paragraph = None;
+        self.force_full_relayout();
+        self.clear_render_cache();
+        result
+    }
+
+    /// Insert a paragraph break as sibling (Ctrl-P) with layout update
+    pub fn insert_paragraph_break_as_sibling(&mut self) -> bool {
+        // Get the paragraph index before splitting
+        let old_para_idx = self.editor.cursor_pointer().paragraph_path.root_index();
+
+        let result = self.editor.insert_paragraph_break_as_sibling();
+
+        if result {
+            // Splitting creates a new paragraph and modifies the original
+            // Mark both the original paragraph and the new one (where cursor now is)
+            if let Some(old_idx) = old_para_idx {
+                self.mark_paragraph_modified(old_idx);
+            }
+            if let Some(new_idx) = self.editor.cursor_pointer().paragraph_path.root_index() {
+                self.mark_paragraph_modified(new_idx);
+            }
+            self.clear_render_cache();
+        }
+        result
+    }
+
+    /// Indent current paragraph with layout update
+    pub fn indent_current_paragraph(&mut self) -> bool {
+        // Get the root paragraph index before indenting
+        let old_para_idx = self.editor.cursor_pointer().paragraph_path.root_index();
+
+        let result = self.editor.indent_current_paragraph();
+
+        if result {
+            // Indenting may move the paragraph into a different structure
+            // Mark both the old parent and new parent paragraphs
+            if let Some(old_idx) = old_para_idx {
+                self.mark_paragraph_modified(old_idx);
+            }
+            if let Some(new_idx) = self.editor.cursor_pointer().paragraph_path.root_index() {
+                self.mark_paragraph_modified(new_idx);
+            }
+            self.clear_render_cache();
+        }
+        result
+    }
+
+    /// Unindent current paragraph with layout update
+    pub fn unindent_current_paragraph(&mut self) -> bool {
+        // Get the root paragraph index before unindenting
+        let old_para_idx = self.editor.cursor_pointer().paragraph_path.root_index();
+
+        let result = self.editor.unindent_current_paragraph();
+
+        if result {
+            // Unindenting may move the paragraph to a different structure
+            // Mark both the old parent and new parent paragraphs
+            if let Some(old_idx) = old_para_idx {
+                self.mark_paragraph_modified(old_idx);
+            }
+            if let Some(new_idx) = self.editor.cursor_pointer().paragraph_path.root_index() {
+                self.mark_paragraph_modified(new_idx);
+            }
+            self.clear_render_cache();
+        }
+        result
+    }
+
+    /// Set checklist item checked state with layout update
+    pub fn set_current_checklist_item_checked(&mut self, checked: bool) -> bool {
+        // Get the root paragraph index before modifying
+        let paragraph_index = self.editor.cursor_pointer().paragraph_path.root_index();
+
+        let result = self.editor.set_current_checklist_item_checked(checked);
+        if result {
+            // Checking/unchecking only affects the visual checkbox in the containing paragraph
+            // Use incremental update for just that paragraph
+            if let Some(para_idx) = paragraph_index {
+                self.mark_paragraph_modified(para_idx);
+            }
+            self.clear_render_cache();
+        }
+        result
+    }
+
+    /// Set paragraph type with layout update
+    pub fn set_paragraph_type(&mut self, target: tdoc::ParagraphType) -> bool {
+        let para_index = self.editor.cursor_pointer().paragraph_path.root_index();
+        let result = self.editor.set_paragraph_type(target);
+        // Changing paragraph type affects structure and rendering
+        if let Some(index) = para_index {
+            self.mark_paragraph_modified(index);
+        }
         self.clear_render_cache();
         result
     }
@@ -1398,6 +1664,7 @@ mod tests {
         display.render_document_with_positions(80, 0, None);
         let pos1 = display.cursor_pointer();
         assert_eq!(pos1.paragraph_path.numeric_steps(), vec![0]);
+        // After ensure_cursor_selectable(), empty paragraphs get a placeholder span at index 0
         assert_eq!(pos1.span_path.indices(), vec![0]);
         assert_eq!(pos1.offset, 0);
 
@@ -1647,7 +1914,7 @@ mod tests {
 
         // Move down - target line will be 1 (blank line), should skip to line 2
         display.move_cursor_vertical(1);
-        assert_eq!(display.get_content_pos(), Some((1, 0)));
+        assert_eq!(display.get_content_pos(), Some((2, 0)));
         assert_eq!(display.get_pos(), Some((2, 2)));
     }
 
@@ -1698,6 +1965,463 @@ mod tests {
             "Cursor should land at the same position when moving vertically to a line with nested styles. \
             First move: {:?}, Second move: {:?}",
             after_first_move, after_second_move
+        );
+    }
+
+    #[test]
+    fn backspace_from_beginning_merges_with_previous_paragraph() {
+        let doc = ftml! {
+            p { "First paragraph" }
+            p { "Next paragraph" }
+        };
+
+        let mut editor = DocumentEditor::new(doc);
+        editor.ensure_cursor_selectable();
+        let mut display = EditorDisplay::new(editor);
+
+        display.move_cursor_vertical(1);
+        assert_eq!(display.get_content_pos(), Some((2, 0)));
+
+        assert!(
+            display.backspace(),
+            "Backspace should successfully merge paragraphs"
+        );
+
+        assert_eq!(display.get_txt(), "First paragraphNext paragraph\n");
+        assert_eq!(display.get_content_pos(), Some((0, 15)));
+    }
+
+    #[test]
+    fn backspace_from_beginning_of_multi_entry_list_merges_with_previous_paragraph() {
+        let doc = ftml! {
+            p { "First paragraph" }
+            ul {
+                li { p { "Next paragraph" } }
+                li { p { "Another paragraph" } }
+            }
+        };
+
+        let mut editor = DocumentEditor::new(doc);
+        editor.ensure_cursor_selectable();
+        let mut display = EditorDisplay::new(editor);
+
+        display.move_cursor_vertical(1);
+        assert_eq!(display.get_content_pos(), Some((2, 0)));
+
+        assert!(
+            display.backspace(),
+            "Backspace should successfully merge paragraphs"
+        );
+
+        assert_eq!(
+            display.get_txt(),
+            "First paragraphNext paragraph\n\n• Another paragraph\n"
+        );
+        assert_eq!(display.get_content_pos(), Some((0, 15)));
+    }
+
+    #[test]
+    fn backspace_from_beginning_of_list_merges_with_previous_paragraph() {
+        let doc = ftml! {
+            p { "First paragraph" }
+            ul { li { p { "Next paragraph" } } }
+        };
+
+        let mut editor = DocumentEditor::new(doc);
+        editor.ensure_cursor_selectable();
+        let mut display = EditorDisplay::new(editor);
+
+        display.move_cursor_vertical(1);
+        assert_eq!(display.get_content_pos(), Some((2, 0)));
+
+        assert!(
+            display.backspace(),
+            "Backspace should successfully merge paragraphs"
+        );
+
+        assert_eq!(display.get_txt(), "First paragraphNext paragraph\n");
+        assert_eq!(display.get_content_pos(), Some((0, 15)));
+    }
+
+    #[test]
+    fn backspace_from_beginning_merges_with_empty_paragraph() {
+        let doc = ftml! {
+            p { }
+            p { "Next paragraph" }
+        };
+
+        let mut editor = DocumentEditor::new(doc);
+        editor.ensure_cursor_selectable();
+        let mut display = EditorDisplay::new(editor);
+
+        display.move_cursor_vertical(1);
+        assert_eq!(display.get_content_pos(), Some((2, 0)));
+
+        // Press Backspace - should remove empty paragraph and stay at beginning
+        assert!(
+            display.backspace(),
+            "Backspace should successfully remove empty paragraph"
+        );
+
+        assert_eq!(display.get_txt(), "Next paragraph\n");
+        assert_eq!(display.get_content_pos(), Some((0, 0)));
+    }
+
+    #[test]
+    fn test_breaking_at_the_beginning_of_bold_text_works() {
+        let doc = ftml! {
+            p {
+                "First paragraph"
+                b { "This"} " will become the second paragraph"
+            }
+        };
+        let mut editor = DocumentEditor::new(doc);
+        editor.ensure_cursor_selectable();
+        let mut display = EditorDisplay::new(editor);
+
+        // Length of "First paragraph"
+        for _ in 0..15 {
+            display.editor.move_right();
+        }
+
+        assert_eq!(
+            display.get_txt(),
+            "First paragraphThis will become the second paragraph\n"
+        );
+        assert_eq!(display.get_content_pos(), Some((0, 15)));
+
+        display.insert_paragraph_break();
+        assert_eq!(
+            display.get_txt(),
+            "First paragraph\n\nThis will become the second paragraph\n"
+        );
+        assert_eq!(display.get_content_pos(), Some((2, 0)));
+    }
+
+    #[test]
+    fn test_trailing_newline_rendering() {
+        // Verify that a paragraph with a trailing newline creates an empty line
+        let doc = ftml! {
+            p { "Text with trailing newline\n" }
+        };
+        let mut editor = DocumentEditor::new(doc);
+        editor.ensure_cursor_selectable();
+        let mut display = EditorDisplay::new(editor);
+
+        display.render_document(80, 0, None);
+        let lines: Vec<String> = display
+            .layout
+            .as_ref()
+            .unwrap()
+            .lines
+            .iter()
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect();
+
+        eprintln!("Trailing newline test:");
+        for (i, line) in lines.iter().enumerate() {
+            eprintln!("  Line {}: {:?}", i, line);
+        }
+
+        // A trailing newline should create an empty line
+        assert_eq!(
+            lines.len(),
+            2,
+            "Paragraph with trailing newline should produce 2 lines"
+        );
+        assert_eq!(lines[0], "Text with trailing newline");
+        assert_eq!(lines[1], "");
+    }
+
+    #[test]
+    fn test_ctrl_p_split_text_paragraph_updates_screen() {
+        let doc = ftml! {
+            p { "First paragraph" }
+        };
+        let mut editor = DocumentEditor::new(doc);
+        editor.ensure_cursor_selectable();
+        let mut display = EditorDisplay::new(editor);
+
+        // Move to middle of paragraph
+        for _ in 0..6 {
+            display.editor.move_right();
+        }
+
+        // Get initial render
+        display.render_document(80, 0, None);
+        let initial_lines = display.layout.as_ref().unwrap().lines.len();
+
+        // Split with Ctrl-P (as sibling)
+        assert!(display.insert_paragraph_break_as_sibling());
+
+        // Render again - should show the split
+        display.render_document(80, 0, None);
+        let after_lines = display.layout.as_ref().unwrap().lines.len();
+
+        // Should have created a new paragraph, adding a blank separator line
+        assert!(
+            after_lines > initial_lines,
+            "Screen should update after Ctrl-P split (had {} lines, now has {})",
+            initial_lines,
+            after_lines
+        );
+
+        // Verify the split happened
+        assert_eq!(display.editor.document().paragraphs.len(), 2);
+    }
+
+    #[test]
+    fn test_ctrl_p_split_checklist_item_updates_screen() {
+        use tdoc::{ChecklistItem, Document, Paragraph, Span as DocSpan};
+
+        let item = ChecklistItem::new(false).with_content(vec![DocSpan::new_text("First item")]);
+        let checklist = Paragraph::new_checklist().with_checklist_items(vec![item]);
+        let doc = Document::new().with_paragraphs(vec![checklist]);
+
+        let mut editor = DocumentEditor::new(doc);
+        editor.ensure_cursor_selectable();
+        let mut display = EditorDisplay::new(editor);
+
+        // Move to middle of item
+        for _ in 0..6 {
+            display.editor.move_right();
+        }
+
+        // Get initial render
+        display.render_document(80, 0, None);
+        let initial_text = display.get_txt();
+
+        // Split with Ctrl-P (as sibling)
+        assert!(display.insert_paragraph_break_as_sibling());
+
+        // Render and get text - should show the split
+        let after_text = display.get_txt();
+
+        // Should have created a new checklist item
+        assert_ne!(
+            initial_text, after_text,
+            "Screen should update after Ctrl-P split in checklist"
+        );
+
+        // Verify the split happened
+        let checklist = &display.editor.document().paragraphs[0];
+        assert_eq!(checklist.checklist_items().len(), 2);
+    }
+
+    #[test]
+    fn test_indent_paragraph_updates_screen() {
+        use tdoc::{Document, Paragraph, Span as DocSpan};
+
+        let first = Paragraph::new_text().with_content(vec![DocSpan::new_text("First paragraph")]);
+        let second =
+            Paragraph::new_text().with_content(vec![DocSpan::new_text("Second paragraph")]);
+        let list = Paragraph::new_unordered_list().with_entries(vec![vec![first]]);
+        let doc = Document::new().with_paragraphs(vec![list, second]);
+
+        let mut editor = DocumentEditor::new(doc);
+        editor.ensure_cursor_selectable();
+        let mut display = EditorDisplay::new(editor);
+
+        // Move to the second paragraph (after the list)
+        display.editor.move_down();
+
+        // Get initial render
+        display.render_document(80, 0, None);
+        let initial_text = display.get_txt();
+
+        // Indent the second paragraph into the list
+        assert!(display.indent_current_paragraph());
+
+        // Render and get text - should show the indentation
+        let after_text = display.get_txt();
+
+        // Should have changed the structure
+        assert_ne!(
+            initial_text, after_text,
+            "Screen should update after indenting paragraph"
+        );
+    }
+
+    #[test]
+    fn test_unindent_paragraph_updates_screen() {
+        use tdoc::{Document, Paragraph, Span as DocSpan};
+
+        let first = Paragraph::new_text().with_content(vec![DocSpan::new_text("First item")]);
+        let second =
+            Paragraph::new_text().with_content(vec![DocSpan::new_text("Second paragraph")]);
+        let list = Paragraph::new_unordered_list().with_entries(vec![vec![first, second]]);
+        let doc = Document::new().with_paragraphs(vec![list]);
+
+        let mut editor = DocumentEditor::new(doc);
+        editor.ensure_cursor_selectable();
+        let mut display = EditorDisplay::new(editor);
+
+        // Move to the second paragraph in the list entry
+        display.editor.move_down();
+
+        // Get initial render
+        display.render_document(80, 0, None);
+        let initial_text = display.get_txt();
+
+        // Unindent the paragraph
+        assert!(display.unindent_current_paragraph());
+
+        // Render and get text - should show the unindentation
+        let after_text = display.get_txt();
+
+        // Should have changed the structure
+        assert_ne!(
+            initial_text, after_text,
+            "Screen should update after unindenting paragraph"
+        );
+    }
+
+    #[test]
+    fn test_check_checklist_item_updates_screen() {
+        use tdoc::{ChecklistItem, Document, Paragraph, Span as DocSpan};
+
+        let item = ChecklistItem::new(false).with_content(vec![DocSpan::new_text("Task to do")]);
+        let checklist = Paragraph::new_checklist().with_checklist_items(vec![item]);
+        let doc = Document::new().with_paragraphs(vec![checklist]);
+
+        let mut editor = DocumentEditor::new(doc);
+        editor.ensure_cursor_selectable();
+        let mut display = EditorDisplay::new(editor);
+
+        // Get initial render (unchecked)
+        display.render_document(80, 0, None);
+        let initial_text = display.get_txt();
+        assert!(initial_text.contains("[ ]"), "Should show unchecked box");
+
+        // Check the item
+        assert!(display.set_current_checklist_item_checked(true));
+
+        // Render and get text - should show checked box
+        let after_text = display.get_txt();
+
+        // Should have changed from [ ] to [✓]
+        assert_ne!(
+            initial_text, after_text,
+            "Screen should update after checking item"
+        );
+        assert!(
+            after_text.contains("[✓]") || after_text.contains("[x]"),
+            "Should show checked box"
+        );
+    }
+
+    #[test]
+    fn test_uncheck_checklist_item_updates_screen() {
+        use tdoc::{ChecklistItem, Document, Paragraph, Span as DocSpan};
+
+        let item = ChecklistItem::new(true).with_content(vec![DocSpan::new_text("Done task")]);
+        let checklist = Paragraph::new_checklist().with_checklist_items(vec![item]);
+        let doc = Document::new().with_paragraphs(vec![checklist]);
+
+        let mut editor = DocumentEditor::new(doc);
+        editor.ensure_cursor_selectable();
+        let mut display = EditorDisplay::new(editor);
+
+        // Get initial render (checked)
+        display.render_document(80, 0, None);
+        let initial_text = display.get_txt();
+
+        // Uncheck the item
+        assert!(display.set_current_checklist_item_checked(false));
+
+        // Render and get text - should show the change
+        let after_text = display.get_txt();
+
+        // Text should change after toggling
+        assert_ne!(
+            initial_text, after_text,
+            "Screen should update after unchecking item"
+        );
+    }
+
+    #[test]
+    fn test_splitting_at_hard_breaks_works_as_expected() {
+        let doc = ftml! {
+            p { "First line\nSecond line\nThird line" }
+        };
+        let mut editor = DocumentEditor::new(doc);
+        editor.ensure_cursor_selectable();
+        let mut display = EditorDisplay::new(editor);
+
+        assert_eq!(display.get_txt(), "First line\nSecond line\nThird line\n");
+        assert_eq!(display.get_content_pos(), Some((0, 0)));
+
+        display.move_cursor_vertical(1);
+        assert_eq!(display.get_content_pos(), Some((1, 0)));
+
+        display.insert_paragraph_break();
+        assert_eq!(
+            display.get_txt(),
+            "First line\n\n\nSecond line\nThird line\n"
+        );
+        assert_eq!(display.get_content_pos(), Some((3, 0)));
+
+        display.move_to_visual_line_end();
+        assert_eq!(display.get_content_pos(), Some((3, 11)));
+    }
+
+    #[test]
+    fn test_delete_joins_two_text_paragraphs() {
+        let doc = ftml! {
+            p { "First paragraph" }
+            p { "Second paragraph" }
+        };
+        let mut editor = DocumentEditor::new(doc);
+        editor.ensure_cursor_selectable();
+        let mut display = EditorDisplay::new(editor);
+
+        // Move to the end of the first paragraph
+        for _ in 0..15 {
+            // Length of "First paragraph"
+            display.editor.move_right();
+        }
+
+        // Clear layout_dirty to test if delete sets it
+        display.layout_dirty = false;
+        display.last_modified_paragraphs.clear();
+
+        eprintln!("Before delete:");
+        eprintln!(
+            "  Paragraph count: {}",
+            display.editor.document().paragraphs.len()
+        );
+        eprintln!("  Cursor: {:?}", display.editor.cursor_pointer());
+        eprintln!("  layout_dirty: {}", display.layout_dirty);
+
+        // Delete should merge the paragraphs
+        let result = display.delete();
+        assert!(result, "Delete should successfully merge paragraphs");
+
+        eprintln!("\nAfter delete:");
+        eprintln!(
+            "  Paragraph count: {}",
+            display.editor.document().paragraphs.len()
+        );
+        eprintln!("  Cursor: {:?}", display.editor.cursor_pointer());
+        eprintln!("  layout_dirty: {}", display.layout_dirty);
+        eprintln!(
+            "  last_modified_paragraphs: {:?}",
+            display.last_modified_paragraphs
+        );
+
+        assert_eq!(
+            display.editor.document().paragraphs.len(),
+            1,
+            "Should have 1 paragraph after merge"
+        );
+        assert!(
+            display.layout_dirty,
+            "layout_dirty should be true after paragraph merge"
         );
     }
 }

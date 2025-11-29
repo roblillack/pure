@@ -347,9 +347,22 @@ fn collect_span_segments(
     reveal_codes: bool,
     segments: &mut Vec<SegmentRef>,
 ) {
+    let segments_before = segments.len();
     for (index, span) in paragraph.content().iter().enumerate() {
         let mut span_path = SpanPath::new(vec![index]);
         collect_span_rec(span, path, &mut span_path, reveal_codes, segments);
+    }
+
+    // If no segments were added (empty content), add a zero-length segment
+    // This ensures empty paragraphs can still be navigated to
+    // Use empty span_path since there are no actual spans in the paragraph
+    if segments.len() == segments_before && paragraph.paragraph_type().is_leaf() {
+        segments.push(SegmentRef {
+            paragraph_path: path.clone(),
+            span_path: SpanPath::new(Vec::new()),
+            len: 0,
+            kind: SegmentKind::Text,
+        });
     }
 }
 

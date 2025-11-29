@@ -906,7 +906,7 @@ fn bench_user_guide_rendering() {
             selection: None,
             track_all_positions: false,
         };
-        let _ = render::render_document_direct(&doc, 80, 0, &[], tracking);
+        render::render_document_direct(&doc, 80, 0, &[], tracking);
         durations.push(start.elapsed());
     }
 

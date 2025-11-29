@@ -260,7 +260,7 @@ impl<'a> DirectRenderer<'a> {
     fn render_document(&mut self, document: &Document) {
         for (idx, paragraph) in document.paragraphs.iter().enumerate() {
             if idx > 0 {
-                self.push_plain_line("", false);
+                self.push_plain_line("", true);
             }
 
             // Record start line before rendering this paragraph
@@ -1007,8 +1007,10 @@ impl<'a> DirectRenderer<'a> {
             }
             let spans = self.prepend_padding(spans);
             let line = Line::from(spans);
+            // Paragraph content lines always count as content, even if empty (no words).
+            // This ensures empty paragraphs are navigable in the editor.
             self.line_metrics.push(LineMetric {
-                counts_as_content: output.has_word,
+                counts_as_content: true,
             });
 
             // Process events to update cursor tracking
@@ -1227,7 +1229,6 @@ struct LineSegment {
 struct LineOutput {
     spans: Vec<LineSegment>,
     events: Vec<LocatedEvent>,
-    has_word: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -1296,7 +1297,8 @@ fn trim_layout_fragments(fragments: Vec<FragmentItem>) -> Vec<FragmentItem> {
 
 fn is_layout_fragment(item: &FragmentItem) -> bool {
     match item {
-        FragmentItem::LineBreak => true,
+        // Hard line breaks are meaningful content, not layout whitespace
+        FragmentItem::LineBreak => false,
         FragmentItem::Token(fragment) => {
             fragment.kind == FragmentKind::Whitespace
                 && fragment.events.is_empty()
@@ -1497,7 +1499,6 @@ struct LineBuilder {
     width: usize,
     prefix_width: usize,
     content_width: usize,
-    has_word: bool,
     selection_active: bool,
 }
 
@@ -1522,7 +1523,6 @@ impl LineBuilder {
             width: prefix_width,
             prefix_width,
             content_width: 0,
-            has_word: false,
             selection_active,
         }
     }
@@ -1547,15 +1547,11 @@ impl LineBuilder {
             text,
             style,
             kind,
-            width,
+            width: _,
             content_width: _content_width,
             mut events,
             ..
         } = fragment;
-
-        if kind == FragmentKind::Word && width > 0 {
-            self.has_word = true;
-        }
 
         events.sort_by_key(|event| event.offset);
         let base_width = self.width;
@@ -1687,7 +1683,6 @@ impl LineBuilder {
             LineOutput {
                 spans: self.segments,
                 events: self.events,
-                has_word: self.has_word,
             },
             self.selection_active,
         )

@@ -27,8 +27,8 @@ use structure::{
     list_entry_append_target, merge_adjacent_lists, paragraph_is_empty, paragraph_mut,
     parent_paragraph_path, promote_list_entry_to_parent, promote_single_child_into_parent,
     remove_paragraph_by_path, span_mut, span_mut_from_item, split_paragraph_break,
-    take_checklist_item_at, take_paragraph_at, unindent_checklist_item, update_existing_list_type,
-    update_paragraph_type,
+    take_checklist_item_at, take_list_entry, take_paragraph_at, unindent_checklist_item,
+    update_existing_list_type, update_paragraph_type,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
@@ -968,8 +968,12 @@ impl DocumentEditor {
         }
         let pointer = self.cursor.clone();
         if let Some(new_pointer) = split_paragraph_break(&mut self.document, &pointer, false) {
-            self.cursor = new_pointer;
             self.rebuild_segments();
+            if !self.move_to_pointer(&new_pointer)
+                && !self.fallback_move_to_text(&new_pointer, false)
+            {
+                self.ensure_cursor_selectable();
+            }
             true
         } else {
             false
@@ -982,8 +986,12 @@ impl DocumentEditor {
         }
         let pointer = self.cursor.clone();
         if let Some(new_pointer) = split_paragraph_break(&mut self.document, &pointer, true) {
-            self.cursor = new_pointer;
             self.rebuild_segments();
+            if !self.move_to_pointer(&new_pointer)
+                && !self.fallback_move_to_text(&new_pointer, false)
+            {
+                self.ensure_cursor_selectable();
+            }
             true
         } else {
             false
@@ -1076,6 +1084,69 @@ impl DocumentEditor {
             return true;
         }
         if self.cursor.offset == 0 {
+            // Check if the previous paragraph is empty and remove it if so
+            if self.cursor_segment > 0 {
+                let prev_segment = &self.segments[self.cursor_segment - 1];
+                let prev_para_path = &prev_segment.paragraph_path;
+
+                // Only check if it's a different paragraph
+                if prev_para_path != &self.cursor.paragraph_path
+                    && let Some(prev_para) = paragraph_ref(&self.document, prev_para_path)
+                    && paragraph_is_empty(prev_para)
+                {
+                    // Save current position info
+                    let current_path = self.cursor.paragraph_path.clone();
+                    let current_offset = self.cursor.offset;
+                    let removed_root_index = prev_para_path.root_index();
+
+                    // Remove the empty previous paragraph
+                    if remove_paragraph_by_path(&mut self.document, prev_para_path) {
+                        self.rebuild_segments();
+
+                        // Adjust current path if needed (same logic as delete)
+                        let adjusted_path = if let (Some(current_idx), Some(removed_idx)) =
+                            (current_path.root_index(), removed_root_index)
+                        {
+                            if current_idx > removed_idx {
+                                let steps = current_path.steps();
+                                if let Some(PathStep::Root(idx)) = steps.first() {
+                                    let mut new_steps = steps.to_vec();
+                                    new_steps[0] = PathStep::Root(idx - 1);
+                                    ParagraphPath::from_steps(new_steps)
+                                } else {
+                                    current_path
+                                }
+                            } else {
+                                current_path
+                            }
+                        } else {
+                            current_path
+                        };
+
+                        // Move to adjusted position
+                        let pointer = CursorPointer {
+                            paragraph_path: adjusted_path,
+                            span_path: self.cursor.span_path.clone(),
+                            offset: current_offset,
+                            segment_kind: SegmentKind::Text,
+                        };
+
+                        if self.move_to_pointer(&pointer)
+                            || self.fallback_move_to_text(&pointer, false)
+                        {
+                            return true;
+                        }
+                        self.ensure_cursor_selectable();
+                        return true;
+                    }
+                }
+            }
+
+            // Try to merge with the previous paragraph
+            if self.try_merge_with_previous_paragraph() {
+                return true;
+            }
+
             if self.try_merge_checklist_item_with_previous_paragraph() {
                 return true;
             }
@@ -1317,6 +1388,610 @@ impl DocumentEditor {
         None
     }
 
+    fn try_merge_with_previous_paragraph(&mut self) -> bool {
+        if self.segments.is_empty() {
+            return false;
+        }
+        if !matches!(self.cursor.segment_kind, SegmentKind::Text) {
+            return false;
+        }
+
+        // Get current segment
+        let current_segment = match self.segments.get(self.cursor_segment) {
+            Some(segment) => segment.clone(),
+            None => return false,
+        };
+
+        // Find the previous text segment in a different paragraph
+        let mut prev_segment_idx = self.cursor_segment;
+        while prev_segment_idx > 0 {
+            prev_segment_idx -= 1;
+            let segment = &self.segments[prev_segment_idx];
+            if matches!(segment.kind, SegmentKind::Text)
+                && segment.paragraph_path != current_segment.paragraph_path
+            {
+                break;
+            }
+        }
+
+        // Check if we found a different paragraph
+        if prev_segment_idx == 0
+            && self.segments[0].paragraph_path == current_segment.paragraph_path
+        {
+            return false;
+        }
+
+        let prev_segment = self.segments[prev_segment_idx].clone();
+
+        // Calculate previous paragraph's character count for cursor positioning
+        let prev_char_count: usize = self
+            .segments
+            .iter()
+            .filter(|segment| {
+                matches!(segment.kind, SegmentKind::Text)
+                    && segment.paragraph_path == prev_segment.paragraph_path
+            })
+            .map(|segment| segment.len)
+            .sum();
+
+        // Handle list entry merging
+        if matches!(
+            current_segment.paragraph_path.steps().last(),
+            Some(PathStep::Entry { .. })
+        ) {
+            let Some(ctx) = extract_entry_context(&current_segment.paragraph_path) else {
+                return false;
+            };
+
+            // Only merge single-paragraph entries
+            if ctx.paragraph_index != 0 {
+                return false;
+            }
+
+            let Some((entry, list_became_empty)) = take_list_entry(&mut self.document, &ctx) else {
+                return false;
+            };
+
+            // Remove the list if it's now empty
+            if list_became_empty {
+                remove_paragraph_by_path(&mut self.document, &ctx.list_path);
+            }
+
+            // Get the first (and should be only) paragraph from the entry
+            if entry.is_empty() {
+                self.rebuild_segments();
+                if let Some(pointer) = self
+                    .pointer_at_paragraph_char_offset(&prev_segment.paragraph_path, prev_char_count)
+                {
+                    if !self.move_to_pointer(&pointer)
+                        && !self.fallback_move_to_text(&pointer, false)
+                    {
+                        self.ensure_cursor_selectable();
+                    }
+                } else {
+                    self.ensure_cursor_selectable();
+                }
+                return true;
+            }
+
+            let first_paragraph = entry.into_iter().next().unwrap();
+            let mut entry_content = match first_paragraph {
+                Paragraph::Text { content }
+                | Paragraph::Header1 { content }
+                | Paragraph::Header2 { content }
+                | Paragraph::Header3 { content }
+                | Paragraph::CodeBlock { content } => content,
+                _ => {
+                    // Can't merge complex paragraphs
+                    self.rebuild_segments();
+                    self.ensure_cursor_selectable();
+                    return false;
+                }
+            };
+
+            // Determine target based on previous paragraph type
+            let is_prev_checklist = matches!(
+                prev_segment.paragraph_path.steps().last(),
+                Some(PathStep::ChecklistItem { .. })
+            );
+
+            if is_prev_checklist {
+                // Merge into previous checklist item
+                let Some(prev_item) =
+                    checklist_item_mut(&mut self.document, &prev_segment.paragraph_path)
+                else {
+                    return false;
+                };
+                if prev_item.content.is_empty() {
+                    prev_item.content.push(Span::new_text(""));
+                }
+                if !entry_content.is_empty() {
+                    prev_item.content.append(&mut entry_content);
+                }
+                prune_and_merge_spans(&mut prev_item.content);
+            } else {
+                // Merge into previous regular paragraph
+                let Some(prev_paragraph) =
+                    paragraph_mut(&mut self.document, &prev_segment.paragraph_path)
+                else {
+                    return false;
+                };
+                let spans = prev_paragraph.content_mut();
+                if spans.is_empty() {
+                    spans.push(Span::new_text(""));
+                }
+                if !entry_content.is_empty() {
+                    spans.append(&mut entry_content);
+                }
+                prune_and_merge_spans(spans);
+            }
+
+            self.rebuild_segments();
+
+            // Position cursor at the junction point
+            if let Some(pointer) =
+                self.pointer_at_paragraph_char_offset(&prev_segment.paragraph_path, prev_char_count)
+            {
+                if !self.move_to_pointer(&pointer) && !self.fallback_move_to_text(&pointer, false) {
+                    self.ensure_cursor_selectable();
+                }
+            } else {
+                self.ensure_cursor_selectable();
+            }
+
+            return true;
+        }
+
+        // Check if current paragraph is a quote child so we can clean up empty quote
+        let quote_parent_path = if matches!(
+            current_segment.paragraph_path.steps().last(),
+            Some(PathStep::Child(_))
+        ) {
+            // Extract the parent quote path
+            let steps = current_segment.paragraph_path.steps();
+            if steps.len() > 1 {
+                Some(ParagraphPath::from_steps(steps[..steps.len() - 1].to_vec()))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        // Take the current paragraph
+        let Some(current_paragraph) =
+            take_paragraph_at(&mut self.document, &current_segment.paragraph_path)
+        else {
+            return false;
+        };
+
+        // If we took a quote child, check if the quote is now empty and remove it
+        if let Some(ref parent_path) = quote_parent_path {
+            let mut remove_quote = false;
+            if let Some(quote) = paragraph_mut(&mut self.document, parent_path)
+                && let Paragraph::Quote { children } = quote
+                && children.is_empty()
+            {
+                remove_quote = true;
+            }
+            if remove_quote {
+                remove_paragraph_by_path(&mut self.document, parent_path);
+            }
+        }
+
+        let mut current_content = match current_paragraph {
+            Paragraph::Text { content }
+            | Paragraph::Header1 { content }
+            | Paragraph::Header2 { content }
+            | Paragraph::Header3 { content }
+            | Paragraph::CodeBlock { content } => content,
+            Paragraph::Checklist { .. } | Paragraph::Quote { .. } => {
+                // These should be handled by special case logic
+                return false;
+            }
+            Paragraph::OrderedList { .. } | Paragraph::UnorderedList { .. } => {
+                // Lists shouldn't be merged like this
+                return false;
+            }
+        };
+
+        // Determine target based on previous paragraph type
+        let is_prev_checklist = matches!(
+            prev_segment.paragraph_path.steps().last(),
+            Some(PathStep::ChecklistItem { .. })
+        );
+
+        if is_prev_checklist {
+            // Merge into previous checklist item
+            let Some(prev_item) =
+                checklist_item_mut(&mut self.document, &prev_segment.paragraph_path)
+            else {
+                return false;
+            };
+            if prev_item.content.is_empty() {
+                prev_item.content.push(Span::new_text(""));
+            }
+            if !current_content.is_empty() {
+                prev_item.content.append(&mut current_content);
+            }
+            prune_and_merge_spans(&mut prev_item.content);
+        } else {
+            // Merge into previous regular paragraph
+            let Some(prev_paragraph) =
+                paragraph_mut(&mut self.document, &prev_segment.paragraph_path)
+            else {
+                return false;
+            };
+            let spans = prev_paragraph.content_mut();
+            if spans.is_empty() {
+                spans.push(Span::new_text(""));
+            }
+            if !current_content.is_empty() {
+                spans.append(&mut current_content);
+            }
+            prune_and_merge_spans(spans);
+        }
+
+        self.rebuild_segments();
+
+        // Position cursor at the junction point
+        if let Some(pointer) =
+            self.pointer_at_paragraph_char_offset(&prev_segment.paragraph_path, prev_char_count)
+        {
+            if !self.move_to_pointer(&pointer) && !self.fallback_move_to_text(&pointer, false) {
+                self.ensure_cursor_selectable();
+            }
+        } else {
+            self.ensure_cursor_selectable();
+        }
+
+        true
+    }
+
+    fn try_merge_with_next_paragraph(&mut self) -> bool {
+        if self.segments.is_empty() {
+            return false;
+        }
+        if !matches!(self.cursor.segment_kind, SegmentKind::Text) {
+            return false;
+        }
+
+        // Get current segment
+        let current_segment = match self.segments.get(self.cursor_segment) {
+            Some(segment) => segment.clone(),
+            None => return false,
+        };
+
+        // Find the next text segment in a different paragraph
+        let mut next_segment_idx = self.cursor_segment + 1;
+        while next_segment_idx < self.segments.len() {
+            let segment = &self.segments[next_segment_idx];
+            if matches!(segment.kind, SegmentKind::Text)
+                && segment.paragraph_path != current_segment.paragraph_path
+            {
+                break;
+            }
+            next_segment_idx += 1;
+        }
+
+        if next_segment_idx >= self.segments.len() {
+            return false;
+        }
+
+        let next_segment = self.segments[next_segment_idx].clone();
+
+        // Calculate current paragraph's character count for cursor positioning
+        let current_char_count: usize = self
+            .segments
+            .iter()
+            .filter(|segment| {
+                matches!(segment.kind, SegmentKind::Text)
+                    && segment.paragraph_path == current_segment.paragraph_path
+            })
+            .map(|segment| segment.len)
+            .sum();
+
+        // Handle list entry merging
+        if matches!(
+            next_segment.paragraph_path.steps().last(),
+            Some(PathStep::Entry { .. })
+        ) {
+            let Some(ctx) = extract_entry_context(&next_segment.paragraph_path) else {
+                return false;
+            };
+
+            // Only merge single-paragraph entries
+            if ctx.paragraph_index != 0 {
+                return false;
+            }
+
+            let Some((entry, list_became_empty)) = take_list_entry(&mut self.document, &ctx) else {
+                return false;
+            };
+
+            // Remove the list if it's now empty
+            if list_became_empty {
+                remove_paragraph_by_path(&mut self.document, &ctx.list_path);
+            }
+
+            // Get the first (and should be only) paragraph from the entry
+            if entry.is_empty() {
+                self.rebuild_segments();
+                if let Some(pointer) = self.pointer_at_paragraph_char_offset(
+                    &current_segment.paragraph_path,
+                    current_char_count,
+                ) {
+                    if !self.move_to_pointer(&pointer)
+                        && !self.fallback_move_to_text(&pointer, false)
+                    {
+                        self.ensure_cursor_selectable();
+                    }
+                } else {
+                    self.ensure_cursor_selectable();
+                }
+                return true;
+            }
+
+            let first_paragraph = entry.into_iter().next().unwrap();
+            let mut entry_content = match first_paragraph {
+                Paragraph::Text { content }
+                | Paragraph::Header1 { content }
+                | Paragraph::Header2 { content }
+                | Paragraph::Header3 { content }
+                | Paragraph::CodeBlock { content } => content,
+                _ => {
+                    // Can't merge complex paragraphs
+                    self.rebuild_segments();
+                    self.ensure_cursor_selectable();
+                    return false;
+                }
+            };
+
+            // Determine target based on current paragraph type
+            let is_current_checklist = matches!(
+                current_segment.paragraph_path.steps().last(),
+                Some(PathStep::ChecklistItem { .. })
+            );
+
+            if is_current_checklist {
+                // Merge into current checklist item
+                let Some(current_item) =
+                    checklist_item_mut(&mut self.document, &current_segment.paragraph_path)
+                else {
+                    return false;
+                };
+                if current_item.content.is_empty() {
+                    current_item.content.push(Span::new_text(""));
+                }
+                if !entry_content.is_empty() {
+                    current_item.content.append(&mut entry_content);
+                }
+                prune_and_merge_spans(&mut current_item.content);
+            } else {
+                // Merge into current regular paragraph
+                let Some(current_paragraph) =
+                    paragraph_mut(&mut self.document, &current_segment.paragraph_path)
+                else {
+                    return false;
+                };
+                let spans = current_paragraph.content_mut();
+                if spans.is_empty() {
+                    spans.push(Span::new_text(""));
+                }
+                if !entry_content.is_empty() {
+                    spans.append(&mut entry_content);
+                }
+                prune_and_merge_spans(spans);
+            }
+
+            self.rebuild_segments();
+
+            // Position cursor at the junction point
+            if let Some(pointer) = self.pointer_at_paragraph_char_offset(
+                &current_segment.paragraph_path,
+                current_char_count,
+            ) {
+                if !self.move_to_pointer(&pointer) && !self.fallback_move_to_text(&pointer, false) {
+                    self.ensure_cursor_selectable();
+                }
+            } else {
+                self.ensure_cursor_selectable();
+            }
+
+            return true;
+        }
+
+        // Handle checklist item merging
+        if matches!(
+            next_segment.paragraph_path.steps().last(),
+            Some(PathStep::ChecklistItem { .. })
+        ) {
+            // Take the next checklist item
+            let Some(ctx) = extract_checklist_item_context(&next_segment.paragraph_path) else {
+                return false;
+            };
+
+            let Some(next_item) = take_checklist_item_at(&mut self.document, &ctx) else {
+                return false;
+            };
+
+            // If we removed the only item in a top-level checklist, remove the checklist paragraph
+            if ctx.indices.len() == 1 {
+                let mut remove_checklist = false;
+                if let Some(paragraph) = paragraph_mut(&mut self.document, &ctx.checklist_path)
+                    && let Paragraph::Checklist { items } = paragraph
+                    && items.is_empty()
+                {
+                    remove_checklist = true;
+                }
+                if remove_checklist {
+                    remove_paragraph_by_path(&mut self.document, &ctx.checklist_path);
+                }
+            }
+
+            let ChecklistItem {
+                checked: _,
+                mut content,
+                children,
+            } = next_item;
+
+            // Determine if current paragraph is a checklist item
+            let is_current_checklist = matches!(
+                current_segment.paragraph_path.steps().last(),
+                Some(PathStep::ChecklistItem { .. })
+            );
+
+            if is_current_checklist {
+                // Merge into current checklist item
+                let Some(current_item) =
+                    checklist_item_mut(&mut self.document, &current_segment.paragraph_path)
+                else {
+                    return false;
+                };
+                if current_item.content.is_empty() {
+                    current_item.content.push(Span::new_text(""));
+                }
+                if !content.is_empty() {
+                    current_item.content.append(&mut content);
+                }
+                prune_and_merge_spans(&mut current_item.content);
+
+                if !children.is_empty() {
+                    current_item.children.extend(children);
+                }
+            } else {
+                // Merge into current regular paragraph
+                let Some(current_paragraph) =
+                    paragraph_mut(&mut self.document, &current_segment.paragraph_path)
+                else {
+                    return false;
+                };
+                let spans = current_paragraph.content_mut();
+                if spans.is_empty() {
+                    spans.push(Span::new_text(""));
+                }
+                if !content.is_empty() {
+                    spans.append(&mut content);
+                }
+                prune_and_merge_spans(spans);
+
+                if !children.is_empty() {
+                    let child_paragraph = Paragraph::new_checklist().with_checklist_items(children);
+                    let _ = insert_paragraph_after_parent(
+                        &mut self.document,
+                        &current_segment.paragraph_path,
+                        child_paragraph,
+                    );
+                }
+            }
+        } else {
+            // Merge regular paragraph or quote child
+            // Check if next paragraph is a quote child so we can clean up empty quote
+            let quote_parent_path = if matches!(
+                next_segment.paragraph_path.steps().last(),
+                Some(PathStep::Child(_))
+            ) {
+                // Extract the parent quote path
+                let steps = next_segment.paragraph_path.steps();
+                if steps.len() > 1 {
+                    Some(ParagraphPath::from_steps(steps[..steps.len() - 1].to_vec()))
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+            let Some(next_paragraph) =
+                take_paragraph_at(&mut self.document, &next_segment.paragraph_path)
+            else {
+                return false;
+            };
+
+            // If we took a quote child, check if the quote is now empty and remove it
+            if let Some(ref parent_path) = quote_parent_path {
+                let mut remove_quote = false;
+                if let Some(quote) = paragraph_mut(&mut self.document, parent_path)
+                    && let Paragraph::Quote { children } = quote
+                    && children.is_empty()
+                {
+                    remove_quote = true;
+                }
+                if remove_quote {
+                    remove_paragraph_by_path(&mut self.document, parent_path);
+                }
+            }
+
+            let mut next_content = match next_paragraph {
+                Paragraph::Text { content }
+                | Paragraph::Header1 { content }
+                | Paragraph::Header2 { content }
+                | Paragraph::Header3 { content }
+                | Paragraph::CodeBlock { content } => content,
+                Paragraph::Checklist { .. } | Paragraph::Quote { .. } => {
+                    // These should have been handled by the checklist case above
+                    return false;
+                }
+                Paragraph::OrderedList { .. } | Paragraph::UnorderedList { .. } => {
+                    // Lists shouldn't be merged like this
+                    return false;
+                }
+            };
+
+            // Determine target based on current paragraph type
+            let is_current_checklist = matches!(
+                current_segment.paragraph_path.steps().last(),
+                Some(PathStep::ChecklistItem { .. })
+            );
+
+            if is_current_checklist {
+                // Merge into current checklist item
+                let Some(current_item) =
+                    checklist_item_mut(&mut self.document, &current_segment.paragraph_path)
+                else {
+                    return false;
+                };
+                if current_item.content.is_empty() {
+                    current_item.content.push(Span::new_text(""));
+                }
+                if !next_content.is_empty() {
+                    current_item.content.append(&mut next_content);
+                }
+                prune_and_merge_spans(&mut current_item.content);
+            } else {
+                // Merge into current regular paragraph
+                let Some(current_paragraph) =
+                    paragraph_mut(&mut self.document, &current_segment.paragraph_path)
+                else {
+                    return false;
+                };
+                let spans = current_paragraph.content_mut();
+                if spans.is_empty() {
+                    spans.push(Span::new_text(""));
+                }
+                if !next_content.is_empty() {
+                    spans.append(&mut next_content);
+                }
+                prune_and_merge_spans(spans);
+            }
+        }
+
+        self.rebuild_segments();
+
+        // Position cursor at the junction point
+        if let Some(pointer) = self
+            .pointer_at_paragraph_char_offset(&current_segment.paragraph_path, current_char_count)
+        {
+            if !self.move_to_pointer(&pointer) && !self.fallback_move_to_text(&pointer, false) {
+                self.ensure_cursor_selectable();
+            }
+        } else {
+            self.ensure_cursor_selectable();
+        }
+
+        true
+    }
+
     pub fn delete(&mut self) -> bool {
         if self.segments.is_empty() {
             return false;
@@ -1350,6 +2025,8 @@ impl DocumentEditor {
             return false;
         }
 
+        // Check if we're at the end of the current segment
+        // and need to merge with the next paragraph
         if self.cursor_segment + 1 >= self.segments.len() {
             return false;
         }
@@ -1368,6 +2045,17 @@ impl DocumentEditor {
                 return false;
             }
         }
+
+        // Check if the next segment is in a different paragraph
+        let current_para = &self.segments[self.cursor_segment].paragraph_path;
+        let next_para = &next_segment.paragraph_path;
+
+        if current_para != next_para {
+            // Different paragraphs: merge them
+            return self.try_merge_with_next_paragraph();
+        }
+
+        // Same paragraph: just delete the next character
         let pointer = CursorPointer {
             paragraph_path: next_segment.paragraph_path.clone(),
             span_path: next_segment.span_path.clone(),
@@ -1375,15 +2063,8 @@ impl DocumentEditor {
             segment_kind: next_segment.kind,
         };
         if remove_char_at(&mut self.document, &pointer, 0) {
-            // Check if we're deleting within the same paragraph or crossing paragraphs
-            let current_para = &self.segments[self.cursor_segment].paragraph_path;
-            if current_para == &pointer.paragraph_path {
-                // Same paragraph: use incremental update
-                self.update_segments_for_paragraph(&pointer.paragraph_path);
-            } else {
-                // Different paragraphs: this might be a merge operation, use full rebuild
-                self.rebuild_segments();
-            }
+            // Same paragraph: use incremental update
+            self.update_segments_for_paragraph(&pointer.paragraph_path);
             true
         } else {
             false
@@ -1600,6 +2281,9 @@ impl DocumentEditor {
             }
         };
 
+        // Get the root index of the paragraph being removed (if it's a root paragraph)
+        let removed_root_index = current_path.root_index();
+
         if !remove_paragraph_by_path(&mut self.document, &current_path) {
             return false;
         }
@@ -1610,7 +2294,27 @@ impl DocumentEditor {
             return true;
         }
 
-        if let Some(pointer) = target_pointer
+        // Adjust target pointer if needed: if we removed a root paragraph at index N,
+        // all root paragraphs at index > N are now at index - 1
+        let adjusted_target_pointer = if let Some(mut pointer) = target_pointer {
+            if let (Some(target_idx), Some(removed_idx)) =
+                (pointer.paragraph_path.root_index(), removed_root_index)
+                && target_idx > removed_idx
+            {
+                // Create a new path with decremented root index
+                let steps = pointer.paragraph_path.steps();
+                if let Some(PathStep::Root(idx)) = steps.first() {
+                    let mut new_steps = steps.to_vec();
+                    new_steps[0] = PathStep::Root(idx - 1);
+                    pointer.paragraph_path = ParagraphPath::from_steps(new_steps);
+                }
+            }
+            Some(pointer)
+        } else {
+            None
+        };
+
+        if let Some(pointer) = adjusted_target_pointer
             && self.move_to_pointer(&pointer)
         {
             return true;

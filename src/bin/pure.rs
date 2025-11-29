@@ -780,8 +780,8 @@ impl App {
         let (wrap_width, left_padding) = editor_wrap_configuration(width);
         let selection = self.current_selection();
 
-        // Use full position tracking when needed (after edits, mouse events, first render)
-        // Otherwise use fast rendering for smooth scrolling
+        // Use full position tracking when needed (mouse events, first render)
+        // Otherwise use cached layout (fast - includes incremental updates from edits)
         if self.needs_position_rebuild {
             self.needs_position_rebuild = false;
             self.display
@@ -1856,13 +1856,9 @@ impl App {
 
     fn mark_dirty(&mut self) {
         self.dirty = true;
-        // Clear render cache when document changes (returns true if incremental update succeeded)
-        let incremental_succeeded = self.display.clear_render_cache();
-        // Only need to rebuild visual positions if incremental update failed
-        // (incremental updates already update positions correctly)
-        if !incremental_succeeded {
-            self.needs_position_rebuild = true;
-        }
+        // EditorDisplay now handles layout updates automatically in its wrapper methods
+        // (insert_char, delete, backspace, etc.) which includes position tracking via
+        // incremental updates. No need to force a full re-render here.
     }
 
     fn count_words(&self) -> usize {
