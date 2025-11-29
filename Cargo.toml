@@ -1,6 +1,6 @@
 [package]
 name = "pure-tui"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 description = "A modern terminal-based word processor for Markdown and other structured text documents"
 authors = ["Rob Lillack <rob@lillack.net>"]
