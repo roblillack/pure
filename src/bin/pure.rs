@@ -842,7 +842,7 @@ impl App {
             self.status_line(self.display.get_content_lines(), status_area.width as usize);
         let status_widget = Paragraph::new(status_line)
             .block(Block::default().borders(Borders::NONE))
-            .style(Style::default().bg(Color::Blue).fg(Color::White));
+            .style(self.display.theme().status_bar_style());
         frame.render_widget(status_widget, status_area);
 
         if self.context_menu.is_some() {
@@ -869,12 +869,18 @@ impl App {
             let x = area.x;
 
             if row >= knob_start && row < knob_end {
-                // Draw knob with reverse video
-                let span = Span::styled(" ", Style::default().add_modifier(Modifier::REVERSED));
+                // Draw knob
+                let span = Span::styled(
+                    " ",
+                    self.display
+                        .theme()
+                        .scrollbar_knob_style()
+                        .add_modifier(Modifier::REVERSED),
+                );
                 frame.render_widget(Paragraph::new(Line::from(span)), Rect::new(x, y, 1, 1));
             } else {
-                // Draw track (empty space)
-                let span = Span::styled(" ", Style::default());
+                // Draw track
+                let span = Span::styled(" ", self.display.theme().scrollbar_track_style());
                 frame.render_widget(Paragraph::new(Line::from(span)), Rect::new(x, y, 1, 1));
             }
         }
@@ -938,7 +944,7 @@ impl App {
         frame.render_widget(Clear, popup_area);
 
         let separator_width = popup_area.width.saturating_sub(4).max(4) as usize;
-        let popup_style = Style::default().bg(Color::Black).fg(Color::White);
+        let popup_style = self.display.theme().menu_style();
 
         let mut items = Vec::new();
         let gap = if has_shortcuts { "  " } else { "" };
@@ -981,10 +987,12 @@ impl App {
                     } else {
                         item.label.to_string()
                     };
+
+                    // Style for non-selected state (highlight_style handles selected state)
                     let style = if item.is_enabled() {
                         Style::default()
                     } else {
-                        Style::default().fg(Color::DarkGray)
+                        self.display.theme().menu_disabled_style()
                     };
                     items.push(ListItem::new(Line::from(Span::styled(content, style))));
                 }
@@ -994,8 +1002,19 @@ impl App {
         let mut state = ListState::default();
         state.select(Some(menu.selected_index()));
 
+        // Determine highlight style based on whether the selected item is disabled
+        let highlight_style = {
+            let selected_entry = &menu.entries()[menu.selected_index()];
+            match selected_entry {
+                MenuEntry::Item(item) if !item.is_enabled() => {
+                    self.display.theme().menu_selected_disabled_style()
+                }
+                _ => self.display.theme().menu_selected_style(),
+            }
+        };
+
         let list = List::new(items)
-            .highlight_style(Style::default().bg(Color::White).fg(Color::Black))
+            .highlight_style(highlight_style)
             .style(popup_style)
             .block(
                 Block::default()
@@ -1145,10 +1164,10 @@ impl App {
         spans.push(Span::styled(position, Style::default().fg(Color::White)));
         spans.push(Span::raw(" "));
 
-        // Filename (yellow on blue)
+        // Filename
         spans.push(Span::styled(
             format!("{}{}", filename, marker),
-            Style::default().fg(Color::Yellow),
+            self.display.theme().filename_style(),
         ));
 
         // Breadcrumbs
