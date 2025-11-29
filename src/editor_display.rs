@@ -1326,7 +1326,7 @@ mod tests {
         let mut display = create_test_display();
 
         // Render to populate visual positions
-        let _render = display.render_document_with_positions(80, 0, None);
+        display.render_document_with_positions(80, 0, None);
 
         // Get initial cursor position
         let initial_pointer = display.cursor_pointer();
@@ -1343,7 +1343,7 @@ mod tests {
         let mut display = create_test_display();
 
         // Render to populate visual positions
-        let _render = display.render_document_with_positions(80, 0, None);
+        display.render_document_with_positions(80, 0, None);
 
         // Move to second paragraph first
         display.move_cursor_vertical(1);
@@ -1361,7 +1361,7 @@ mod tests {
         let mut display = create_test_display();
 
         // Render to populate visual positions
-        let _render = display.render_document_with_positions(80, 0, None);
+        display.render_document_with_positions(80, 0, None);
 
         // Move cursor to the middle of the line
         for _ in 0..5 {
@@ -1383,7 +1383,7 @@ mod tests {
         let mut display = create_test_display();
 
         // Render to populate visual positions
-        let _render = display.render_document_with_positions(80, 0, None);
+        display.render_document_with_positions(80, 0, None);
 
         let initial_offset = display.cursor_pointer().offset;
 
@@ -1429,7 +1429,7 @@ mod tests {
         display.last_view_height = 10;
 
         // Render to populate visual positions
-        let _render = display.render_document_with_positions(80, 0, None);
+        display.render_document_with_positions(80, 0, None);
 
         let initial_pointer = display.cursor_pointer();
 
@@ -1449,7 +1449,7 @@ mod tests {
         let mut display = create_test_display();
 
         // Render to populate visual positions
-        let _render = display.render_document_with_positions(80, 0, None);
+        display.render_document_with_positions(80, 0, None);
 
         // Move to the middle of the line
         for _ in 0..5 {
@@ -1496,7 +1496,7 @@ mod tests {
         let mut display = create_test_display();
 
         // Render to populate visual positions
-        let _render = display.render_document_with_positions(80, 0, None);
+        display.render_document_with_positions(80, 0, None);
 
         // Get boundaries of first visual line
         if let Some((start, end)) = display.visual_line_boundaries(0) {
@@ -1523,7 +1523,7 @@ mod tests {
         let mut display = EditorDisplay::new(DocumentEditor::new(doc));
 
         // Render to populate visual_positions
-        let _ = display.render_document_with_positions(80, 0, None);
+        display.render_document_with_positions(80, 0, None);
 
         // Try to navigate down to reach the checklist
         display.move_cursor_vertical(1);
@@ -1557,7 +1557,7 @@ mod tests {
         let mut display = EditorDisplay::new(DocumentEditor::new(doc));
 
         // Render to populate visual_positions
-        let _ = display.render_document_with_positions(80, 0, None);
+        display.render_document_with_positions(80, 0, None);
 
         // Try to navigate down to reach the checklist
         display.move_cursor_vertical(1);
@@ -1596,7 +1596,7 @@ mod tests {
         let mut display = EditorDisplay::new(DocumentEditor::new(doc));
 
         // Render to populate visual_positions
-        let _ = display.render_document_with_positions(80, 0, None);
+        display.render_document_with_positions(80, 0, None);
 
         // Try to navigate down to reach the checklist
         display.move_cursor_vertical(1);
@@ -1630,7 +1630,7 @@ mod tests {
         let mut display = EditorDisplay::new(DocumentEditor::new(doc));
 
         // Render to populate visual_positions
-        let _ = display.render_document_with_positions(80, 0, None);
+        display.render_document_with_positions(80, 0, None);
 
         // Try to navigate down to reach the checklist
         display.move_cursor_vertical(1);
@@ -1660,10 +1660,8 @@ mod tests {
     #[test]
     fn test_empty_doc_has_cursor() {
         let doc = ftml! { p {} };
-        let mut editor = DocumentEditor::new(doc);
-        editor.ensure_cursor_selectable();
-        let mut display = EditorDisplay::new(editor);
-        let _ = display.render_document_with_positions(80, 0, None);
+        let mut display = EditorDisplay::new(DocumentEditor::new(doc));
+        display.render_document_with_positions(80, 0, None);
         let pos1 = display.cursor_pointer();
         assert_eq!(pos1.paragraph_path.numeric_steps(), vec![0]);
         // After ensure_cursor_selectable(), empty paragraphs get a placeholder span at index 0
@@ -1690,20 +1688,20 @@ mod tests {
         }
 
         fn get_pos(&mut self) -> Option<(usize, u16)> {
-            let _ = self.render_document_with_positions(80, 0, None);
+            self.render_document_with_positions(80, 0, None);
 
             self.cursor_visual().map(|v| (v.line, v.column))
         }
 
         fn get_content_pos(&mut self) -> Option<(usize, u16)> {
-            let _ = self.render_document(80, 0, None);
+            self.render_document_with_positions(80, 0, None);
 
             self.cursor_visual()
                 .map(|v| (v.content_line, v.content_column))
         }
 
         fn get_txt(&mut self) -> String {
-            self.render_document(80, 0, None);
+            self.render_document_with_positions(80, 0, None);
             let mut s = String::new();
             for l in &self.layout.as_ref().unwrap().lines {
                 for i in &l.spans {
@@ -1719,7 +1717,7 @@ mod tests {
     fn test_adding_two_checklist_items() {
         let doc = ftml! { p {} };
         let mut display = EditorDisplay::new(DocumentEditor::new(doc));
-        let _ = display.render_document_with_positions(80, 0, None);
+        display.render_document_with_positions(80, 0, None);
 
         assert!(
             display.set_paragraph_type(tdoc::ParagraphType::Checklist),
@@ -1756,7 +1754,7 @@ mod tests {
         let mut display = EditorDisplay::new(DocumentEditor::new(doc));
 
         // Render to populate visual_positions
-        let _ = display.render_document_with_positions(80, 0, None);
+        display.render_document_with_positions(80, 0, None);
 
         // Find the H2 "Todos"
         let h2_path = ParagraphPath::new_root(1); // H1 is 0, H2 is 1
@@ -1798,18 +1796,11 @@ mod tests {
         let mut display = EditorDisplay::new(DocumentEditor::new(doc));
 
         // Render to populate visual_positions
-        let _ = display.render_document_with_positions(80, 0, None);
-
-        // Check initial position
-        let _initial = display.cursor_pointer();
+        display.render_document_with_positions(80, 0, None);
 
         // Try to navigate down to reach the checklist
         display.move_cursor_vertical(1);
-        let _pos1 = display.cursor_pointer();
-
         display.move_cursor_vertical(1);
-        let _pos2 = display.cursor_pointer();
-
         display.move_cursor_vertical(1);
         let pos3 = display.cursor_pointer();
 
@@ -1952,7 +1943,7 @@ mod tests {
         let mut display = EditorDisplay::new(DocumentEditor::new(doc));
 
         // Render to populate paragraph_lines with positions
-        let _ = display.render_document_with_positions(80, 0, None);
+        display.render_document_with_positions(80, 0, None);
 
         // Start from paragraph 1 (line 0), move to the 'T' in "Text"
         for _ in 0..10 {
