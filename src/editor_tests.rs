@@ -2916,3 +2916,157 @@ fn backspace_from_beginning_with_multiple_preceding_paragraphs() {
 
     assert_eq!(editor.cursor.offset, 0, "Cursor should be at offset 0");
 }
+
+#[test]
+fn split_checkbox_item_moves_children_to_new_item() {
+    // Test that when splitting a checkbox item, indented children move to the bottom part
+    let mut doc = Document::new();
+
+    // Create a checklist with a parent item that has children
+    let mut parent_item =
+        ChecklistItem::new(false).with_content(vec![Span::new_text("Parent text")]);
+    parent_item.children = vec![
+        ChecklistItem::new(false).with_content(vec![Span::new_text("Child 1")]),
+        ChecklistItem::new(false).with_content(vec![Span::new_text("Child 2")]),
+    ];
+
+    let checklist = Paragraph::new_checklist().with_checklist_items(vec![parent_item]);
+    doc.add_paragraph(checklist);
+
+    let mut editor = DocumentEditor::new(doc);
+
+    // Position cursor in the middle of "Parent text" (after "Parent ")
+    let pointer = CursorPointer {
+        paragraph_path: {
+            let mut path = ParagraphPath::new_root(0);
+            path.push_checklist_item(vec![0]);
+            path
+        },
+        span_path: SpanPath::new(vec![0]),
+        offset: 7, // After "Parent "
+        segment_kind: SegmentKind::Text,
+    };
+    editor.move_to_pointer(&pointer);
+
+    // Split the checkbox item
+    editor.insert_paragraph_break();
+
+    // Verify the structure:
+    // 1. First item should have "Parent " (without children)
+    // 2. Second item should have "text" (with the two children)
+
+    let Paragraph::Checklist { items } = &editor.document.paragraphs[0] else {
+        panic!("Expected checklist paragraph");
+    };
+
+    assert_eq!(items.len(), 2, "Should have 2 checklist items after split");
+
+    // First item should have the left part of the split
+    assert_eq!(
+        items[0].content[0].text, "Parent ",
+        "First item should have 'Parent '"
+    );
+    assert_eq!(
+        items[0].children.len(),
+        0,
+        "First item should have no children"
+    );
+
+    // Second item should have the right part of the split AND the children
+    assert_eq!(
+        items[1].content[0].text, "text",
+        "Second item should have 'text'"
+    );
+    assert_eq!(
+        items[1].children.len(),
+        2,
+        "Second item should have 2 children"
+    );
+    assert_eq!(
+        items[1].children[0].content[0].text, "Child 1",
+        "First child should be preserved"
+    );
+    assert_eq!(
+        items[1].children[1].content[0].text, "Child 2",
+        "Second child should be preserved"
+    );
+}
+
+#[test]
+fn split_nested_checkbox_item_moves_children_to_new_item() {
+    // Test that when splitting a nested checkbox item, its children move to the new item
+    let mut doc = Document::new();
+
+    // Create a checklist with nested items
+    let mut grandparent =
+        ChecklistItem::new(false).with_content(vec![Span::new_text("Grandparent")]);
+    let mut parent = ChecklistItem::new(false).with_content(vec![Span::new_text("Parent text")]);
+    parent.children = vec![
+        ChecklistItem::new(false).with_content(vec![Span::new_text("Child 1")]),
+        ChecklistItem::new(false).with_content(vec![Span::new_text("Child 2")]),
+    ];
+    grandparent.children = vec![parent];
+
+    let checklist = Paragraph::new_checklist().with_checklist_items(vec![grandparent]);
+    doc.add_paragraph(checklist);
+
+    let mut editor = DocumentEditor::new(doc);
+
+    // Position cursor in the middle of the nested parent "Parent text" (after "Parent ")
+    let pointer = CursorPointer {
+        paragraph_path: {
+            let mut path = ParagraphPath::new_root(0);
+            path.push_checklist_item(vec![0, 0]); // grandparent[0] -> parent[0]
+            path
+        },
+        span_path: SpanPath::new(vec![0]),
+        offset: 7, // After "Parent "
+        segment_kind: SegmentKind::Text,
+    };
+    editor.move_to_pointer(&pointer);
+
+    // Split the checkbox item
+    editor.insert_paragraph_break();
+
+    // Verify the structure
+    let Paragraph::Checklist { items } = &editor.document.paragraphs[0] else {
+        panic!("Expected checklist paragraph");
+    };
+
+    assert_eq!(items.len(), 1, "Should still have 1 top-level item");
+    assert_eq!(
+        items[0].children.len(),
+        2,
+        "Grandparent should now have 2 children after split"
+    );
+
+    // First child should have the left part of the split (no children)
+    assert_eq!(
+        items[0].children[0].content[0].text, "Parent ",
+        "First child should have 'Parent '"
+    );
+    assert_eq!(
+        items[0].children[0].children.len(),
+        0,
+        "First child should have no children"
+    );
+
+    // Second child should have the right part of the split AND the nested children
+    assert_eq!(
+        items[0].children[1].content[0].text, "text",
+        "Second child should have 'text'"
+    );
+    assert_eq!(
+        items[0].children[1].children.len(),
+        2,
+        "Second child should have 2 nested children"
+    );
+    assert_eq!(
+        items[0].children[1].children[0].content[0].text, "Child 1",
+        "First nested child should be preserved"
+    );
+    assert_eq!(
+        items[0].children[1].children[1].content[0].text, "Child 2",
+        "Second nested child should be preserved"
+    );
+}

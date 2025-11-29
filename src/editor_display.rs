@@ -2232,7 +2232,8 @@ mod tests {
         use tdoc::{Document, Paragraph, Span as DocSpan};
 
         let first = Paragraph::new_text().with_content(vec![DocSpan::new_text("First paragraph")]);
-        let second = Paragraph::new_text().with_content(vec![DocSpan::new_text("Second paragraph")]);
+        let second =
+            Paragraph::new_text().with_content(vec![DocSpan::new_text("Second paragraph")]);
         let list = Paragraph::new_unordered_list().with_entries(vec![vec![first]]);
         let doc = Document::new().with_paragraphs(vec![list, second]);
 
@@ -2265,7 +2266,8 @@ mod tests {
         use tdoc::{Document, Paragraph, Span as DocSpan};
 
         let first = Paragraph::new_text().with_content(vec![DocSpan::new_text("First item")]);
-        let second = Paragraph::new_text().with_content(vec![DocSpan::new_text("Second paragraph")]);
+        let second =
+            Paragraph::new_text().with_content(vec![DocSpan::new_text("Second paragraph")]);
         let list = Paragraph::new_unordered_list().with_entries(vec![vec![first, second]]);
         let doc = Document::new().with_paragraphs(vec![list]);
 
@@ -2321,7 +2323,10 @@ mod tests {
             initial_text, after_text,
             "Screen should update after checking item"
         );
-        assert!(after_text.contains("[✓]") || after_text.contains("[x]"), "Should show checked box");
+        assert!(
+            after_text.contains("[✓]") || after_text.contains("[x]"),
+            "Should show checked box"
+        );
     }
 
     #[test]

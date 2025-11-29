@@ -1670,7 +1670,12 @@ pub(crate) fn split_paragraph_break(
                 // Insert a new nested checklist item after the current one
                 let insert_idx = (current_index + 1).min(parent_item.children.len());
                 let checked_state = parent_item.children[current_index].checked;
-                let new_item = ChecklistItem::new(checked_state).with_content(right_spans);
+
+                // Move children from the current item to the new item
+                let children = std::mem::take(&mut parent_item.children[current_index].children);
+                let mut new_item = ChecklistItem::new(checked_state).with_content(right_spans);
+                new_item.children = children;
+
                 parent_item.children.insert(insert_idx, new_item);
 
                 // Build the new path for the inserted item
@@ -1711,7 +1716,12 @@ pub(crate) fn split_paragraph_break(
                 let insert_idx = (item_index + 1).min(items.len());
 
                 let checked_state = items[item_index].checked;
-                let new_item = ChecklistItem::new(checked_state).with_content(right_spans);
+
+                // Move children from the current item to the new item
+                let children = std::mem::take(&mut items[item_index].children);
+                let mut new_item = ChecklistItem::new(checked_state).with_content(right_spans);
+                new_item.children = children;
+
                 items.insert(insert_idx, new_item);
 
                 let mut new_steps = prefix.to_vec();
