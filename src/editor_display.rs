@@ -984,8 +984,10 @@ impl EditorDisplay {
             return None;
         }
         let line = scroll_top.saturating_add((row - area.y) as usize);
+        // Convert absolute column to content column by subtracting area.x and left_padding
         let relative_column = column.saturating_sub(area.x);
-        self.closest_pointer_near_line(line, relative_column)
+        let content_column = relative_column.saturating_sub(self.left_padding as u16);
+        self.closest_pointer_near_line(line, content_column)
     }
 
     /// Get the start and end boundaries of a visual line
