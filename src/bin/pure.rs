@@ -7,6 +7,7 @@ use std::{
 
 use anyhow::{Context, Result};
 use crossterm::{
+    cursor::SetCursorStyle,
     event::{
         self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind,
         KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
@@ -103,7 +104,8 @@ fn run() -> Result<()> {
     execute!(
         terminal.backend_mut(),
         LeaveAlternateScreen,
-        DisableMouseCapture
+        DisableMouseCapture,
+        SetCursorStyle::DefaultUserShape
     )
     .ok();
     terminal.show_cursor().ok();
@@ -826,6 +828,14 @@ impl App {
             let cursor_y = text_area.y + (cursor.line - self.scroll_top) as u16;
             let cursor_x = text_area.x + cursor.column.min(text_area.width - 1);
             frame.set_cursor_position(Position::new(cursor_x, cursor_y));
+
+            // Change cursor style based on selection state
+            let cursor_style = if self.selection_anchor.is_some() {
+                SetCursorStyle::BlinkingUnderScore
+            } else {
+                SetCursorStyle::DefaultUserShape
+            };
+            execute!(io::stdout(), cursor_style).ok();
         }
 
         let status_line =
