@@ -1456,8 +1456,9 @@ impl App {
     }
 
     fn handle_mouse_down(&mut self, event: MouseEvent) {
-        // Rebuild visual positions on next render for accurate click-to-cursor mapping
-        self.needs_position_rebuild = true;
+        // Note: We used to rebuild all visual positions here, but that's extremely
+        // slow for large documents. Instead, we rely on lazy population in
+        // ensure_paragraph_positions() which only computes positions for clicked paragraphs.
 
         // Check if click is on scrollbar (rightmost column)
         if event.column == self.last_scrollbar_column

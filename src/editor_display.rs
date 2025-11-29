@@ -984,8 +984,10 @@ impl EditorDisplay {
             return None;
         }
         let line = scroll_top.saturating_add((row - area.y) as usize);
+        // Convert absolute column to content column by subtracting area.x and left_padding
         let relative_column = column.saturating_sub(area.x);
-        self.closest_pointer_near_line(line, relative_column)
+        let content_column = relative_column.saturating_sub(self.left_padding as u16);
+        self.closest_pointer_near_line(line, content_column)
     }
 
     /// Get the start and end boundaries of a visual line
@@ -2467,10 +2469,16 @@ mod tests {
         display.render_document_with_positions(80, 0, None);
         let initial_text = display.get_txt();
         eprintln!("Initial text:\n{}", initial_text);
-        eprintln!("Initial paragraph count: {}", display.editor.document().paragraphs.len());
+        eprintln!(
+            "Initial paragraph count: {}",
+            display.editor.document().paragraphs.len()
+        );
 
         // Should have bullet points
-        assert!(initial_text.contains("•"), "Should have bullet points initially");
+        assert!(
+            initial_text.contains("•"),
+            "Should have bullet points initially"
+        );
 
         // Move to the second list item
         display.move_cursor_vertical(1);
@@ -2486,9 +2494,15 @@ mod tests {
             "Should successfully convert list item to text paragraph"
         );
 
-        eprintln!("After conversion paragraph count: {}", display.editor.document().paragraphs.len());
+        eprintln!(
+            "After conversion paragraph count: {}",
+            display.editor.document().paragraphs.len()
+        );
         eprintln!("layout_dirty: {}", display.layout_dirty);
-        eprintln!("last_modified_paragraphs: {:?}", display.last_modified_paragraphs);
+        eprintln!(
+            "last_modified_paragraphs: {:?}",
+            display.last_modified_paragraphs
+        );
 
         // The bug: last_modified_paragraphs contains index 0 (the old list paragraph),
         // but the structure has changed dramatically - the list was split into 3 paragraphs
@@ -2540,8 +2554,10 @@ mod tests {
         eprintln!("Initial checklist:\n{}", initial_text);
 
         // Should have checkboxes
-        assert!(initial_text.contains("[ ]") || initial_text.contains("[✓]"),
-                "Should have checkboxes initially");
+        assert!(
+            initial_text.contains("[ ]") || initial_text.contains("[✓]"),
+            "Should have checkboxes initially"
+        );
 
         // Move to the second checklist item
         display.move_cursor_vertical(1);
@@ -2595,16 +2611,27 @@ mod tests {
         );
 
         let para_count_after = display.editor.document().paragraphs.len();
-        eprintln!("Paragraph count: before={}, after={}", para_count_before, para_count_after);
+        eprintln!(
+            "Paragraph count: before={}, after={}",
+            para_count_before, para_count_after
+        );
         eprintln!("layout_dirty: {}", display.layout_dirty);
-        eprintln!("last_modified_paragraphs: {:?}", display.last_modified_paragraphs);
+        eprintln!(
+            "last_modified_paragraphs: {:?}",
+            display.last_modified_paragraphs
+        );
 
         // Should have same paragraph count (no structural change)
-        assert_eq!(para_count_before, para_count_after, "Paragraph count should not change");
+        assert_eq!(
+            para_count_before, para_count_after,
+            "Paragraph count should not change"
+        );
 
         // Should use incremental update (layout_dirty false, last_modified_paragraphs cleared after update)
-        assert!(!display.layout_dirty,
-                "Should use incremental update for simple type change (layout_dirty should be false)");
+        assert!(
+            !display.layout_dirty,
+            "Should use incremental update for simple type change (layout_dirty should be false)"
+        );
 
         // Verify the display updates correctly
         display.render_document(80, 0, None);
@@ -2613,7 +2640,10 @@ mod tests {
 
         // Quote should have vertical bar prefix
         assert!(after_text.contains("|"), "Quote should have | prefix");
-        assert_ne!(initial_text, after_text, "Display should update after type change");
+        assert_ne!(
+            initial_text, after_text,
+            "Display should update after type change"
+        );
     }
 
     #[test]
@@ -2640,8 +2670,10 @@ mod tests {
         assert_eq!(para_count_before, para_count_after);
 
         // Should use incremental update (layout_dirty should be false)
-        assert!(!display.layout_dirty,
-                "Should use incremental update (layout_dirty should be false)");
+        assert!(
+            !display.layout_dirty,
+            "Should use incremental update (layout_dirty should be false)"
+        );
     }
 
     #[test]
@@ -2668,8 +2700,10 @@ mod tests {
         assert_eq!(para_count_before, para_count_after);
 
         // Should use incremental update
-        assert!(!display.layout_dirty,
-                "Should use incremental update for single-item list promotion");
+        assert!(
+            !display.layout_dirty,
+            "Should use incremental update for single-item list promotion"
+        );
     }
 
     #[test]
@@ -2701,12 +2735,16 @@ mod tests {
         let para_count_after = display.editor.document().paragraphs.len();
 
         // Paragraph count should have changed (list was split)
-        assert_ne!(para_count_before, para_count_after,
-                   "Paragraph count should change when list is split");
+        assert_ne!(
+            para_count_before, para_count_after,
+            "Paragraph count should change when list is split"
+        );
 
         // Should force full relayout (layout_dirty should be true)
-        assert!(display.layout_dirty,
-                "Should force full relayout when structure changes (layout_dirty should be true)");
+        assert!(
+            display.layout_dirty,
+            "Should force full relayout when structure changes (layout_dirty should be true)"
+        );
     }
 
     #[test]
@@ -2729,8 +2767,12 @@ mod tests {
         eprintln!("Initial numbered list:\n{}", initial_text);
 
         // Should have numbers
-        assert!(initial_text.contains("1.") && initial_text.contains("2.") && initial_text.contains("3."),
-                "Should have numbered items initially");
+        assert!(
+            initial_text.contains("1.")
+                && initial_text.contains("2.")
+                && initial_text.contains("3."),
+            "Should have numbered items initially"
+        );
 
         // Move to the second list item
         display.move_cursor_vertical(1);

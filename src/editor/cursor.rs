@@ -1,4 +1,7 @@
-use super::content::{next_word_boundary, previous_word_boundary, skip_leading_whitespace};
+use super::content::{
+    next_word_boundary, previous_word_boundary, skip_leading_whitespace, word_end_boundary,
+    word_start_boundary,
+};
 use super::inspect::{
     breadcrumbs_for_pointer, checklist_item_ref, collect_segments, paragraph_path_is_prefix,
     paragraph_ref, span_path_is_prefix, span_ref, span_ref_from_item,
@@ -75,9 +78,11 @@ impl DocumentEditor {
         let len = text.chars().count();
         let offset = pointer.offset.min(len);
         let mut start = pointer.clone();
-        start.offset = previous_word_boundary(text, offset);
+        // Use word_start_boundary for selection (doesn't skip over leading whitespace)
+        start.offset = word_start_boundary(text, offset);
         let mut end = pointer.clone();
-        end.offset = next_word_boundary(text, offset);
+        // Use word_end_boundary for selection (doesn't include trailing whitespace)
+        end.offset = word_end_boundary(text, offset);
         Some((start, end))
     }
 

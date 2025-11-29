@@ -1301,3 +1301,274 @@ fn benchmark_incremental_updates() {
         println!("  ✅ PASSED: Incremental updates < 10ms - should feel responsive");
     }
 }
+
+#[test]
+fn bench_mouse_cursor_positioning() {
+    println!("\n\n╔════════════════════════════════════════════════════════════════╗");
+    println!("║         MOUSE CURSOR POSITIONING BENCHMARK                     ║");
+    println!("╚════════════════════════════════════════════════════════════════╝");
+    println!("\nThis measures the performance of setting cursor position via");
+    println!("mouse clicks (pointer_from_mouse). This is critical for responsive");
+    println!("mouse selection and text editing.");
+
+    use pure_tui::editor_display::EditorDisplay;
+    use ratatui::layout::Rect;
+
+    let doc_sizes = vec![
+        ("Small (10 paras)", SMALL_DOC_PARAGRAPHS),
+        ("Medium (100 paras)", MEDIUM_DOC_PARAGRAPHS),
+        ("Large (1000 paras)", LARGE_DOC_PARAGRAPHS),
+        ("Huge (10000 paras)", HUGE_DOC_PARAGRAPHS),
+    ];
+
+    for (name, size) in doc_sizes {
+        let doc = create_test_document(size, 20);
+        let editor = editor::DocumentEditor::new(doc);
+        let mut display = EditorDisplay::new(editor);
+
+        // Initial render to populate layout
+        let text_area = Rect {
+            x: 0,
+            y: 0,
+            width: 100,
+            height: 30,
+        };
+        display.render_document(80, 0, None);
+        display.update_after_render(text_area);
+
+        let total_lines = display.get_layout().lines.len();
+
+        println!("\n{}", "─".repeat(70));
+        println!("Document: {}", name);
+        println!("Paragraphs: {}", size);
+        println!("Total visual lines: {}", total_lines);
+
+        // Test positioning at different points in the document
+        let test_positions = vec![
+            ("Beginning (line 10)", 10u16),
+            ("Quarter (line 25%)", (total_lines / 4) as u16),
+            ("Middle (line 50%)", (total_lines / 2) as u16),
+            ("Three-quarters (line 75%)", (total_lines * 3 / 4) as u16),
+        ];
+
+        for (pos_name, line) in test_positions {
+            let iterations = if name.contains("Huge") { 10 } else { 100 };
+            let mut durations = Vec::new();
+
+            for _ in 0..iterations {
+                let start = Instant::now();
+                display.pointer_from_mouse(40, line, 0);
+                durations.push(start.elapsed());
+            }
+
+            let total: Duration = durations.iter().sum();
+            let avg = total / iterations as u32;
+            let min = *durations.iter().min().unwrap();
+            let max = *durations.iter().max().unwrap();
+
+            println!("\n  Position: {}", pos_name);
+            println!("    Average:  {:?}", avg);
+            println!("    Min:      {:?}", min);
+            println!("    Max:      {:?}", max);
+
+            if avg.as_millis() > 100 {
+                println!("    ❌ CRITICAL: > 100ms - mouse clicks will feel laggy!");
+            } else if avg.as_millis() > 16 {
+                println!("    ⚠️  WARNING: > 16ms - may feel sluggish");
+            } else {
+                println!("    ✅ GOOD: Fast enough for responsive mouse interaction");
+            }
+        }
+    }
+
+    println!("\n╔════════════════════════════════════════════════════════════════╗");
+    println!("║                    PERFORMANCE NOTES                           ║");
+    println!("╚════════════════════════════════════════════════════════════════╝");
+    println!("\nMouse positioning calls pointer_from_mouse which:");
+    println!("  1. Calls closest_pointer_near_line");
+    println!("  2. Which calls get_positions_for_line");
+    println!("  3. Which calls ensure_paragraph_positions (lazy population)");
+    println!("  4. Which calls layout_paragraph with track_all_positions=true");
+    println!("\nFor large documents, this lazy population on every new paragraph");
+    println!("clicked can cause significant slowdown, especially when combined");
+    println!("with reveal codes mode (which clones the entire document).");
+}
+
+#[test]
+fn bench_mouse_selection_drag() {
+    println!("\n\n╔════════════════════════════════════════════════════════════════╗");
+    println!("║         MOUSE SELECTION (DRAG) BENCHMARK                       ║");
+    println!("╚════════════════════════════════════════════════════════════════╝");
+    println!("\nThis simulates dragging the mouse to select text across multiple");
+    println!("paragraphs, which triggers ensure_paragraph_positions for each");
+    println!("new paragraph encountered during the drag.");
+
+    use pure_tui::editor_display::EditorDisplay;
+    use ratatui::layout::Rect;
+
+    let doc_sizes = vec![
+        ("Medium (100 paras)", MEDIUM_DOC_PARAGRAPHS),
+        ("Large (1000 paras)", LARGE_DOC_PARAGRAPHS),
+        ("Huge (10000 paras)", HUGE_DOC_PARAGRAPHS),
+    ];
+
+    for (name, size) in doc_sizes {
+        let doc = create_test_document(size, 20);
+        let editor = editor::DocumentEditor::new(doc);
+        let mut display = EditorDisplay::new(editor);
+
+        // Initial render to populate layout
+        let text_area = Rect {
+            x: 0,
+            y: 0,
+            width: 100,
+            height: 30,
+        };
+        display.render_document(80, 0, None);
+        display.update_after_render(text_area);
+
+        let total_lines = display.get_layout().lines.len();
+        let total_paras = size;
+
+        println!("\n{}", "─".repeat(70));
+        println!("Document: {}", name);
+        println!("Paragraphs: {}", total_paras);
+        println!("Total visual lines: {}", total_lines);
+
+        // Simulate dragging from line 10 to line 100 (spanning multiple paragraphs)
+        let drag_start = 10u16;
+        let drag_end = 100u16.min((total_lines - 1) as u16);
+        let num_positions = (drag_end - drag_start + 1) as usize;
+
+        println!(
+            "\nSimulating drag from line {} to line {}",
+            drag_start, drag_end
+        );
+        println!("Total positions to check: {}", num_positions);
+
+        let iterations = if name.contains("Huge") { 3 } else { 10 };
+        let mut durations = Vec::new();
+
+        for _ in 0..iterations {
+            // Create fresh display to avoid caching
+            let doc = create_test_document(size, 20);
+            let editor = editor::DocumentEditor::new(doc);
+            let mut display = EditorDisplay::new(editor);
+            display.render_document(80, 0, None);
+            display.update_after_render(text_area);
+
+            let start = Instant::now();
+            // Simulate dragging - check position at each line
+            for line in drag_start..=drag_end {
+                let _ = display.pointer_from_mouse(40, line, 0);
+            }
+            durations.push(start.elapsed());
+        }
+
+        let total: Duration = durations.iter().sum();
+        let avg = total / iterations as u32;
+        let min = *durations.iter().min().unwrap();
+        let max = *durations.iter().max().unwrap();
+        let per_position = avg / num_positions as u32;
+
+        println!("\n  Results:");
+        println!("    Total drag time:");
+        println!("      Average:  {:?}", avg);
+        println!("      Min:      {:?}", min);
+        println!("      Max:      {:?}", max);
+        println!("    Per position:");
+        println!("      Average:  {:?}", per_position);
+
+        if avg.as_millis() > 100 {
+            println!("\n    ❌ CRITICAL: Drag selection will feel very laggy!");
+        } else if avg.as_millis() > 50 {
+            println!("\n    ⚠️  WARNING: Drag selection may feel sluggish");
+        } else {
+            println!("\n    ✅ GOOD: Drag selection should feel responsive");
+        }
+    }
+
+    println!("\n╔════════════════════════════════════════════════════════════════╗");
+    println!("║                    ANALYSIS                                    ║");
+    println!("╚════════════════════════════════════════════════════════════════╝");
+    println!("\nDragging across many lines hits ensure_paragraph_positions");
+    println!("repeatedly. Each uncached paragraph triggers layout_paragraph");
+    println!("with track_all_positions=true, which is expensive.");
+    println!("\nThe current implementation populates positions lazily, which");
+    println!("means the first mouse interaction with each paragraph is slow.");
+}
+
+#[test]
+fn bench_mouse_worst_case_single_click() {
+    println!("\n\n╔════════════════════════════════════════════════════════════════╗");
+    println!("║    MOUSE CLICK WORST CASE: First Click on Uncached Paragraph  ║");
+    println!("╚════════════════════════════════════════════════════════════════╝");
+    println!("\nThis measures the worst-case performance: clicking on a paragraph");
+    println!("that hasn't been cached yet in a large document.");
+
+    use pure_tui::editor_display::EditorDisplay;
+    use ratatui::layout::Rect;
+
+    let doc_sizes = vec![
+        ("Medium (100 paras)", MEDIUM_DOC_PARAGRAPHS),
+        ("Large (1000 paras)", LARGE_DOC_PARAGRAPHS),
+        ("Huge (10000 paras)", HUGE_DOC_PARAGRAPHS),
+    ];
+
+    for (name, size) in doc_sizes {
+        println!("\n{}", "─".repeat(70));
+        println!("Document: {}", name);
+        println!("Paragraphs: {}", size);
+
+        let iterations = if name.contains("Huge") { 10 } else { 100 };
+        let mut durations = Vec::new();
+
+        for _ in 0..iterations {
+            // Create fresh display for each iteration to avoid caching
+            let doc = create_test_document(size, 20);
+            let editor = editor::DocumentEditor::new(doc);
+            let mut display = EditorDisplay::new(editor);
+
+            // Initial render to populate layout (but not all positions)
+            let text_area = Rect {
+                x: 0,
+                y: 0,
+                width: 100,
+                height: 30,
+            };
+            display.render_document(80, 0, None);
+            display.update_after_render(text_area);
+
+            // Click on line 50 (likely uncached paragraph)
+            let start = Instant::now();
+            let _ = display.pointer_from_mouse(40, 50, 0);
+            durations.push(start.elapsed());
+        }
+
+        let total: Duration = durations.iter().sum();
+        let avg = total / iterations as u32;
+        let min = *durations.iter().min().unwrap();
+        let max = *durations.iter().max().unwrap();
+
+        println!("\n  First click on uncached paragraph (line 50):");
+        println!("    Average:  {:?}", avg);
+        println!("    Min:      {:?}", min);
+        println!("    Max:      {:?}", max);
+
+        if avg.as_millis() > 100 {
+            println!("\n    ❌ CRITICAL: > 100ms - clicks will feel very laggy!");
+        } else if avg.as_millis() > 16 {
+            println!("\n    ⚠️  WARNING: > 16ms - may feel sluggish");
+        } else {
+            println!("\n    ✅ GOOD: Fast enough for responsive mouse clicks");
+        }
+    }
+
+    println!("\n╔════════════════════════════════════════════════════════════════╗");
+    println!("║                    ANALYSIS                                    ║");
+    println!("╚════════════════════════════════════════════════════════════════╝");
+    println!("\nWith the optimization (not calling render_document_with_positions");
+    println!("on every mouse click), we only pay the cost of layout_paragraph");
+    println!("for the single clicked paragraph, not the entire document.");
+    println!("\nThis is a huge improvement from O(document_size) to O(paragraph_size).");
+}
