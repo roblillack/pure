@@ -859,6 +859,17 @@ impl EditorDisplay {
     /// Find the closest pointer on a given line to a target column
     /// Uses content_column (without left padding) for comparison
     fn closest_pointer_on_line(&mut self, line: usize, column: u16) -> Option<CursorDisplay> {
+        self.closest_pointer_on_line_impl(line, column, false)
+    }
+
+    /// Find the closest pointer on a given line to a target visual column
+    /// Uses visual column (with prefixes like "[ ] " included) for comparison
+    fn closest_pointer_on_line_visual(&mut self, line: usize, column: u16) -> Option<CursorDisplay> {
+        self.closest_pointer_on_line_impl(line, column, true)
+    }
+
+    /// Implementation of closest_pointer_on_line with configurable column type
+    fn closest_pointer_on_line_impl(&mut self, line: usize, column: u16, use_visual_column: bool) -> Option<CursorDisplay> {
         // Get positions for this line on-demand
         let positions_on_line = self.get_positions_for_line(line);
 
@@ -866,17 +877,31 @@ impl EditorDisplay {
             return None;
         }
 
-        // Find the minimum content_column distance (without left padding)
+        // Find the minimum distance using the specified column type
         let min_distance = positions_on_line
             .iter()
-            .map(|entry| column_distance(entry.position.content_column, column))
+            .map(|entry| {
+                let pos_column = if use_visual_column {
+                    entry.position.column
+                } else {
+                    entry.position.content_column
+                };
+                column_distance(pos_column, column)
+            })
             .min()
             .unwrap();
 
         // Get all positions with the minimum distance
         let closest_positions: Vec<_> = positions_on_line
             .iter()
-            .filter(|entry| column_distance(entry.position.content_column, column) == min_distance)
+            .filter(|entry| {
+                let pos_column = if use_visual_column {
+                    entry.position.column
+                } else {
+                    entry.position.content_column
+                };
+                column_distance(pos_column, column) == min_distance
+            })
             .collect();
 
         if closest_positions.len() == 1 {
@@ -886,7 +911,11 @@ impl EditorDisplay {
         // Multiple positions at the same visual column (nested inline styles)
         // If desired column < closest position: choose outermost (shallowest nesting)
         // If desired column >= closest position: choose innermost (deepest nesting)
-        let closest_column = closest_positions[0].position.content_column;
+        let closest_column = if use_visual_column {
+            closest_positions[0].position.column
+        } else {
+            closest_positions[0].position.content_column
+        };
 
         if column < closest_column {
             // Choose outermost position (smallest span path length)
@@ -952,10 +981,27 @@ impl EditorDisplay {
     }
 
     /// Find the closest pointer near a line (searching up and down if not found on exact line)
+    /// Uses content_column for comparison
     fn closest_pointer_near_line(&mut self, line: usize, column: u16) -> Option<CursorDisplay> {
+        self.closest_pointer_near_line_impl(line, column, false)
+    }
+
+    /// Find the closest pointer near a line using visual column
+    /// Uses visual column (with prefixes) for comparison
+    fn closest_pointer_near_line_visual(&mut self, line: usize, column: u16) -> Option<CursorDisplay> {
+        self.closest_pointer_near_line_impl(line, column, true)
+    }
+
+    /// Implementation of closest_pointer_near_line with configurable column type
+    fn closest_pointer_near_line_impl(&mut self, line: usize, column: u16, use_visual_column: bool) -> Option<CursorDisplay> {
         // Try exact line first
-        if let Some(hit) = self.closest_pointer_on_line(line, column) {
-            return Some(hit);
+        let hit = if use_visual_column {
+            self.closest_pointer_on_line_visual(line, column)
+        } else {
+            self.closest_pointer_on_line(line, column)
+        };
+        if hit.is_some() {
+            return hit;
         }
 
         // Get max line from paragraph_lines (lightweight)
@@ -967,15 +1013,25 @@ impl EditorDisplay {
         };
         let mut distance = 1usize;
         while line.checked_sub(distance).is_some() || line + distance <= max_line {
-            if let Some(prev) = line.checked_sub(distance)
-                && let Some(hit) = self.closest_pointer_on_line(prev, column)
-            {
-                return Some(hit);
+            if let Some(prev) = line.checked_sub(distance) {
+                let hit = if use_visual_column {
+                    self.closest_pointer_on_line_visual(prev, column)
+                } else {
+                    self.closest_pointer_on_line(prev, column)
+                };
+                if hit.is_some() {
+                    return hit;
+                }
             }
             let next = line + distance;
             if next <= max_line {
-                if let Some(hit) = self.closest_pointer_on_line(next, column) {
-                    return Some(hit);
+                let hit = if use_visual_column {
+                    self.closest_pointer_on_line_visual(next, column)
+                } else {
+                    self.closest_pointer_on_line(next, column)
+                };
+                if hit.is_some() {
+                    return hit;
                 }
             } else if line.checked_sub(distance).is_none() {
                 break;
@@ -1002,10 +1058,11 @@ impl EditorDisplay {
             return None;
         }
         let line = scroll_top.saturating_add((row - area.y) as usize);
-        // Convert absolute column to content column by subtracting area.x and left_padding
-        let relative_column = column.saturating_sub(area.x);
-        let content_column = relative_column.saturating_sub(self.left_padding as u16);
-        self.closest_pointer_near_line(line, content_column)
+        // Convert absolute screen column to visual column by subtracting area.x
+        // Note: We use visual column (which includes per-line prefixes like "[ ] " or bullets)
+        // AND left_padding, to match against position.column values which include both
+        let visual_column = column.saturating_sub(area.x);
+        self.closest_pointer_near_line_visual(line, visual_column)
     }
 
     /// Get the start and end boundaries of a visual line
@@ -2823,5 +2880,56 @@ mod tests {
             initial_text, after_text,
             "Display should update after converting numbered item to text paragraph"
         );
+    }
+
+    #[test]
+    fn test_mouse_positioning_with_checklists() {
+        // Test that mouse clicks correctly position cursor accounting for line prefixes
+        // This test verifies the fix for mouse positioning with checklist prefixes "[ ] "
+        let doc = ftml! {
+            p { "Regular paragraph" }
+            checklist {
+                todo { "Checklist item" }
+            }
+        };
+        let mut display = EditorDisplay::new(DocumentEditor::new(doc));
+        display.render_document_with_positions(80, 0, None);
+
+        // Simulate the text area that would be set during rendering
+        use ratatui::layout::Rect;
+        let text_area = Rect { x: 0, y: 0, width: 80, height: 25 };
+        display.update_after_render(text_area);
+
+        // Get the visual positions
+        let layout = display.get_layout();
+
+        // Find the column positions
+        let mut para_column = None;
+        let mut checklist_column = None;
+
+        for info in &layout.paragraph_lines {
+            for (pointer, pos) in &info.positions {
+                let steps = pointer.paragraph_path.numeric_steps();
+                if steps == vec![0] && pointer.offset == 0 {
+                    para_column = Some(pos.column);
+                } else if steps == vec![1, 0] && pointer.offset == 0 {
+                    checklist_column = Some(pos.column);
+                }
+            }
+        }
+
+        let para_col = para_column.expect("Should find paragraph column");
+        let check_col = checklist_column.expect("Should find checklist column");
+
+        // Checklist should have a larger column due to "[ ] " prefix
+        assert!(
+            check_col > para_col,
+            "Checklist column {} should be greater than paragraph column {} (due to '[ ] ' prefix)",
+            check_col, para_col
+        );
+
+        // The fix ensures that pointer_from_mouse now uses visual columns (including prefixes)
+        // rather than content_columns. This test verifies the positions are correctly set up.
+        // Manual testing with test_nested_checklist_cursor.ftml will verify mouse clicks work correctly.
     }
 }

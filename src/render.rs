@@ -2246,4 +2246,46 @@ mod tests {
             "cursor should not move left past the start of the paragraph"
         );
     }
+
+    #[test]
+    fn test_left_padding_in_cursor_column() {
+        let checklist = Paragraph::new_checklist().with_checklist_items(vec![
+            tdoc::ChecklistItem::new(false).with_content(vec![DocSpan::new_text("Task")]),
+        ]);
+        let document = Document::new().with_paragraphs(vec![checklist]);
+        let mut editor = DocumentEditor::new(document);
+        editor.ensure_cursor_selectable();
+
+        // Test with left_padding = 0
+        let tracking0 = DirectCursorTracking {
+            cursor: Some(&editor.cursor_pointer()),
+            selection: None,
+            track_all_positions: false,
+        };
+        let theme = Theme::default();
+        let rendered0 = render_document_direct(editor.document(), 120, 0, &[], tracking0, &theme);
+        let cursor0 = rendered0.cursor.expect("cursor position missing");
+
+        // Test with left_padding = 4
+        let tracking4 = DirectCursorTracking {
+            cursor: Some(&editor.cursor_pointer()),
+            selection: None,
+            track_all_positions: false,
+        };
+        let rendered4 = render_document_direct(editor.document(), 120, 4, &[], tracking4, &theme);
+        let cursor4 = rendered4.cursor.expect("cursor position missing");
+
+        // cursor.column INCLUDES left_padding in its value
+        // So with left_padding=4, the column should be 4 more than with left_padding=0
+        assert_eq!(
+            cursor4.column, cursor0.column + 4,
+            "cursor.column should include the left_padding offset"
+        );
+
+        // content_column should be the same - it doesn't include left_padding
+        assert_eq!(
+            cursor0.content_column, cursor4.content_column,
+            "cursor.content_column should be the same with different left_padding values"
+        );
+    }
 }
