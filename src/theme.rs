@@ -72,6 +72,9 @@ pub struct Theme {
     /// Foreground color for structural/decorative characters
     /// (checklist brackets, bullets, heading underlines, code separators, quote bars)
     pub structural_fg: Color,
+
+    /// Foreground color for checklist checkmark glyphs ("✓")
+    pub checkmark_fg: Color,
 }
 
 impl Default for Theme {
@@ -100,6 +103,7 @@ impl Default for Theme {
             menu_selected_bg: Color::LightBlue,
             menu_selected_disabled_fg: Color::DarkGray,
             structural_fg: Color::Gray,
+            checkmark_fg: Color::Green,
         }
     }
 }
@@ -188,5 +192,13 @@ impl Theme {
         Style::default()
             .fg(self.structural_fg)
             .add_modifier(Modifier::DIM)
+    }
+
+    /// Get the style for checklist checkmarks
+    pub fn checkmark_style(&self) -> Style {
+        use ratatui::style::Modifier;
+        Style::default()
+            .fg(self.checkmark_fg)
+            .add_modifier(Modifier::BOLD)
     }
 }

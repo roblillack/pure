@@ -1169,47 +1169,78 @@ impl<'a> DirectRenderer<'a> {
     /// Detects and styles structural prefix characters in a segment
     /// Returns a vector of styled spans (may be just one if no structural prefix found)
     fn style_structural_prefix(&self, text: &str, base_style: Style) -> Vec<Span<'static>> {
+        if text.is_empty() {
+            return vec![Span::styled(String::new(), base_style).to_owned()];
+        }
+
+        // Preserve indentation while still detecting structural markers after it
+        let mut indent_len = 0;
+        for ch in text.chars() {
+            if ch.is_whitespace() {
+                indent_len += ch.len_utf8();
+            } else {
+                break;
+            }
+        }
+        let (indent, rest) = text.split_at(indent_len);
+        if rest.is_empty() {
+            return vec![Span::styled(text.to_string(), base_style).to_owned()];
+        }
+
+        if let Some((marker, tail)) = Self::extract_structural_marker(rest) {
+            let mut spans = Vec::new();
+            if !indent.is_empty() {
+                spans.push(Span::styled(indent.to_string(), base_style).to_owned());
+            }
+            let structural_style = self.theme.structural_style();
+            match marker {
+                "[✓] " => {
+                    spans.push(Span::styled("[".to_string(), structural_style).to_owned());
+                    spans.push(
+                        Span::styled("✓".to_string(), self.theme.checkmark_style()).to_owned(),
+                    );
+                    spans.push(Span::styled("] ".to_string(), structural_style).to_owned());
+                }
+                _ => {
+                    spans.push(
+                        Span::styled(marker.to_string(), structural_style).to_owned(),
+                    );
+                }
+            }
+            if !tail.is_empty() {
+                spans.push(Span::styled(tail.to_string(), base_style).to_owned());
+            }
+            spans
+        } else {
+            vec![Span::styled(text.to_string(), base_style).to_owned()]
+        }
+    }
+
+    fn extract_structural_marker(text: &str) -> Option<(&str, &str)> {
         // Check for common structural prefixes
         // - Bullets: "• "
         // - Checklist: "[✓] " or "[ ] "
         // - Ordered list: "1. ", "2. ", etc.
         // - Quote: "| "
-
-        if let Some(rest) = text.strip_prefix("• ") {
-            vec![
-                Span::styled("• ".to_string(), self.theme.structural_style()).to_owned(),
-                Span::styled(rest.to_string(), base_style).to_owned(),
-            ]
-        } else if let Some(rest) = text.strip_prefix("[✓] ") {
-            vec![
-                Span::styled("[✓] ".to_string(), self.theme.structural_style()).to_owned(),
-                Span::styled(rest.to_string(), base_style).to_owned(),
-            ]
-        } else if let Some(rest) = text.strip_prefix("[ ] ") {
-            vec![
-                Span::styled("[ ] ".to_string(), self.theme.structural_style()).to_owned(),
-                Span::styled(rest.to_string(), base_style).to_owned(),
-            ]
-        } else if let Some(rest) = text.strip_prefix("| ") {
-            vec![
-                Span::styled("| ".to_string(), self.theme.structural_style()).to_owned(),
-                Span::styled(rest.to_string(), base_style).to_owned(),
-            ]
+        if text.starts_with("• ") {
+            Some(text.split_at("• ".len()))
+        } else if text.starts_with("[✓] ") {
+            Some(text.split_at("[✓] ".len()))
+        } else if text.starts_with("[ ] ") {
+            Some(text.split_at("[ ] ".len()))
+        } else if text.starts_with("| ") {
+            Some(text.split_at("| ".len()))
         } else if let Some(prefix_end) = text.find(". ") {
             // Check if it's a number followed by ". "
             let prefix = &text[..prefix_end];
-            if prefix.chars().all(|c| c.is_ascii_digit()) && !prefix.is_empty() {
-                let number_dot = &text[..prefix_end + 2]; // Include ". "
-                let rest = &text[prefix_end + 2..];
-                vec![
-                    Span::styled(number_dot.to_string(), self.theme.structural_style()).to_owned(),
-                    Span::styled(rest.to_string(), base_style).to_owned(),
-                ]
+            if !prefix.is_empty() && prefix.chars().all(|c| c.is_ascii_digit()) {
+                let split_at = prefix_end + 2; // include ". "
+                Some(text.split_at(split_at))
             } else {
-                vec![Span::styled(text.to_string(), base_style).to_owned()]
+                None
             }
         } else {
-            vec![Span::styled(text.to_string(), base_style).to_owned()]
+            None
         }
     }
 
@@ -1984,6 +2015,71 @@ mod tests {
         let rendered = render_document_direct(editor.document(), 120, 0, &[], tracking, &theme);
         let lines = lines_to_strings(&rendered.lines);
         assert_eq!(lines, vec!["• Alpha", "", "  Beta"]);
+    }
+
+    #[test]
+    fn nested_checklist_markers_use_structural_style() {
+        let child =
+            tdoc::ChecklistItem::new(true).with_content(vec![DocSpan::new_text("Nested task")]);
+        let parent = tdoc::ChecklistItem::new(true)
+            .with_content(vec![DocSpan::new_text("Parent task")])
+            .with_children(vec![child]);
+        let checklist = Paragraph::new_checklist().with_checklist_items(vec![parent]);
+        let document = Document::new().with_paragraphs(vec![checklist]);
+
+        let tracking = DirectCursorTracking {
+            cursor: None,
+            selection: None,
+            track_all_positions: false,
+        };
+        let theme = Theme::default();
+        let rendered = render_document_direct(&document, 120, 0, &[], tracking, &theme);
+        let structural_style = theme.structural_style();
+        let checkmark_style = theme.checkmark_style();
+
+        let rendered_strings = lines_to_strings(&rendered.lines);
+        let parent_line_index = rendered_strings
+            .iter()
+            .position(|line| line.contains("Parent task"))
+            .expect("missing parent checklist line");
+        let nested_line_index = rendered_strings
+            .iter()
+            .position(|line| line.contains("Nested task"))
+            .expect("missing nested checklist line");
+        let parent_line = &rendered.lines[parent_line_index];
+        let nested_line = &rendered.lines[nested_line_index];
+
+        let marker_styles = |line: &Line<'_>| {
+            let has_structural_brackets = line.spans.iter().any(|span| {
+                let text = span.content.as_ref();
+                (text.contains('[') || text.contains(']')) && span.style == structural_style
+            });
+            let has_colored_checkmark = line
+                .spans
+                .iter()
+                .any(|span| span.content.as_ref() == "✓" && span.style == checkmark_style);
+            (has_structural_brackets, has_colored_checkmark)
+        };
+
+        let (parent_structural, parent_checkmark) = marker_styles(parent_line);
+        assert!(
+            parent_structural,
+            "top-level checklist brackets should use structural color"
+        );
+        assert!(
+            parent_checkmark,
+            "top-level checklist checkmark should use checkmark color"
+        );
+
+        let (nested_structural, nested_checkmark) = marker_styles(nested_line);
+        assert!(
+            nested_structural,
+            "nested checklist brackets should use structural color"
+        );
+        assert!(
+            nested_checkmark,
+            "nested checklist checkmark should use checkmark color"
+        );
     }
 
     #[test]
