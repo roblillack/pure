@@ -355,7 +355,7 @@ impl DocumentEditor {
         keyed.sort_by(|a, b| b.0.cmp(&a.0));
 
         let mut ordered: Vec<CursorPointer> = keyed.into_iter().map(|(_, ptr)| ptr).collect();
-        ordered.extend(unkeyed.into_iter());
+        ordered.extend(unkeyed);
 
         Some(ordered)
     }
