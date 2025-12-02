@@ -2357,6 +2357,180 @@ fn delete_joins_regular_paragraphs_and_maintains_cursor() {
 }
 
 #[test]
+fn set_paragraph_type_for_selection_updates_all_touched_paragraphs() {
+    use crate::editor_display::EditorDisplay;
+
+    let doc = Document::new().with_paragraphs(vec![
+        text_paragraph("First"),
+        text_paragraph("Second"),
+        text_paragraph("Third"),
+    ]);
+    let editor = DocumentEditor::new(doc);
+    let mut display = EditorDisplay::new(editor);
+
+    let start = display
+        .pointer_at_paragraph_char_offset(&ParagraphPath::new_root(0), 0)
+        .expect("start pointer");
+    let end = display
+        .pointer_at_paragraph_char_offset(&ParagraphPath::new_root(2), 0)
+        .expect("end pointer");
+
+    assert!(
+        display.set_paragraph_type_for_selection(
+            &(start.clone(), end.clone()),
+            ParagraphType::Header1,
+        )
+    );
+
+    match &display.document().paragraphs[0] {
+        Paragraph::Header1 { .. } => {}
+        other => panic!("First paragraph should be Header1, got {:?}", other),
+    }
+    match &display.document().paragraphs[1] {
+        Paragraph::Header1 { .. } => {}
+        other => panic!("Second paragraph should be Header1, got {:?}", other),
+    }
+    match &display.document().paragraphs[2] {
+        Paragraph::Text { .. } => {}
+        other => panic!("Third paragraph should remain Text, got {:?}", other),
+    }
+}
+
+#[test]
+fn converting_full_selection_to_checklist_preserves_all_items() {
+    use crate::editor_display::EditorDisplay;
+
+    let doc = Document::new().with_paragraphs(vec![
+        text_paragraph("First"),
+        text_paragraph("Second"),
+        text_paragraph("Third"),
+    ]);
+    let mut display = EditorDisplay::new(DocumentEditor::new(doc));
+
+    let start = display
+        .pointer_at_paragraph_char_offset(&ParagraphPath::new_root(0), 0)
+        .expect("start pointer");
+    let last_len = display.document().paragraphs[2]
+        .content()
+        .iter()
+        .map(|span| span.text.chars().count())
+        .sum();
+    let end = display
+        .pointer_at_paragraph_char_offset(&ParagraphPath::new_root(2), last_len)
+        .expect("end pointer");
+
+    assert!(
+        display.set_paragraph_type_for_selection(
+            &(start.clone(), end.clone()),
+            ParagraphType::Checklist
+        ),
+        "selection-to-checklist conversion should succeed"
+    );
+
+    assert_eq!(
+        display.document().paragraphs.len(),
+        1,
+        "all paragraphs should merge into a single checklist"
+    );
+
+    match &display.document().paragraphs[0] {
+        Paragraph::Checklist { items } => {
+            let contents: Vec<String> = items
+                .iter()
+                .map(|item| {
+                    item.content
+                        .iter()
+                        .map(|span| span.text.clone())
+                        .collect::<String>()
+                })
+                .collect();
+            assert_eq!(contents, vec!["First", "Second", "Third"]);
+        }
+        other => panic!("document should become a checklist, got {:?}", other),
+    }
+}
+
+#[test]
+fn converting_selection_to_text_keeps_cursor_position() {
+    use crate::editor_display::EditorDisplay;
+
+    let list = Paragraph::UnorderedList {
+        entries: vec![
+            vec![Paragraph::new_text().with_content(vec![Span::new_text("First bullet")])],
+            vec![Paragraph::new_text().with_content(vec![Span::new_text("Second bullet")])],
+            vec![Paragraph::new_text().with_content(vec![Span::new_text("Third bullet")])],
+        ],
+    };
+
+    let doc = Document::new().with_paragraphs(vec![list]);
+    let mut display = EditorDisplay::new(DocumentEditor::new(doc));
+
+    let mut start = pointer_to_entry_span(0, 0, 0);
+    start.offset = 3;
+    let mut end = pointer_to_entry_span(0, 2, 0);
+    end.offset = 3;
+
+    assert!(display.move_to_pointer(&end));
+
+    assert!(
+        display
+            .set_paragraph_type_for_selection(&(start.clone(), end.clone()), ParagraphType::Text)
+    );
+
+    // After conversion, the list should become three text paragraphs and the cursor
+    // should remain where the selection ended (middle of the last paragraph).
+    assert_eq!(display.document().paragraphs.len(), 3);
+    let cursor = display.cursor_pointer();
+    assert_eq!(cursor.paragraph_path.root_index(), Some(2));
+    assert_eq!(cursor.offset, end.offset);
+}
+
+#[test]
+fn remove_selection_across_paragraphs_merges_and_allows_insertion() {
+    let doc = Document::new().with_paragraphs(vec![
+        text_paragraph("Alpha"),
+        text_paragraph("Beta"),
+        text_paragraph("Gamma"),
+    ]);
+    let mut editor = DocumentEditor::new(doc);
+
+    let start = editor
+        .pointer_at_paragraph_char_offset(&ParagraphPath::new_root(0), 2)
+        .expect("pointer for start");
+    let end = editor
+        .pointer_at_paragraph_char_offset(&ParagraphPath::new_root(2), 2)
+        .expect("pointer for end");
+
+    assert!(editor.remove_selection(&(start.clone(), end.clone())));
+
+    let paragraphs = &editor.document().paragraphs;
+    assert_eq!(
+        paragraphs.len(),
+        1,
+        "Selection should merge into single paragraph"
+    );
+
+    let merged_text = match &paragraphs[0] {
+        Paragraph::Text { content } => content
+            .iter()
+            .map(|span| span.text.clone())
+            .collect::<String>(),
+        other => panic!("Expected text paragraph, got {:?}", other),
+    };
+    assert_eq!(merged_text, "Almma");
+
+    assert!(editor.insert_char('X'));
+    let updated_text = match &editor.document().paragraphs[0] {
+        Paragraph::Text { content } => content
+            .iter()
+            .map(|span| span.text.clone())
+            .collect::<String>(),
+        other => panic!("Expected text paragraph after insertion, got {:?}", other),
+    };
+    assert_eq!(updated_text, "AlXmma");
+}
+
+#[test]
 fn delete_joins_checklist_items() {
     let mut doc = Document::new();
     doc.add_paragraph(Paragraph::new_checklist().with_checklist_items(vec![

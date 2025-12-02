@@ -252,6 +252,190 @@ pub struct DocumentEditor {
 }
 
 impl DocumentEditor {
+    fn normalize_selection(
+        &self,
+        selection: &(CursorPointer, CursorPointer),
+    ) -> Option<(CursorPointer, CursorPointer)> {
+        let mut start = selection.0.clone();
+        let mut end = selection.1.clone();
+
+        let ordering = self.compare_pointers(&start, &end)?;
+        match ordering {
+            Ordering::Less => {}
+            Ordering::Equal => return None,
+            Ordering::Greater => {
+                std::mem::swap(&mut start, &mut end);
+            }
+        }
+
+        Some((start, end))
+    }
+
+    pub(crate) fn selection_paragraph_targets(
+        &self,
+        selection: &(CursorPointer, CursorPointer),
+    ) -> Option<Vec<CursorPointer>> {
+        if self.segments.is_empty() {
+            return None;
+        }
+
+        let (start, end) = self.normalize_selection(selection)?;
+        let start_key = self.pointer_key(&start)?;
+        let end_key = self.pointer_key(&end)?;
+
+        let mut targets: Vec<CursorPointer> = Vec::new();
+
+        for segment_index in start_key.segment_index..=end_key.segment_index {
+            let Some(segment) = self.segments.get(segment_index) else {
+                continue;
+            };
+            if segment.kind != SegmentKind::Text {
+                continue;
+            }
+
+            let len = segment.len;
+            let seg_start = if segment_index == start_key.segment_index {
+                start_key.offset.min(len)
+            } else {
+                0
+            };
+            let seg_end = if segment_index == end_key.segment_index {
+                end_key.offset.min(len)
+            } else {
+                len
+            };
+
+            let touched = if start_key.segment_index == end_key.segment_index {
+                seg_start < seg_end
+            } else if segment_index == start_key.segment_index {
+                seg_start < len || segment_index < end_key.segment_index
+            } else if segment_index == end_key.segment_index {
+                seg_end > 0
+            } else {
+                true
+            };
+
+            if !touched {
+                continue;
+            }
+
+            if targets
+                .iter()
+                .any(|pointer| pointer.paragraph_path == segment.paragraph_path)
+            {
+                continue;
+            }
+
+            targets.push(CursorPointer {
+                paragraph_path: segment.paragraph_path.clone(),
+                span_path: segment.span_path.clone(),
+                offset: if segment_index == start_key.segment_index {
+                    seg_start
+                } else {
+                    0
+                },
+                segment_kind: SegmentKind::Text,
+            });
+        }
+
+        if targets.is_empty() {
+            return None;
+        }
+
+        let mut keyed: Vec<(PointerKey, CursorPointer)> = Vec::new();
+        let mut unkeyed: Vec<CursorPointer> = Vec::new();
+        for pointer in targets {
+            if let Some(key) = self.pointer_key(&pointer) {
+                keyed.push((key, pointer));
+            } else {
+                unkeyed.push(pointer);
+            }
+        }
+
+        keyed.sort_by(|a, b| b.0.cmp(&a.0));
+
+        let mut ordered: Vec<CursorPointer> = keyed.into_iter().map(|(_, ptr)| ptr).collect();
+        ordered.extend(unkeyed.into_iter());
+
+        Some(ordered)
+    }
+
+    pub(crate) fn pointer_for_character(&self, target: char) -> Option<CursorPointer> {
+        for segment in &self.segments {
+            if segment.kind != SegmentKind::Text {
+                continue;
+            }
+            let Some(text) = self.segment_text(segment) else {
+                continue;
+            };
+            for (idx, ch) in text.chars().enumerate() {
+                if ch == target {
+                    return Some(CursorPointer {
+                        paragraph_path: segment.paragraph_path.clone(),
+                        span_path: segment.span_path.clone(),
+                        offset: idx,
+                        segment_kind: SegmentKind::Text,
+                    });
+                }
+            }
+        }
+        None
+    }
+
+    pub(crate) fn remove_char_at_pointer(&mut self, pointer: &CursorPointer) -> bool {
+        if remove_char_at(&mut self.document, pointer, pointer.offset) {
+            self.update_segments_for_paragraph(&pointer.paragraph_path);
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn remove_selection(&mut self, selection: &(CursorPointer, CursorPointer)) -> bool {
+        if self.segments.is_empty() {
+            return false;
+        }
+
+        let (start, end) = match self.normalize_selection(selection) {
+            Some(bounds) => bounds,
+            None => return false,
+        };
+
+        let mut moved = self.move_to_pointer(&end);
+        if !moved {
+            moved =
+                self.fallback_move_to_text(&end, false) || self.fallback_move_to_text(&end, true);
+        }
+        if !moved {
+            return false;
+        }
+
+        loop {
+            match self.compare_pointers(&self.cursor, &start) {
+                Some(Ordering::Greater) => {
+                    if !self.backspace() {
+                        return false;
+                    }
+                }
+                Some(Ordering::Equal) => break,
+                Some(Ordering::Less) => {
+                    let mut moved_to_start = self.move_to_pointer(&start);
+                    if !moved_to_start {
+                        moved_to_start = self.fallback_move_to_text(&start, false)
+                            || self.fallback_move_to_text(&start, true);
+                    }
+                    if !moved_to_start {
+                        return false;
+                    }
+                    break;
+                }
+                None => return false,
+            }
+        }
+
+        true
+    }
+
     pub fn new(mut document: Document) -> Self {
         ensure_document_initialized(&mut document);
         let mut editor = Self {

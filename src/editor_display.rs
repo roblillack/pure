@@ -43,6 +43,8 @@ pub struct EditorDisplay {
 }
 
 impl EditorDisplay {
+    const CURSOR_MARKER: char = '\u{F8F0}';
+
     /// Create a new EditorDisplay with the given editor
     pub fn new(editor: DocumentEditor) -> Self {
         Self {
@@ -223,6 +225,7 @@ impl EditorDisplay {
             self.wrap_width,
             self.left_padding,
             prefix,
+            false,
             &reveal_tags,
             crate::render::DirectCursorTracking {
                 cursor: Some(&self.editor.cursor_pointer()),
@@ -443,6 +446,7 @@ impl EditorDisplay {
             self.wrap_width,
             self.left_padding,
             "",
+            false,
             &reveal_tags,
             DirectCursorTracking {
                 cursor: Some(&cursor_pointer),
@@ -1150,33 +1154,65 @@ impl EditorDisplay {
 
     /// Focus on a specific pointer
     pub fn focus_pointer(&mut self, pointer: &CursorPointer) {
-        if self.editor.move_to_pointer(pointer) {
-            // Search for the visual position of this pointer in paragraph_lines
-            let found = self
-                .layout
-                .as_ref()
-                .unwrap()
-                .paragraph_lines
-                .iter()
-                .find_map(|info| {
-                    info.positions
-                        .iter()
-                        .find(|(p, _)| p == pointer)
-                        .map(|(_, pos)| {
-                            // Convert relative position to absolute
-                            let mut absolute_pos = *pos;
-                            absolute_pos.line = info.start_line + pos.line;
-                            absolute_pos
-                        })
-                });
+        let mut moved = self.editor.move_to_pointer(pointer);
+        if !moved {
+            moved = self.editor.fallback_move_to_text(pointer, false)
+                || self.editor.fallback_move_to_text(pointer, true);
+        }
+        if !moved {
+            return;
+        }
 
-            if let Some(position) = found {
-                self.preferred_column = Some(position.content_column);
-            } else {
-                self.preferred_column = None;
-            }
+        let Some(layout) = self.layout.as_ref() else {
+            self.preferred_column = None;
             self.cursor_following = true;
-            self.update_cursor_visual_position();
+            return;
+        };
+
+        // Search for the visual position of this pointer in paragraph_lines
+        let found = layout.paragraph_lines.iter().find_map(|info| {
+            info.positions
+                .iter()
+                .find(|(p, _)| p == pointer)
+                .map(|(_, pos)| {
+                    // Convert relative position to absolute
+                    let mut absolute_pos = *pos;
+                    absolute_pos.line = info.start_line + pos.line;
+                    absolute_pos
+                })
+        });
+
+        if let Some(position) = found {
+            self.preferred_column = Some(position.content_column);
+        } else {
+            self.preferred_column = None;
+        }
+        self.cursor_following = true;
+        self.update_cursor_visual_position();
+    }
+
+    fn place_temporary_cursor_marker(&mut self, pointer: &CursorPointer) -> bool {
+        let mut moved = self.editor.move_to_pointer(pointer);
+        if !moved {
+            moved = self.editor.fallback_move_to_text(pointer, false)
+                || self.editor.fallback_move_to_text(pointer, true);
+        }
+        if !moved {
+            return false;
+        }
+        if !self.editor.insert_char(Self::CURSOR_MARKER) {
+            return false;
+        }
+        true
+    }
+
+    fn remove_temporary_cursor_marker(&mut self) {
+        let Some(pointer) = self.editor.pointer_for_character(Self::CURSOR_MARKER) else {
+            return;
+        };
+        let focus_pointer = pointer.clone();
+        if self.editor.remove_char_at_pointer(&pointer) {
+            self.focus_pointer(&focus_pointer);
         }
     }
 
@@ -1422,6 +1458,60 @@ impl EditorDisplay {
         }
 
         self.clear_render_cache();
+        result
+    }
+
+    pub fn set_paragraph_type_for_selection(
+        &mut self,
+        selection: &(CursorPointer, CursorPointer),
+        target: tdoc::ParagraphType,
+    ) -> bool {
+        let Some(paragraph_targets) = self.editor.selection_paragraph_targets(selection) else {
+            return false;
+        };
+
+        if paragraph_targets.is_empty() {
+            return false;
+        }
+
+        let marker_inserted = self.place_temporary_cursor_marker(&selection.1);
+        let mut changed = false;
+
+        for pointer in paragraph_targets {
+            let mut moved = self.editor.move_to_pointer(&pointer);
+            if !moved {
+                moved = self.editor.fallback_move_to_text(&pointer, false)
+                    || self.editor.fallback_move_to_text(&pointer, true);
+            }
+            if !moved {
+                continue;
+            }
+
+            if self.editor.set_paragraph_type(target) {
+                changed = true;
+            }
+        }
+
+        if marker_inserted {
+            self.remove_temporary_cursor_marker();
+        } else {
+            self.focus_pointer(&selection.1);
+        }
+
+        if changed {
+            self.force_full_relayout();
+            self.clear_render_cache();
+        }
+
+        changed
+    }
+
+    pub fn remove_selection(&mut self, selection: &(CursorPointer, CursorPointer)) -> bool {
+        let result = self.editor.remove_selection(selection);
+        if result {
+            self.force_full_relayout();
+            self.clear_render_cache();
+        }
         result
     }
 }

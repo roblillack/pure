@@ -703,6 +703,25 @@ impl App {
         }
     }
 
+    fn insert_char_with_selection(&mut self, ch: char) -> bool {
+        let mut selection_changed = false;
+        if let Some(selection) = self.current_selection() {
+            if !self.display.remove_selection(&selection) {
+                return false;
+            }
+            self.selection_anchor = None;
+            selection_changed = true;
+        }
+
+        let inserted = self.display.insert_char(ch);
+        if selection_changed || inserted {
+            self.mark_dirty();
+            self.display.set_preferred_column(None);
+        }
+
+        inserted
+    }
+
     fn capture_reveal_toggle_snapshot(&self) -> RevealToggleSnapshot {
         let viewport = self.display.last_view_height().max(1);
         let max_scroll = self
@@ -1101,8 +1120,25 @@ impl App {
     fn execute_menu_action(&mut self, action: MenuAction) -> bool {
         match action {
             MenuAction::SetParagraphType(kind) => {
-                if self.display.set_paragraph_type(kind) {
+                let handled = if let Some(selection) = self.current_selection() {
+                    if self
+                        .display
+                        .set_paragraph_type_for_selection(&selection, kind)
+                    {
+                        self.mark_dirty();
+                        self.selection_anchor = None;
+                        true
+                    } else {
+                        false
+                    }
+                } else if self.display.set_paragraph_type(kind) {
                     self.mark_dirty();
+                    true
+                } else {
+                    false
+                };
+
+                if handled {
                     self.display.set_preferred_column(None);
                 }
                 true
@@ -1728,10 +1764,7 @@ impl App {
                         self.display.move_to_visual_line_start();
                     }
                     (KeyCode::Char('j'), m) if m.contains(KeyModifiers::CONTROL) => {
-                        if self.display.insert_char('\n') {
-                            self.mark_dirty();
-                            self.display.set_preferred_column(None);
-                        }
+                        self.insert_char_with_selection('\n');
                     }
                     (KeyCode::Char('p'), m) if m.contains(KeyModifiers::CONTROL) => {
                         self.prepare_selection(false);
@@ -1780,28 +1813,19 @@ impl App {
                     }
                     (KeyCode::Enter, m) => {
                         if m.contains(KeyModifiers::SHIFT) || m.contains(KeyModifiers::CONTROL) {
-                            if self.display.insert_char('\n') {
-                                self.mark_dirty();
-                                self.display.set_preferred_column(None);
-                            }
+                            self.insert_char_with_selection('\n');
                         } else if self.insert_paragraph_break() {
                             self.mark_dirty();
                             self.display.set_preferred_column(None);
                         }
                     }
                     (KeyCode::Tab, _) => {
-                        if self.display.insert_char('\t') {
-                            self.mark_dirty();
-                            self.display.set_preferred_column(None);
-                        }
+                        self.insert_char_with_selection('\t');
                     }
                     (KeyCode::Char(ch), m)
                         if !m.contains(KeyModifiers::CONTROL) && !m.contains(KeyModifiers::ALT) =>
                     {
-                        if self.display.insert_char(ch) {
-                            self.mark_dirty();
-                            self.display.set_preferred_column(None);
-                        }
+                        self.insert_char_with_selection(ch);
                     }
                     (KeyCode::Up, m) if m.contains(KeyModifiers::SHIFT) => {
                         self.prepare_selection(true);
