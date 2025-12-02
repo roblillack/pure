@@ -65,6 +65,8 @@ pub struct ParagraphLayout {
     pub cursor: Option<CursorVisualPosition>,
     /// Number of lines rendered
     pub line_count: usize,
+    /// Whether selection is still active after finishing this paragraph
+    pub selection_active_end: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -113,6 +115,7 @@ pub fn render_document_direct(
         reveal_tags,
         direct_tracking,
         theme,
+        false,
     );
     renderer.render_document(document);
     renderer.finish()
@@ -128,6 +131,7 @@ pub fn layout_paragraph(
     wrap_width: usize,
     left_padding: usize,
     prefix: &str,
+    selection_active: bool,
     reveal_tags: &[RevealTagRef],
     direct_tracking: DirectCursorTracking,
     theme: &Theme,
@@ -139,6 +143,7 @@ pub fn layout_paragraph(
         reveal_tags,
         direct_tracking,
         theme,
+        selection_active,
     );
 
     renderer.current_paragraph_index = paragraph_index;
@@ -186,6 +191,7 @@ pub fn layout_paragraph(
         positions,
         cursor,
         line_count,
+        selection_active_end: renderer.selection_active,
     }
 }
 
@@ -221,6 +227,7 @@ struct DirectRenderer<'a> {
 
     // Theme for styling
     theme: Theme,
+    selection_active: bool,
 }
 
 impl<'a> DirectRenderer<'a> {
@@ -231,6 +238,7 @@ impl<'a> DirectRenderer<'a> {
         reveal_tags: &[RevealTagRef],
         direct_tracking: DirectCursorTracking<'a>,
         theme: &Theme,
+        selection_active: bool,
     ) -> Self {
         let wrap_limit = if wrap_width > 1 { wrap_width - 1 } else { 1 };
         let padding = if left_padding > 0 {
@@ -264,10 +272,12 @@ impl<'a> DirectRenderer<'a> {
             marker_to_pointer: HashMap::new(),
             paragraph_lines: Vec::new(),
             theme: theme.clone(),
+            selection_active,
         }
     }
 
     fn render_document(&mut self, document: &Document) {
+        let mut selection_active = false;
         for (idx, paragraph) in document.paragraphs.iter().enumerate() {
             if idx > 0 {
                 self.push_plain_line("", true);
@@ -296,10 +306,13 @@ impl<'a> DirectRenderer<'a> {
                 self.wrap_width,
                 self.left_padding,
                 "",
+                selection_active,
                 &reveal_tags,
                 direct_tracking,
                 &self.theme,
             );
+
+            selection_active = layout.selection_active_end;
 
             // Add the lines and metrics to our result
             self.lines.extend(layout.lines);
@@ -1070,7 +1083,7 @@ impl<'a> DirectRenderer<'a> {
     }
 
     fn wrap_fragments_direct(
-        &self,
+        &mut self,
         fragments: &[FragmentItem],
         first_prefix: &str,
         continuation_prefix: &str,
@@ -1078,13 +1091,16 @@ impl<'a> DirectRenderer<'a> {
     ) -> Vec<LineOutput> {
         // Fragments are already converted to Fragment type in tokenize_text_direct,
         // so we can just call wrap_fragments directly
-        wrap_fragments(
+        let (outputs, selection_active_end) = wrap_fragments(
             fragments,
             first_prefix,
             continuation_prefix,
             width,
+            self.selection_active,
             &self.theme,
-        )
+        );
+        self.selection_active = selection_active_end;
+        outputs
     }
 
     fn consume_lines_direct(&mut self, outputs: Vec<LineOutput>) {
@@ -1563,10 +1579,11 @@ fn wrap_fragments(
     first_prefix: &str,
     continuation_prefix: &str,
     width: usize,
+    mut selection_active: bool,
     theme: &Theme,
-) -> Vec<LineOutput> {
+) -> (Vec<LineOutput>, bool) {
     let mut outputs = Vec::new();
-    let mut builder = LineBuilder::new(first_prefix.to_string(), width, false, theme);
+    let mut builder = LineBuilder::new(first_prefix.to_string(), width, selection_active, theme);
     let mut pending_whitespace: Vec<Fragment> = Vec::new();
 
     for fragment in fragments {
@@ -1574,11 +1591,12 @@ fn wrap_fragments(
             FragmentItem::LineBreak => {
                 builder.consume_pending(&mut pending_whitespace);
                 let (line, active_selection) = builder.build_line();
+                selection_active = active_selection;
                 outputs.push(line);
                 builder = LineBuilder::new(
                     continuation_prefix.to_string(),
                     width,
-                    active_selection,
+                    selection_active,
                     theme,
                 );
             }
@@ -1596,11 +1614,12 @@ fn wrap_fragments(
                         {
                             builder.consume_pending(&mut pending_whitespace);
                             let (line, active_selection) = builder.build_line();
+                            selection_active = active_selection;
                             outputs.push(line);
                             builder = LineBuilder::new(
                                 continuation_prefix.to_string(),
                                 width,
-                                active_selection,
+                                selection_active,
                                 theme,
                             );
                             continue;
@@ -1617,11 +1636,12 @@ fn wrap_fragments(
                             let (head, tail_opt) = split_fragment(token, split_limit);
                             builder.append_with_pending(head, &mut pending_whitespace);
                             let (line, active_selection) = builder.build_line();
+                            selection_active = active_selection;
                             outputs.push(line);
                             builder = LineBuilder::new(
                                 continuation_prefix.to_string(),
                                 width,
-                                active_selection,
+                                selection_active,
                                 theme,
                             );
                             if let Some(tail) = tail_opt {
@@ -1641,9 +1661,9 @@ fn wrap_fragments(
     }
 
     builder.consume_pending(&mut pending_whitespace);
-    let (line, _) = builder.build_line();
+    let (line, active_selection) = builder.build_line();
     outputs.push(line);
-    outputs
+    (outputs, active_selection)
 }
 
 fn split_fragment(fragment: Fragment, limit: usize) -> (Fragment, Option<Fragment>) {

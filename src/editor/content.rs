@@ -40,18 +40,7 @@ pub(crate) fn remove_char_at(
         let Some(span) = span_mut_from_item(item, &pointer.span_path) else {
             return false;
         };
-        let char_len = span.text.chars().count();
-        if offset >= char_len {
-            return false;
-        }
-        let byte_idx = char_to_byte_idx(&span.text, offset);
-        if let Some(ch) = span.text.chars().nth(offset) {
-            for _ in 0..ch.len_utf8() {
-                span.text.remove(byte_idx);
-            }
-            return true;
-        }
-        return false;
+        return remove_char_from_text(&mut span.text, offset);
     }
 
     let Some(paragraph) = paragraph_mut(document, &pointer.paragraph_path) else {
@@ -60,16 +49,20 @@ pub(crate) fn remove_char_at(
     let Some(span) = span_mut(paragraph, &pointer.span_path) else {
         return false;
     };
-    let char_len = span.text.chars().count();
+    remove_char_from_text(&mut span.text, offset)
+}
+
+fn remove_char_from_text(text: &mut String, offset: usize) -> bool {
+    let char_len = text.chars().count();
     if offset >= char_len {
         return false;
     }
-    let start = char_to_byte_idx(&span.text, offset);
-    let end = char_to_byte_idx(&span.text, offset + 1);
-    if start >= end || end > span.text.len() {
+    let start = char_to_byte_idx(text, offset);
+    let end = char_to_byte_idx(text, offset + 1);
+    if start >= end || end > text.len() {
         return false;
     }
-    span.text.drain(start..end);
+    text.drain(start..end);
     true
 }
 
