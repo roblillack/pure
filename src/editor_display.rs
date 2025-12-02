@@ -1540,6 +1540,9 @@ impl EditorDisplay {
         // Track the paragraph count and affected paragraph before the change
         let para_count_before = self.editor.document().paragraphs.len();
         let para_index_before = self.editor.cursor_pointer().paragraph_path.root_index();
+        let old_type = para_index_before
+            .and_then(|idx| self.editor.document().paragraphs.get(idx))
+            .map(|paragraph| paragraph.paragraph_type());
 
         let result = self.editor.set_paragraph_type(target);
 
@@ -1551,10 +1554,17 @@ impl EditorDisplay {
         let para_index_after = self.editor.cursor_pointer().paragraph_path.root_index();
 
         // Determine which paragraphs were affected by the structural change
+        let new_type = para_index_after
+            .and_then(|idx| self.editor.document().paragraphs.get(idx))
+            .map(|paragraph| paragraph.paragraph_type());
+
         if para_count_before == para_count_after {
-            // No structural change in paragraph count - simple type change
-            // Mark the paragraph that changed (could be before or after cursor position)
-            if let Some(idx) = para_index_before.or(para_index_after) {
+            let margin_sensitive = Self::paragraph_requires_margin_layout(old_type)
+                || Self::paragraph_requires_margin_layout(new_type);
+
+            if margin_sensitive {
+                self.force_full_relayout();
+            } else if let Some(idx) = para_index_before.or(para_index_after) {
                 self.mark_paragraph_modified(idx);
             }
         } else {
@@ -1622,6 +1632,17 @@ impl EditorDisplay {
             self.clear_render_cache();
         }
         result
+    }
+
+    fn paragraph_requires_margin_layout(paragraph_type: Option<tdoc::ParagraphType>) -> bool {
+        matches!(
+            paragraph_type,
+            Some(
+                tdoc::ParagraphType::Header1
+                    | tdoc::ParagraphType::Header2
+                    | tdoc::ParagraphType::Header3
+            )
+        )
     }
 }
 
@@ -3312,6 +3333,100 @@ mod tests {
         assert!(
             !display.layout_dirty,
             "Should use incremental update (layout_dirty should be false)"
+        );
+    }
+
+    #[test]
+    fn converting_text_to_header_forces_full_relayout() {
+        let doc = ftml! {
+            p { "Heading" }
+            p { "Body" }
+        };
+        let mut editor = DocumentEditor::new(doc);
+        editor.ensure_cursor_selectable();
+        let mut display = EditorDisplay::new(editor);
+
+        display.render_document_with_positions(80, 0, None);
+        display.layout_dirty = false;
+
+        assert!(
+            display.set_paragraph_type(tdoc::ParagraphType::Header1),
+            "Should convert text to header"
+        );
+
+        assert!(
+            display.layout_dirty,
+            "Header conversion should force full re-render for updated margins"
+        );
+    }
+
+    #[test]
+    fn converting_header_to_text_forces_full_relayout() {
+        let doc = ftml! {
+            h1 { "Heading" }
+            p { "Body" }
+        };
+        let mut editor = DocumentEditor::new(doc);
+        editor.ensure_cursor_selectable();
+        let mut display = EditorDisplay::new(editor);
+
+        display.render_document_with_positions(80, 0, None);
+        display.layout_dirty = false;
+
+        assert!(
+            display.set_paragraph_type(tdoc::ParagraphType::Text),
+            "Should convert header to text"
+        );
+
+        assert!(
+            display.layout_dirty,
+            "Converting header back to text should force full re-render"
+        );
+    }
+
+    #[test]
+    fn converting_text_to_header2_forces_full_relayout() {
+        let doc = ftml! {
+            p { "Heading" }
+            p { "Body" }
+        };
+        let mut editor = DocumentEditor::new(doc);
+        editor.ensure_cursor_selectable();
+        let mut display = EditorDisplay::new(editor);
+
+        display.render_document_with_positions(80, 0, None);
+        display.layout_dirty = false;
+
+        assert!(
+            display.set_paragraph_type(tdoc::ParagraphType::Header2),
+            "Should convert text to header2"
+        );
+        assert!(
+            display.layout_dirty,
+            "Header2 conversion should force full re-render for updated margins"
+        );
+    }
+
+    #[test]
+    fn converting_header3_to_text_forces_full_relayout() {
+        let doc = ftml! {
+            h3 { "Heading" }
+            p { "Body" }
+        };
+        let mut editor = DocumentEditor::new(doc);
+        editor.ensure_cursor_selectable();
+        let mut display = EditorDisplay::new(editor);
+
+        display.render_document_with_positions(80, 0, None);
+        display.layout_dirty = false;
+
+        assert!(
+            display.set_paragraph_type(tdoc::ParagraphType::Text),
+            "Should convert header3 to text"
+        );
+        assert!(
+            display.layout_dirty,
+            "Converting header3 back to text should force full re-render"
         );
     }
 

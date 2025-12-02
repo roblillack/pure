@@ -278,8 +278,13 @@ impl<'a> DirectRenderer<'a> {
 
     fn render_document(&mut self, document: &Document) {
         let mut selection_active = false;
+        let mut pending_bottom_margin = 0usize;
         for (idx, paragraph) in document.paragraphs.iter().enumerate() {
-            if idx > 0 {
+            let (top_margin, bottom_margin) = Self::paragraph_margins(paragraph);
+            let base_gap = if idx > 0 { 1 } else { 0 };
+            let margin_lines = base_gap.max(pending_bottom_margin).max(top_margin);
+
+            for _ in 0..margin_lines {
                 self.push_plain_line("", true);
             }
 
@@ -372,7 +377,42 @@ impl<'a> DirectRenderer<'a> {
                 end_line,
                 positions: paragraph_positions,
             });
+
+            pending_bottom_margin = bottom_margin;
         }
+
+        for _ in 0..pending_bottom_margin {
+            self.push_plain_line("", true);
+        }
+    }
+
+    fn paragraph_margins(paragraph: &Paragraph) -> (usize, usize) {
+        match paragraph.paragraph_type() {
+            ParagraphType::Header1 => (3, 3),
+            ParagraphType::Header2 => (3, 2),
+            ParagraphType::Header3 => (2, 1),
+            _ => (0, 0),
+        }
+    }
+
+    fn paragraph_is_list(paragraph: &Paragraph) -> bool {
+        matches!(
+            paragraph.paragraph_type(),
+            ParagraphType::UnorderedList | ParagraphType::OrderedList | ParagraphType::Checklist
+        )
+    }
+
+    fn ensure_margin_line(&mut self, prefix: &str) {
+        if !self.last_line_is_blank() {
+            self.push_structural_margin_line(prefix, false);
+        }
+    }
+
+    fn last_line_is_blank(&self) -> bool {
+        self.lines
+            .last()
+            .map(|line| line_width(line) == 0)
+            .unwrap_or(false)
     }
 
     fn render_paragraph(&mut self, paragraph: &Paragraph, prefix: &str) {
@@ -446,6 +486,10 @@ impl<'a> DirectRenderer<'a> {
             }
         }
 
+        if matches!(level, HeaderLevel::One) {
+            self.center_header_lines(&mut lines, prefix);
+        }
+
         self.consume_lines_direct(lines);
 
         if matches!(level, HeaderLevel::Two | HeaderLevel::Three) {
@@ -462,6 +506,69 @@ impl<'a> DirectRenderer<'a> {
             let underline = underline_string(underline_width, underline_char);
             let underline_line = format!("{}{}", prefix, underline);
             self.push_styled_line(&underline_line, self.theme.structural_style(), false);
+        }
+    }
+
+    fn center_header_lines(&self, lines: &mut [LineOutput], prefix: &str) {
+        let available_width = self.wrap_limit;
+        let prefix_width = visible_width(prefix);
+
+        for line in lines.iter_mut() {
+            let total_width: usize = line
+                .spans
+                .iter()
+                .map(|segment| visible_width(&segment.text))
+                .sum();
+
+            if total_width <= prefix_width {
+                continue;
+            }
+
+            let content_width = total_width.saturating_sub(prefix_width);
+            let available_content = available_width.saturating_sub(prefix_width);
+
+            if content_width >= available_content {
+                continue;
+            }
+
+            let leading_spaces = (available_content - content_width) / 2;
+            if leading_spaces == 0 {
+                continue;
+            }
+
+            self.insert_leading_space_segment(line, leading_spaces, prefix_width);
+        }
+    }
+
+    fn insert_leading_space_segment(
+        &self,
+        line: &mut LineOutput,
+        space_count: usize,
+        prefix_width: usize,
+    ) {
+        if space_count == 0 || line.spans.is_empty() {
+            return;
+        }
+
+        let mut consumed = 0usize;
+        let mut insert_index = 0usize;
+        while insert_index < line.spans.len() && consumed < prefix_width {
+            consumed += visible_width(&line.spans[insert_index].text);
+            insert_index += 1;
+        }
+
+        let spaces = " ".repeat(space_count);
+        line.spans.insert(
+            insert_index,
+            LineSegment {
+                text: spaces,
+                style: Style::default(),
+            },
+        );
+
+        let delta = space_count.min(u16::MAX as usize) as u16;
+        for event in &mut line.events {
+            event.column = event.column.saturating_add(delta);
         }
     }
 
@@ -505,7 +612,7 @@ impl<'a> DirectRenderer<'a> {
     fn render_unordered_list(&mut self, paragraph: &Paragraph, prefix: &str) {
         for (entry_idx, entry) in paragraph.entries().iter().enumerate() {
             if entry_idx > 0 {
-                self.push_structural_margin_line(prefix, false);
+                self.ensure_margin_line(prefix);
             }
             let marker = "• ";
             let first_prefix = format!("{}{}", prefix, marker);
@@ -517,7 +624,7 @@ impl<'a> DirectRenderer<'a> {
     fn render_ordered_list(&mut self, paragraph: &Paragraph, prefix: &str) {
         for (entry_idx, entry) in paragraph.entries().iter().enumerate() {
             if entry_idx > 0 {
-                self.push_structural_margin_line(prefix, false);
+                self.ensure_margin_line(prefix);
             }
             let number_label = format!("{}. ", entry_idx + 1);
             let first_prefix = format!("{}{}", prefix, number_label);
@@ -535,7 +642,7 @@ impl<'a> DirectRenderer<'a> {
     fn render_checklist(&mut self, paragraph: &Paragraph, prefix: &str) {
         for (item_idx, item) in paragraph.checklist_items().iter().enumerate() {
             if item_idx > 0 {
-                self.push_structural_margin_line(prefix, false);
+                self.ensure_margin_line(prefix);
             }
             self.render_checklist_item_struct(item, vec![item_idx], prefix);
         }
@@ -667,6 +774,7 @@ impl<'a> DirectRenderer<'a> {
         }
 
         let mut iter = entry.iter().enumerate();
+        let mut last_was_nested_list = false;
         if let Some((para_idx, first)) = iter.next() {
             // Update paragraph path for this entry paragraph
             self.current_paragraph_path.push_entry(entry_idx, para_idx);
@@ -674,10 +782,21 @@ impl<'a> DirectRenderer<'a> {
             match first.paragraph_type() {
                 ParagraphType::Text => {
                     self.render_text_paragraph(first, first_prefix, continuation_prefix);
+                    last_was_nested_list = false;
+                }
+                ParagraphType::UnorderedList
+                | ParagraphType::OrderedList
+                | ParagraphType::Checklist => {
+                    self.push_plain_line(first_prefix, false);
+                    self.ensure_margin_line(continuation_prefix);
+                    self.render_paragraph(first, continuation_prefix);
+                    self.ensure_margin_line(continuation_prefix);
+                    last_was_nested_list = true;
                 }
                 _ => {
                     self.push_plain_line(first_prefix, false);
                     self.render_paragraph(first, continuation_prefix);
+                    last_was_nested_list = false;
                 }
             }
 
@@ -689,10 +808,26 @@ impl<'a> DirectRenderer<'a> {
             // Update paragraph path for each subsequent paragraph in the entry
             self.current_paragraph_path.push_entry(entry_idx, para_idx);
 
-            if rest.paragraph_type() == ParagraphType::Text {
-                self.push_structural_margin_line(continuation_prefix, false);
+            let is_nested_list = Self::paragraph_is_list(rest);
+
+            if is_nested_list {
+                if !last_was_nested_list {
+                    self.ensure_margin_line(continuation_prefix);
+                }
+                self.render_paragraph(rest, continuation_prefix);
+                self.ensure_margin_line(continuation_prefix);
+                last_was_nested_list = true;
+            } else {
+                if rest.paragraph_type() == ParagraphType::Text {
+                    if !last_was_nested_list {
+                        self.push_structural_margin_line(continuation_prefix, false);
+                    }
+                    self.render_paragraph(rest, continuation_prefix);
+                } else {
+                    self.render_paragraph(rest, continuation_prefix);
+                }
+                last_was_nested_list = false;
             }
-            self.render_paragraph(rest, continuation_prefix);
 
             // Restore paragraph path
             self.current_paragraph_path.pop();
@@ -1990,7 +2125,7 @@ mod tests {
         selection_end: '\u{F8FD}',
     };
 
-    fn render_input(input: &str) -> RenderResult {
+    fn render_input_with_width(input: &str, width: usize) -> RenderResult {
         let document = parse(Cursor::new(input)).expect("failed to parse document");
         let tracking = DirectCursorTracking {
             cursor: None,
@@ -1998,7 +2133,11 @@ mod tests {
             track_all_positions: false,
         };
         let theme = Theme::default();
-        render_document_direct(&document, 120, 0, &[], tracking, &theme)
+        render_document_direct(&document, width, 0, &[], tracking, &theme)
+    }
+
+    fn render_input(input: &str) -> RenderResult {
+        render_input_with_width(input, 120)
     }
 
     fn lines_to_strings(lines: &[Line<'_>]) -> Vec<String> {
@@ -2205,6 +2344,306 @@ mod tests {
         assert!(
             has_structural_prefix,
             "quote prefix in underline should use structural style"
+        );
+    }
+
+    #[test]
+    fn header1_text_is_centered() {
+        let input = "<h1>Centered</h1>";
+        let wrap_width = 40usize;
+        let rendered = render_input_with_width(input, wrap_width);
+        let lines = lines_to_strings(&rendered.lines);
+        let heading_line = lines
+            .iter()
+            .find(|line| line.contains("Centered"))
+            .expect("missing centered heading line");
+        let leading_spaces = heading_line
+            .chars()
+            .take_while(|ch| ch.is_whitespace())
+            .count();
+        let wrap_limit = if wrap_width > 1 { wrap_width - 1 } else { 1 };
+        let expected_spaces = (wrap_limit.saturating_sub(visible_width("Centered"))) / 2;
+        assert_eq!(
+            leading_spaces, expected_spaces,
+            "expected heading to be centered, got {heading_line:?}"
+        );
+    }
+
+    #[test]
+    fn header1_uses_three_line_margins() {
+        let input = "<h1>Main Title</h1>\n<h2>Subheading</h2>";
+        let rendered = render_input_with_width(input, 60);
+        let lines = lines_to_strings(&rendered.lines);
+        let h1_index = lines
+            .iter()
+            .position(|line| line.contains("Main Title"))
+            .expect("missing h1 line");
+        assert!(
+            h1_index >= 3,
+            "expected at least three blank lines before h1, found index {h1_index}"
+        );
+        for line in &lines[h1_index - 3..h1_index] {
+            assert!(
+                line.is_empty(),
+                "expected blank line before h1, saw {line:?}"
+            );
+        }
+
+        let next_content_index = lines
+            .iter()
+            .enumerate()
+            .skip(h1_index + 1)
+            .find(|(_, line)| !line.is_empty())
+            .map(|(idx, _)| idx)
+            .expect("missing content after h1");
+        assert_eq!(
+            next_content_index - h1_index - 1,
+            3,
+            "expected exactly three blank lines between h1 and following content"
+        );
+    }
+
+    #[test]
+    fn header1_has_trailing_margin_at_document_end() {
+        let input = "<h1>Standalone</h1>";
+        let rendered = render_input_with_width(input, 60);
+        let lines = lines_to_strings(&rendered.lines);
+        let heading_index = lines
+            .iter()
+            .position(|line| line.contains("Standalone"))
+            .expect("missing h1 line");
+        let trailing = lines
+            .iter()
+            .skip(heading_index + 1)
+            .take_while(|line| line.is_empty())
+            .count();
+        assert_eq!(
+            trailing, 3,
+            "expected three blank lines after standalone h1, saw {} lines: {:?}",
+            trailing, lines
+        );
+    }
+
+    #[test]
+    fn header2_has_three_above_two_below() {
+        let input = "<p>Intro</p>\n<h2>Section</h2>\n<p>Body</p>";
+        let rendered = render_input_with_width(input, 60);
+        let lines = lines_to_strings(&rendered.lines);
+        let intro_index = lines
+            .iter()
+            .position(|line| line.contains("Intro"))
+            .expect("missing intro line");
+        let header_index = lines
+            .iter()
+            .position(|line| line.contains("Section"))
+            .expect("missing h2 line");
+        assert_eq!(
+            header_index - intro_index - 1,
+            3,
+            "expected three blank lines before h2, saw {:?}",
+            &lines[intro_index + 1..header_index]
+        );
+        assert!(
+            lines[intro_index + 1..header_index]
+                .iter()
+                .all(|line| line.is_empty())
+        );
+
+        let underline_index = header_index + 1;
+        assert!(underline_index < lines.len(), "missing underline after h2");
+        let next_content_index = lines
+            .iter()
+            .enumerate()
+            .skip(underline_index + 1)
+            .find(|(_, line)| !line.is_empty())
+            .map(|(idx, _)| idx)
+            .expect("missing content after h2");
+        assert_eq!(
+            next_content_index - underline_index - 1,
+            2,
+            "expected two blank lines after h2 underline"
+        );
+        assert!(
+            lines[underline_index + 1..next_content_index]
+                .iter()
+                .all(|line| line.is_empty())
+        );
+    }
+
+    #[test]
+    fn header2_has_trailing_margin_at_document_end() {
+        let input = "<h2>Standalone</h2>";
+        let rendered = render_input_with_width(input, 40);
+        let lines = lines_to_strings(&rendered.lines);
+        let header_index = lines
+            .iter()
+            .position(|line| line.contains("Standalone"))
+            .expect("missing h2 line");
+        let underline_index = header_index + 1;
+        assert!(
+            underline_index < lines.len(),
+            "missing underline after standalone h2"
+        );
+        let trailing = lines
+            .iter()
+            .skip(underline_index + 1)
+            .take_while(|line| line.is_empty())
+            .count();
+        assert_eq!(
+            trailing, 2,
+            "expected two trailing blank lines after standalone h2, saw {} in {:?}",
+            trailing, lines
+        );
+    }
+
+    #[test]
+    fn header3_has_two_above_one_below() {
+        let input = "<p>Intro</p>\n<h3>Section</h3>\n<p>Body</p>";
+        let rendered = render_input_with_width(input, 60);
+        let lines = lines_to_strings(&rendered.lines);
+        let intro_index = lines
+            .iter()
+            .position(|line| line.contains("Intro"))
+            .expect("missing intro line");
+        let header_index = lines
+            .iter()
+            .position(|line| line.contains("Section"))
+            .expect("missing h3 line");
+        assert_eq!(
+            header_index - intro_index - 1,
+            2,
+            "expected two blank lines before h3"
+        );
+        assert!(
+            lines[intro_index + 1..header_index]
+                .iter()
+                .all(|line| line.is_empty())
+        );
+
+        let underline_index = header_index + 1;
+        let next_content_index = lines
+            .iter()
+            .enumerate()
+            .skip(underline_index + 1)
+            .find(|(_, line)| !line.is_empty())
+            .map(|(idx, _)| idx)
+            .expect("missing content after h3");
+        assert_eq!(
+            next_content_index - underline_index - 1,
+            1,
+            "expected one blank line after h3 underline"
+        );
+        assert!(
+            lines[underline_index + 1..next_content_index]
+                .iter()
+                .all(|line| line.is_empty())
+        );
+    }
+
+    #[test]
+    fn header3_has_trailing_margin_at_document_end() {
+        let input = "<h3>Standalone</h3>";
+        let rendered = render_input_with_width(input, 40);
+        let lines = lines_to_strings(&rendered.lines);
+        let header_index = lines
+            .iter()
+            .position(|line| line.contains("Standalone"))
+            .expect("missing h3 line");
+        let underline_index = header_index + 1;
+        let trailing = lines
+            .iter()
+            .skip(underline_index + 1)
+            .take_while(|line| line.is_empty())
+            .count();
+        assert_eq!(
+            trailing, 1,
+            "expected one trailing blank line after standalone h3, saw {} in {:?}",
+            trailing, lines
+        );
+    }
+
+    #[test]
+    fn nested_list_has_spacing_within_entry() {
+        let input = r#"
+<ul>
+  <li>
+    <p>Parent</p>
+    <ul>
+      <li><p>Child 1</p></li>
+      <li><p>Child 2</p></li>
+    </ul>
+    <p>After nested</p>
+  </li>
+</ul>
+"#;
+        let rendered = render_input_with_width(input, 60);
+        let lines = lines_to_strings(&rendered.lines);
+        let parent_index = lines
+            .iter()
+            .position(|line| line.contains("Parent"))
+            .expect("missing parent line");
+        assert!(
+            lines
+                .get(parent_index + 1)
+                .map(|line| line.is_empty())
+                .unwrap_or(false),
+            "expected blank line before nested list, got {:?}",
+            lines
+        );
+        let child2_index = lines
+            .iter()
+            .position(|line| line.contains("Child 2"))
+            .expect("missing child line");
+        assert!(
+            lines
+                .get(child2_index + 1)
+                .map(|line| line.is_empty())
+                .unwrap_or(false),
+            "expected blank line after nested list, got {:?}",
+            lines
+        );
+        let after_index = lines
+            .iter()
+            .position(|line| line.contains("After nested"))
+            .expect("missing trailing paragraph");
+        assert_eq!(
+            after_index,
+            child2_index + 2,
+            "expected exactly one blank line between nested list and following text"
+        );
+    }
+
+    #[test]
+    fn nested_list_spacing_does_not_double_gap_between_entries() {
+        let input = r#"
+<ul>
+  <li>
+    <p>Parent</p>
+    <ul>
+      <li><p>Child</p></li>
+    </ul>
+  </li>
+  <li>
+    <p>Next</p>
+  </li>
+</ul>
+"#;
+        let rendered = render_input_with_width(input, 60);
+        let lines = lines_to_strings(&rendered.lines);
+        let child_index = lines
+            .iter()
+            .position(|line| line.contains("Child"))
+            .expect("missing child line");
+        let next_index = lines
+            .iter()
+            .position(|line| line.contains("Next"))
+            .expect("missing next entry");
+        let blank_between = next_index.saturating_sub(child_index + 1);
+        assert_eq!(
+            blank_between,
+            1,
+            "expected single blank line between nested list and next entry, got {:?}",
+            &lines[child_index + 1..=next_index]
         );
     }
 
