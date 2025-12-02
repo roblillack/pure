@@ -1195,15 +1195,15 @@ impl<'a> DirectRenderer<'a> {
             let structural_style = self.theme.structural_style();
             match marker {
                 "[✓] " => {
-                    spans.push(Span::styled("[".to_string(), structural_style.clone()).to_owned());
+                    spans.push(Span::styled("[".to_string(), structural_style).to_owned());
                     spans.push(
                         Span::styled("✓".to_string(), self.theme.checkmark_style()).to_owned(),
                     );
-                    spans.push(Span::styled("] ".to_string(), structural_style.clone()).to_owned());
+                    spans.push(Span::styled("] ".to_string(), structural_style).to_owned());
                 }
                 _ => {
                     spans.push(
-                        Span::styled(marker.to_string(), structural_style.clone()).to_owned(),
+                        Span::styled(marker.to_string(), structural_style).to_owned(),
                     );
                 }
             }
