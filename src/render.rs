@@ -395,6 +395,26 @@ impl<'a> DirectRenderer<'a> {
         }
     }
 
+    fn paragraph_is_list(paragraph: &Paragraph) -> bool {
+        matches!(
+            paragraph.paragraph_type(),
+            ParagraphType::UnorderedList | ParagraphType::OrderedList | ParagraphType::Checklist
+        )
+    }
+
+    fn ensure_margin_line(&mut self, prefix: &str) {
+        if !self.last_line_is_blank() {
+            self.push_structural_margin_line(prefix, false);
+        }
+    }
+
+    fn last_line_is_blank(&self) -> bool {
+        self.lines
+            .last()
+            .map(|line| line_width(line) == 0)
+            .unwrap_or(false)
+    }
+
     fn render_paragraph(&mut self, paragraph: &Paragraph, prefix: &str) {
         match paragraph.paragraph_type() {
             ParagraphType::Text => self.render_text_paragraph(paragraph, prefix, prefix),
@@ -592,7 +612,7 @@ impl<'a> DirectRenderer<'a> {
     fn render_unordered_list(&mut self, paragraph: &Paragraph, prefix: &str) {
         for (entry_idx, entry) in paragraph.entries().iter().enumerate() {
             if entry_idx > 0 {
-                self.push_structural_margin_line(prefix, false);
+                self.ensure_margin_line(prefix);
             }
             let marker = "• ";
             let first_prefix = format!("{}{}", prefix, marker);
@@ -604,7 +624,7 @@ impl<'a> DirectRenderer<'a> {
     fn render_ordered_list(&mut self, paragraph: &Paragraph, prefix: &str) {
         for (entry_idx, entry) in paragraph.entries().iter().enumerate() {
             if entry_idx > 0 {
-                self.push_structural_margin_line(prefix, false);
+                self.ensure_margin_line(prefix);
             }
             let number_label = format!("{}. ", entry_idx + 1);
             let first_prefix = format!("{}{}", prefix, number_label);
@@ -622,7 +642,7 @@ impl<'a> DirectRenderer<'a> {
     fn render_checklist(&mut self, paragraph: &Paragraph, prefix: &str) {
         for (item_idx, item) in paragraph.checklist_items().iter().enumerate() {
             if item_idx > 0 {
-                self.push_structural_margin_line(prefix, false);
+                self.ensure_margin_line(prefix);
             }
             self.render_checklist_item_struct(item, vec![item_idx], prefix);
         }
@@ -754,6 +774,7 @@ impl<'a> DirectRenderer<'a> {
         }
 
         let mut iter = entry.iter().enumerate();
+        let mut last_was_nested_list = false;
         if let Some((para_idx, first)) = iter.next() {
             // Update paragraph path for this entry paragraph
             self.current_paragraph_path.push_entry(entry_idx, para_idx);
@@ -761,10 +782,21 @@ impl<'a> DirectRenderer<'a> {
             match first.paragraph_type() {
                 ParagraphType::Text => {
                     self.render_text_paragraph(first, first_prefix, continuation_prefix);
+                    last_was_nested_list = false;
+                }
+                ParagraphType::UnorderedList
+                | ParagraphType::OrderedList
+                | ParagraphType::Checklist => {
+                    self.push_plain_line(first_prefix, false);
+                    self.ensure_margin_line(continuation_prefix);
+                    self.render_paragraph(first, continuation_prefix);
+                    self.ensure_margin_line(continuation_prefix);
+                    last_was_nested_list = true;
                 }
                 _ => {
                     self.push_plain_line(first_prefix, false);
                     self.render_paragraph(first, continuation_prefix);
+                    last_was_nested_list = false;
                 }
             }
 
@@ -776,10 +808,26 @@ impl<'a> DirectRenderer<'a> {
             // Update paragraph path for each subsequent paragraph in the entry
             self.current_paragraph_path.push_entry(entry_idx, para_idx);
 
-            if rest.paragraph_type() == ParagraphType::Text {
-                self.push_structural_margin_line(continuation_prefix, false);
+            let is_nested_list = Self::paragraph_is_list(rest);
+
+            if is_nested_list {
+                if !last_was_nested_list {
+                    self.ensure_margin_line(continuation_prefix);
+                }
+                self.render_paragraph(rest, continuation_prefix);
+                self.ensure_margin_line(continuation_prefix);
+                last_was_nested_list = true;
+            } else {
+                if rest.paragraph_type() == ParagraphType::Text {
+                    if !last_was_nested_list {
+                        self.push_structural_margin_line(continuation_prefix, false);
+                    }
+                    self.render_paragraph(rest, continuation_prefix);
+                } else {
+                    self.render_paragraph(rest, continuation_prefix);
+                }
+                last_was_nested_list = false;
             }
-            self.render_paragraph(rest, continuation_prefix);
 
             // Restore paragraph path
             self.current_paragraph_path.pop();
@@ -2511,6 +2559,91 @@ mod tests {
             trailing, 1,
             "expected one trailing blank line after standalone h3, saw {} in {:?}",
             trailing, lines
+        );
+    }
+
+    #[test]
+    fn nested_list_has_spacing_within_entry() {
+        let input = r#"
+<ul>
+  <li>
+    <p>Parent</p>
+    <ul>
+      <li><p>Child 1</p></li>
+      <li><p>Child 2</p></li>
+    </ul>
+    <p>After nested</p>
+  </li>
+</ul>
+"#;
+        let rendered = render_input_with_width(input, 60);
+        let lines = lines_to_strings(&rendered.lines);
+        let parent_index = lines
+            .iter()
+            .position(|line| line.contains("Parent"))
+            .expect("missing parent line");
+        assert!(
+            lines
+                .get(parent_index + 1)
+                .map(|line| line.is_empty())
+                .unwrap_or(false),
+            "expected blank line before nested list, got {:?}",
+            lines
+        );
+        let child2_index = lines
+            .iter()
+            .position(|line| line.contains("Child 2"))
+            .expect("missing child line");
+        assert!(
+            lines
+                .get(child2_index + 1)
+                .map(|line| line.is_empty())
+                .unwrap_or(false),
+            "expected blank line after nested list, got {:?}",
+            lines
+        );
+        let after_index = lines
+            .iter()
+            .position(|line| line.contains("After nested"))
+            .expect("missing trailing paragraph");
+        assert_eq!(
+            after_index,
+            child2_index + 2,
+            "expected exactly one blank line between nested list and following text"
+        );
+    }
+
+    #[test]
+    fn nested_list_spacing_does_not_double_gap_between_entries() {
+        let input = r#"
+<ul>
+  <li>
+    <p>Parent</p>
+    <ul>
+      <li><p>Child</p></li>
+    </ul>
+  </li>
+  <li>
+    <p>Next</p>
+  </li>
+</ul>
+"#;
+        let rendered = render_input_with_width(input, 60);
+        let lines = lines_to_strings(&rendered.lines);
+        let child_index = lines
+            .iter()
+            .position(|line| line.contains("Child"))
+            .expect("missing child line");
+        let next_index = lines
+            .iter()
+            .position(|line| line.contains("Next"))
+            .expect("missing next entry");
+        let blank_between = next_index.saturating_sub(child_index + 1);
+        assert_eq!(
+            blank_between,
+            1,
+            "expected single blank line between nested list and next entry, got {:?}",
+            &lines[child_index + 1..=next_index]
         );
     }
 
