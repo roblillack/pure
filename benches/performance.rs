@@ -1,5 +1,5 @@
 use pure_tui::{
-    editor,
+    editor::{self, DocumentEditor},
     render::{self, DirectCursorTracking},
     theme::Theme,
 };
@@ -287,12 +287,18 @@ fn bench_rendering_reveal_codes() {
     println!("╚════════════════════════════════════════════════════════════════╝");
 
     let doc = create_styled_document(MEDIUM_DOC_PARAGRAPHS);
+    let reveal_tags = {
+        let mut editor = DocumentEditor::new(doc.clone());
+        editor.set_reveal_codes(true);
+        let (_, _, tags, _) = editor.clone_with_markers('\u{F8FF}', None, '\u{F8FE}', '\u{F8FD}');
+        tags
+    };
 
     let result_normal = benchmark("render_document - reveal_codes OFF", ITERATIONS, || {
         let tracking = DirectCursorTracking {
             cursor: None,
             selection: None,
-            track_all_positions: false,
+            track_all_positions: true,
         };
         let theme = Theme::default();
         let _ = render::render_document_direct(&doc, 80, 0, &[], tracking, &theme);
@@ -303,10 +309,10 @@ fn bench_rendering_reveal_codes() {
         let tracking = DirectCursorTracking {
             cursor: None,
             selection: None,
-            track_all_positions: false,
+            track_all_positions: true,
         };
         let theme = Theme::default();
-        let _ = render::render_document_direct(&doc, 80, 0, &[], tracking, &theme);
+        let _ = render::render_document_direct(&doc, 80, 0, &reveal_tags, tracking, &theme);
     });
     result_reveal.print();
 
@@ -1395,7 +1401,8 @@ fn bench_mouse_cursor_positioning() {
     println!("║                    PERFORMANCE NOTES                           ║");
     println!("╚════════════════════════════════════════════════════════════════╝");
     println!("\nMouse positioning calls pointer_from_mouse which:");
-    println!("  1. Calls closest_pointer_near_line");
+    println!("  1. Calls closest_pointer_near_line_visual");
+    println!("     - Immediately handles reveal tag hit-testing based on rendered width");
     println!("  2. Which calls get_positions_for_line");
     println!("  3. Which calls ensure_paragraph_positions (lazy population)");
     println!("  4. Which calls layout_paragraph with track_all_positions=true");
