@@ -42,8 +42,14 @@ pub struct EditorDisplay {
     theme: Theme,
 }
 
+enum SelectionIterationOrder {
+    TopDown,
+    BottomUp,
+}
+
 impl EditorDisplay {
     const CURSOR_MARKER: char = '\u{F8F0}';
+    const SELECTION_MARKER_BASE: u32 = 0x10F000;
 
     /// Create a new EditorDisplay with the given editor
     pub fn new(editor: DocumentEditor) -> Self {
@@ -1206,6 +1212,18 @@ impl EditorDisplay {
         true
     }
 
+    fn place_marker_at_pointer(&mut self, pointer: &CursorPointer, marker: char) -> bool {
+        let mut moved = self.editor.move_to_pointer(pointer);
+        if !moved {
+            moved = self.editor.fallback_move_to_text(pointer, false)
+                || self.editor.fallback_move_to_text(pointer, true);
+        }
+        if !moved {
+            return false;
+        }
+        self.editor.insert_char(marker)
+    }
+
     fn remove_temporary_cursor_marker(&mut self) {
         let Some(pointer) = self.editor.pointer_for_character(Self::CURSOR_MARKER) else {
             return;
@@ -1409,6 +1427,97 @@ impl EditorDisplay {
         result
     }
 
+    fn apply_selection_paragraph_operation<F>(
+        &mut self,
+        selection: &(CursorPointer, CursorPointer),
+        order: SelectionIterationOrder,
+        mut operation: F,
+    ) -> bool
+    where
+        F: FnMut(&mut DocumentEditor) -> bool,
+    {
+        let Some(mut paragraph_targets) = self.editor.selection_paragraph_targets(selection) else {
+            return false;
+        };
+
+        if paragraph_targets.is_empty() {
+            return false;
+        }
+
+        if matches!(order, SelectionIterationOrder::TopDown) {
+            paragraph_targets.reverse();
+        }
+
+        let marker_inserted = self.place_temporary_cursor_marker(&selection.1);
+        let mut changed = false;
+
+        let mut markers: Vec<char> = Vec::new();
+        for (idx, pointer) in paragraph_targets.iter().enumerate() {
+            let marker_char = match std::char::from_u32(Self::SELECTION_MARKER_BASE + idx as u32) {
+                Some(ch) => ch,
+                None => break,
+            };
+            if self.place_marker_at_pointer(pointer, marker_char) {
+                markers.push(marker_char);
+            }
+        }
+
+        for marker in &markers {
+            let Some(marker_pointer) = self.editor.pointer_for_character(*marker) else {
+                continue;
+            };
+
+            self.focus_pointer(&marker_pointer);
+
+            if self.editor.remove_char_at_pointer(&marker_pointer) {
+                self.focus_pointer(&marker_pointer);
+            } else {
+                continue;
+            }
+
+            if operation(&mut self.editor) {
+                changed = true;
+            }
+        }
+
+        for marker in markers {
+            while let Some(marker_pointer) = self.editor.pointer_for_character(marker) {
+                if !self.editor.remove_char_at_pointer(&marker_pointer) {
+                    break;
+                }
+            }
+        }
+
+        if marker_inserted {
+            self.remove_temporary_cursor_marker();
+        } else {
+            self.focus_pointer(&selection.1);
+        }
+
+        if changed {
+            self.force_full_relayout();
+            self.clear_render_cache();
+        }
+
+        changed
+    }
+
+    pub fn indent_selection(&mut self, selection: &(CursorPointer, CursorPointer)) -> bool {
+        self.apply_selection_paragraph_operation(
+            selection,
+            SelectionIterationOrder::TopDown,
+            |editor| editor.indent_current_paragraph(),
+        )
+    }
+
+    pub fn unindent_selection(&mut self, selection: &(CursorPointer, CursorPointer)) -> bool {
+        self.apply_selection_paragraph_operation(
+            selection,
+            SelectionIterationOrder::BottomUp,
+            |editor| editor.unindent_current_paragraph(),
+        )
+    }
+
     /// Set checklist item checked state with layout update
     pub fn set_current_checklist_item_checked(&mut self, checked: bool) -> bool {
         // Get the root paragraph index before modifying
@@ -1565,8 +1674,8 @@ fn inline_style_label(style: InlineStyle) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::editor::DocumentEditor;
-    use tdoc::{Document, Paragraph, Span, ftml};
+    use crate::editor::{CursorPointer, DocumentEditor, ParagraphPath, SegmentKind, SpanPath};
+    use tdoc::{ChecklistItem, Document, Paragraph, Span, ftml};
 
     fn create_test_display() -> EditorDisplay {
         let mut doc = Document::new();
@@ -1584,6 +1693,15 @@ mod tests {
         let mut editor = DocumentEditor::new(doc);
         editor.ensure_cursor_selectable();
         EditorDisplay::new(editor)
+    }
+
+    fn pointer_for_path(path: ParagraphPath, offset: usize) -> CursorPointer {
+        CursorPointer {
+            paragraph_path: path,
+            span_path: SpanPath::new(vec![0]),
+            offset,
+            segment_kind: SegmentKind::Text,
+        }
     }
 
     #[test]
@@ -2634,6 +2752,197 @@ mod tests {
             initial_text, after_text,
             "Screen should update after unindenting paragraph"
         );
+    }
+
+    #[test]
+    fn indent_selection_moves_following_paragraphs_into_list_entry() {
+        let doc = ftml! {
+            ul {
+                li { p { "Existing" } }
+            }
+            p { "First addition" }
+            p { "Second addition" }
+        };
+
+        let mut display = EditorDisplay::new(DocumentEditor::new(doc));
+
+        let start = pointer_for_path(ParagraphPath::new_root(1), 0);
+        let end_offset = "Second addition".chars().count();
+        let end = pointer_for_path(ParagraphPath::new_root(2), end_offset);
+        let selection = (start.clone(), end.clone());
+
+        assert!(display.indent_selection(&selection));
+
+        let expected =
+            Document::new().with_paragraphs(vec![Paragraph::new_unordered_list().with_entries(
+                vec![vec![
+                    Paragraph::new_text().with_content(vec![Span::new_text("Existing")]),
+                    Paragraph::new_text().with_content(vec![Span::new_text("First addition")]),
+                    Paragraph::new_text().with_content(vec![Span::new_text("Second addition")]),
+                ]],
+            )]);
+
+        assert_eq!(display.document(), &expected);
+    }
+
+    #[test]
+    fn indent_selection_converts_ordered_list_range_into_nested_list() {
+        let doc = ftml! {
+            ol {
+                li { p { "First" } }
+                li { p { "Second" } }
+                li { p { "Third" } }
+            }
+        };
+
+        let mut display = EditorDisplay::new(DocumentEditor::new(doc));
+
+        let mut start_path = ParagraphPath::new_root(0);
+        start_path.push_entry(1, 0);
+        let mut end_path = ParagraphPath::new_root(0);
+        end_path.push_entry(2, 0);
+        let end_offset = "Third".chars().count();
+        let selection = (
+            pointer_for_path(start_path, 0),
+            pointer_for_path(end_path, end_offset),
+        );
+
+        assert!(display.indent_selection(&selection));
+
+        let expected =
+            Document::new().with_paragraphs(vec![Paragraph::new_ordered_list().with_entries(
+                vec![vec![
+                    Paragraph::new_text().with_content(vec![Span::new_text("First")]),
+                    Paragraph::new_ordered_list().with_entries(vec![
+                        vec![Paragraph::new_text().with_content(vec![Span::new_text("Second")])],
+                        vec![Paragraph::new_text().with_content(vec![Span::new_text("Third")])],
+                    ]),
+                ]],
+            )]);
+
+        assert_eq!(display.document(), &expected);
+    }
+
+    #[test]
+    fn indent_selection_converts_checklist_range_into_children() {
+        let doc = ftml! {
+            checklist {
+                todo { "One" }
+                todo { "Two" }
+                todo { "Three" }
+            }
+        };
+
+        let mut display = EditorDisplay::new(DocumentEditor::new(doc));
+
+        let mut start_path = ParagraphPath::new_root(0);
+        start_path.push_checklist_item(vec![1]);
+        let mut end_path = ParagraphPath::new_root(0);
+        end_path.push_checklist_item(vec![2]);
+        let end_offset = "Three".chars().count();
+        let selection = (
+            pointer_for_path(start_path, 0),
+            pointer_for_path(end_path, end_offset),
+        );
+
+        assert!(display.indent_selection(&selection));
+
+        let expected =
+            Document::new().with_paragraphs(vec![Paragraph::new_checklist().with_checklist_items(
+                vec![
+                ChecklistItem::new(false)
+                    .with_content(vec![Span::new_text("One")])
+                    .with_children(vec![
+                        ChecklistItem::new(false)
+                            .with_content(vec![Span::new_text("Two")]),
+                        ChecklistItem::new(false)
+                            .with_content(vec![Span::new_text("Three")]),
+                    ]),
+            ],
+            )]);
+
+        assert_eq!(display.document(), &expected);
+    }
+
+    #[test]
+    fn unindent_selection_promotes_nested_list_range() {
+        let doc = ftml! {
+            ul {
+                li {
+                    p { "Parent" }
+                    ul {
+                        li { p { "Child one" } }
+                        li { p { "Child two" } }
+                    }
+                }
+                li { p { "Sibling" } }
+            }
+        };
+
+        let mut display = EditorDisplay::new(DocumentEditor::new(doc));
+
+        let mut start_path = ParagraphPath::new_root(0);
+        start_path.push_entry(0, 1);
+        start_path.push_entry(0, 0);
+        let mut end_path = ParagraphPath::new_root(0);
+        end_path.push_entry(0, 1);
+        end_path.push_entry(1, 0);
+        let end_offset = "Child two".chars().count();
+        let selection = (
+            pointer_for_path(start_path, 0),
+            pointer_for_path(end_path, end_offset),
+        );
+
+        assert!(display.unindent_selection(&selection));
+
+        let expected = ftml! {
+            ul {
+                li { p { "Parent" } }
+                li { p { "Child one" } }
+                li { p { "Child two" } }
+                li { p { "Sibling" } }
+            }
+        };
+
+        assert_eq!(display.document(), &expected);
+    }
+
+    #[test]
+    fn indent_selection_nests_adjacent_list_items_under_previous_entry() {
+        let doc = ftml! {
+            ul {
+                li { p { "one" } }
+                li { p { "two" } }
+                li { p { "three" } }
+            }
+        };
+
+        let mut display = EditorDisplay::new(DocumentEditor::new(doc));
+
+        let mut start_path = ParagraphPath::new_root(0);
+        start_path.push_entry(1, 0);
+        let mut end_path = ParagraphPath::new_root(0);
+        end_path.push_entry(2, 0);
+        let selection = (
+            pointer_for_path(start_path, 1),
+            pointer_for_path(end_path, 2),
+        );
+
+        assert!(display.indent_selection(&selection));
+
+        let expected = ftml! {
+            ul {
+                li {
+                    p { "one" }
+                    ul {
+                        li { p { "two" } }
+                        li { p { "three" } }
+                    }
+                }
+            }
+        };
+
+        assert_eq!(display.document(), &expected);
     }
 
     #[test]

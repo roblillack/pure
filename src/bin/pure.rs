@@ -703,6 +703,48 @@ impl App {
         }
     }
 
+    fn indent_selection_or_cursor(&mut self) -> bool {
+        if let Some(selection) = self.current_selection() {
+            if self.display.indent_selection(&selection) {
+                self.selection_anchor = None;
+                self.mark_dirty();
+                self.display.set_preferred_column(None);
+                return true;
+            }
+            return false;
+        }
+
+        if self.display.indent_current_paragraph() {
+            self.selection_anchor = None;
+            self.mark_dirty();
+            self.display.set_preferred_column(None);
+            return true;
+        }
+
+        false
+    }
+
+    fn unindent_selection_or_cursor(&mut self) -> bool {
+        if let Some(selection) = self.current_selection() {
+            if self.display.unindent_selection(&selection) {
+                self.selection_anchor = None;
+                self.mark_dirty();
+                self.display.set_preferred_column(None);
+                return true;
+            }
+            return false;
+        }
+
+        if self.display.unindent_current_paragraph() {
+            self.selection_anchor = None;
+            self.mark_dirty();
+            self.display.set_preferred_column(None);
+            return true;
+        }
+
+        false
+    }
+
     fn insert_char_with_selection(&mut self, ch: char) -> bool {
         let mut selection_changed = false;
         if let Some(selection) = self.current_selection() {
@@ -1154,19 +1196,11 @@ impl App {
                 true
             }
             MenuAction::IndentMore => {
-                if self.display.indent_current_paragraph() {
-                    self.selection_anchor = None;
-                    self.mark_dirty();
-                    self.display.set_preferred_column(None);
-                }
+                self.indent_selection_or_cursor();
                 true
             }
             MenuAction::IndentLess => {
-                if self.display.unindent_current_paragraph() {
-                    self.selection_anchor = None;
-                    self.mark_dirty();
-                    self.display.set_preferred_column(None);
-                }
+                self.unindent_selection_or_cursor();
                 true
             }
         }
@@ -1676,20 +1710,10 @@ impl App {
                         self.should_quit = true;
                     }
                     (KeyCode::Char(']'), m) if m.contains(KeyModifiers::CONTROL) => {
-                        self.prepare_selection(false);
-                        if self.display.indent_current_paragraph() {
-                            self.selection_anchor = None;
-                            self.mark_dirty();
-                            self.display.set_preferred_column(None);
-                        }
+                        self.indent_selection_or_cursor();
                     }
                     (KeyCode::Char('['), m) if m.contains(KeyModifiers::CONTROL) => {
-                        self.prepare_selection(false);
-                        if self.display.unindent_current_paragraph() {
-                            self.selection_anchor = None;
-                            self.mark_dirty();
-                            self.display.set_preferred_column(None);
-                        }
+                        self.unindent_selection_or_cursor();
                     }
                     (KeyCode::Left, m)
                         if m.contains(KeyModifiers::SHIFT | KeyModifiers::CONTROL) =>
