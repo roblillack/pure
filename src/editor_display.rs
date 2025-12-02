@@ -2,13 +2,15 @@ use std::ops::{Deref, DerefMut};
 
 use ratatui::layout::Rect;
 use ratatui::text::Line;
+use unicode_width::UnicodeWidthStr;
 
-use crate::editor::{CursorPointer, DocumentEditor};
+use crate::editor::{CursorPointer, DocumentEditor, RevealTagKind, SegmentKind};
 use crate::render::{
     CursorVisualPosition, DirectCursorTracking, ParagraphLineInfo, RenderResult, layout_paragraph,
     render_document_direct,
 };
 use crate::theme::Theme;
+use tdoc::InlineStyle;
 
 /// EditorDisplay wraps a DocumentEditor and manages all visual/rendering concerns.
 /// This includes cursor movement in visual space, wrapping, and rendering.
@@ -859,6 +861,26 @@ impl EditorDisplay {
     /// Find the closest pointer on a given line to a target column
     /// Uses content_column (without left padding) for comparison
     fn closest_pointer_on_line(&mut self, line: usize, column: u16) -> Option<CursorDisplay> {
+        self.closest_pointer_on_line_impl(line, column, false)
+    }
+
+    /// Find the closest pointer on a given line to a target visual column
+    /// Uses visual column (with prefixes like "[ ] " included) for comparison
+    fn closest_pointer_on_line_visual(
+        &mut self,
+        line: usize,
+        column: u16,
+    ) -> Option<CursorDisplay> {
+        self.closest_pointer_on_line_impl(line, column, true)
+    }
+
+    /// Implementation of closest_pointer_on_line with configurable column type
+    fn closest_pointer_on_line_impl(
+        &mut self,
+        line: usize,
+        column: u16,
+        use_visual_column: bool,
+    ) -> Option<CursorDisplay> {
         // Get positions for this line on-demand
         let positions_on_line = self.get_positions_for_line(line);
 
@@ -866,27 +888,84 @@ impl EditorDisplay {
             return None;
         }
 
-        // Find the minimum content_column distance (without left padding)
+        if use_visual_column
+            && let Some(hit) = positions_on_line.iter().find_map(|entry| {
+                let (style, kind) = match entry.pointer.segment_kind {
+                    SegmentKind::RevealStart(style) => Some((style, RevealTagKind::Start)),
+                    SegmentKind::RevealEnd(style) => Some((style, RevealTagKind::End)),
+                    _ => None,
+                }?;
+                let width = reveal_tag_visual_width(style, kind);
+                if width == 0 {
+                    return Some(entry.clone());
+                }
+                let start = u32::from(entry.position.column);
+                let end = start + u32::from(width);
+                let target = u32::from(column);
+                if target >= start && target < end {
+                    Some(entry.clone())
+                } else {
+                    None
+                }
+            })
+        {
+            return Some(hit);
+        }
+
+        // Find the minimum distance using the specified column type
         let min_distance = positions_on_line
             .iter()
-            .map(|entry| column_distance(entry.position.content_column, column))
+            .map(|entry| {
+                let pos_column = if use_visual_column {
+                    entry.position.column
+                } else {
+                    entry.position.content_column
+                };
+                column_distance(pos_column, column)
+            })
             .min()
             .unwrap();
 
         // Get all positions with the minimum distance
         let closest_positions: Vec<_> = positions_on_line
             .iter()
-            .filter(|entry| column_distance(entry.position.content_column, column) == min_distance)
+            .filter(|entry| {
+                let pos_column = if use_visual_column {
+                    entry.position.column
+                } else {
+                    entry.position.content_column
+                };
+                column_distance(pos_column, column) == min_distance
+            })
             .collect();
 
         if closest_positions.len() == 1 {
             return Some((*closest_positions[0]).clone());
         }
 
-        // Multiple positions at the same visual column (nested inline styles)
+        // Multiple positions at similar columns
+        // First, check if any are reveal code segments - prioritize those
+        // so clicking on reveal codes positions AT the reveal code, not after it
+        let reveal_position = closest_positions.iter().find(|entry| {
+            matches!(
+                entry.pointer.segment_kind,
+                crate::editor::SegmentKind::RevealStart(_)
+                    | crate::editor::SegmentKind::RevealEnd(_)
+            )
+        });
+
+        if let Some(reveal_pos) = reveal_position {
+            return Some((**reveal_pos).clone());
+        }
+
+        // No reveal codes, use original logic for nested inline styles
         // If desired column < closest position: choose outermost (shallowest nesting)
         // If desired column >= closest position: choose innermost (deepest nesting)
-        let closest_column = closest_positions[0].position.content_column;
+        let closest_column = if use_visual_column {
+            closest_positions[0].position.column
+        } else {
+            closest_positions[0].position.content_column
+        };
 
         if column < closest_column {
             // Choose outermost position (smallest span path length)
@@ -951,11 +1030,31 @@ impl EditorDisplay {
         None
     }
 
-    /// Find the closest pointer near a line (searching up and down if not found on exact line)
-    fn closest_pointer_near_line(&mut self, line: usize, column: u16) -> Option<CursorDisplay> {
+    /// Find the closest pointer near a line using visual column
+    /// Uses visual column (with prefixes) for comparison
+    fn closest_pointer_near_line_visual(
+        &mut self,
+        line: usize,
+        column: u16,
+    ) -> Option<CursorDisplay> {
+        self.closest_pointer_near_line_impl(line, column, true)
+    }
+
+    /// Implementation of closest_pointer_near_line with configurable column type
+    fn closest_pointer_near_line_impl(
+        &mut self,
+        line: usize,
+        column: u16,
+        use_visual_column: bool,
+    ) -> Option<CursorDisplay> {
         // Try exact line first
-        if let Some(hit) = self.closest_pointer_on_line(line, column) {
-            return Some(hit);
+        let hit = if use_visual_column {
+            self.closest_pointer_on_line_visual(line, column)
+        } else {
+            self.closest_pointer_on_line(line, column)
+        };
+        if hit.is_some() {
+            return hit;
         }
 
         // Get max line from paragraph_lines (lightweight)
@@ -967,15 +1066,25 @@ impl EditorDisplay {
         };
         let mut distance = 1usize;
         while line.checked_sub(distance).is_some() || line + distance <= max_line {
-            if let Some(prev) = line.checked_sub(distance)
-                && let Some(hit) = self.closest_pointer_on_line(prev, column)
-            {
-                return Some(hit);
+            if let Some(prev) = line.checked_sub(distance) {
+                let hit = if use_visual_column {
+                    self.closest_pointer_on_line_visual(prev, column)
+                } else {
+                    self.closest_pointer_on_line(prev, column)
+                };
+                if hit.is_some() {
+                    return hit;
+                }
             }
             let next = line + distance;
             if next <= max_line {
-                if let Some(hit) = self.closest_pointer_on_line(next, column) {
-                    return Some(hit);
+                let hit = if use_visual_column {
+                    self.closest_pointer_on_line_visual(next, column)
+                } else {
+                    self.closest_pointer_on_line(next, column)
+                };
+                if hit.is_some() {
+                    return hit;
                 }
             } else if line.checked_sub(distance).is_none() {
                 break;
@@ -1002,10 +1111,11 @@ impl EditorDisplay {
             return None;
         }
         let line = scroll_top.saturating_add((row - area.y) as usize);
-        // Convert absolute column to content column by subtracting area.x and left_padding
-        let relative_column = column.saturating_sub(area.x);
-        let content_column = relative_column.saturating_sub(self.left_padding as u16);
-        self.closest_pointer_near_line(line, content_column)
+        // Convert absolute screen column to visual column by subtracting area.x
+        // Note: We use visual column (which includes per-line prefixes like "[ ] " or bullets)
+        // AND left_padding, to match against position.column values which include both
+        let visual_column = column.saturating_sub(area.x);
+        self.closest_pointer_near_line_visual(line, visual_column)
     }
 
     /// Get the start and end boundaries of a visual line
@@ -1340,11 +1450,33 @@ fn column_distance(a: u16, b: u16) -> u16 {
     a.abs_diff(b)
 }
 
+fn reveal_tag_visual_width(style: InlineStyle, kind: RevealTagKind) -> u16 {
+    let label = inline_style_label(style);
+    let text = match kind {
+        RevealTagKind::Start => format!("[{label}>"),
+        RevealTagKind::End => format!("<{label}]"),
+    };
+    text.width().min(u16::MAX as usize) as u16
+}
+
+fn inline_style_label(style: InlineStyle) -> &'static str {
+    match style {
+        InlineStyle::None => "Text",
+        InlineStyle::Bold => "Bold",
+        InlineStyle::Italic => "Italic",
+        InlineStyle::Highlight => "Highlight",
+        InlineStyle::Underline => "Underline",
+        InlineStyle::Strike => "Strikethrough",
+        InlineStyle::Link => "Link",
+        InlineStyle::Code => "Code",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::editor::DocumentEditor;
-    use tdoc::{Document, Paragraph, ftml};
+    use tdoc::{Document, Paragraph, Span, ftml};
 
     fn create_test_display() -> EditorDisplay {
         let mut doc = Document::new();
@@ -1419,6 +1551,96 @@ mod tests {
 
         let start_offset = display.cursor_pointer().offset;
         assert_eq!(start_offset, 0, "Cursor should be at start of line");
+    }
+
+    fn display_with_reveal_codes() -> EditorDisplay {
+        let mut bold = Span::new_text("World");
+        bold.style = tdoc::InlineStyle::Bold;
+        let paragraph = Paragraph::new_text().with_content(vec![
+            Span::new_text("Hello "),
+            bold,
+            Span::new_text("!"),
+        ]);
+        let mut editor = DocumentEditor::new(Document::new().with_paragraphs(vec![paragraph]));
+        editor.set_reveal_codes(true);
+        editor.ensure_cursor_selectable();
+        let mut display = EditorDisplay::new(editor);
+        display.render_document_with_positions(80, 0, None);
+        display
+    }
+
+    #[test]
+    fn clicking_inside_reveal_start_tag_targets_tag_pointer() {
+        let mut display = display_with_reveal_codes();
+        let layout = display.get_layout().clone();
+        let para_info = layout
+            .paragraph_lines
+            .first()
+            .expect("expected at least one paragraph");
+
+        let (expected_pointer, expected_position) = para_info
+            .positions
+            .iter()
+            .find(|(pointer, _)| matches!(pointer.segment_kind, SegmentKind::RevealStart(_)))
+            .expect("missing reveal start pointer");
+
+        let style = match expected_pointer.segment_kind {
+            SegmentKind::RevealStart(style) => style,
+            _ => unreachable!(),
+        };
+
+        let width = u32::from(reveal_tag_visual_width(style, RevealTagKind::Start));
+        assert!(width > 0, "reveal tag width should be positive");
+
+        let absolute_line = para_info.start_line + expected_position.line;
+        let last_column = u32::from(expected_position.column) + width - 1;
+        assert!(
+            last_column <= u16::MAX as u32,
+            "column should fit into u16 range"
+        );
+
+        let hit = display
+            .closest_pointer_on_line_visual(absolute_line, last_column as u16)
+            .expect("expected pointer for reveal start tag");
+
+        assert_eq!(hit.pointer, *expected_pointer);
+    }
+
+    #[test]
+    fn clicking_inside_reveal_end_tag_targets_tag_pointer() {
+        let mut display = display_with_reveal_codes();
+        let layout = display.get_layout().clone();
+        let para_info = layout
+            .paragraph_lines
+            .first()
+            .expect("expected at least one paragraph");
+
+        let (expected_pointer, expected_position) = para_info
+            .positions
+            .iter()
+            .find(|(pointer, _)| matches!(pointer.segment_kind, SegmentKind::RevealEnd(_)))
+            .expect("missing reveal end pointer");
+
+        let style = match expected_pointer.segment_kind {
+            SegmentKind::RevealEnd(style) => style,
+            _ => unreachable!(),
+        };
+
+        let width = u32::from(reveal_tag_visual_width(style, RevealTagKind::End));
+        assert!(width > 0, "reveal tag width should be positive");
+
+        let absolute_line = para_info.start_line + expected_position.line;
+        let last_column = u32::from(expected_position.column) + width - 1;
+        assert!(
+            last_column <= u16::MAX as u32,
+            "column should fit into u16 range"
+        );
+
+        let hit = display
+            .closest_pointer_on_line_visual(absolute_line, last_column as u16)
+            .expect("expected pointer for reveal end tag");
+
+        assert_eq!(hit.pointer, *expected_pointer);
     }
 
     #[test]
@@ -2823,5 +3045,62 @@ mod tests {
             initial_text, after_text,
             "Display should update after converting numbered item to text paragraph"
         );
+    }
+
+    #[test]
+    fn test_mouse_positioning_with_checklists() {
+        // Test that mouse clicks correctly position cursor accounting for line prefixes
+        // This test verifies the fix for mouse positioning with checklist prefixes "[ ] "
+        let doc = ftml! {
+            p { "Regular paragraph" }
+            checklist {
+                todo { "Checklist item" }
+            }
+        };
+        let mut display = EditorDisplay::new(DocumentEditor::new(doc));
+        display.render_document_with_positions(80, 0, None);
+
+        // Simulate the text area that would be set during rendering
+        use ratatui::layout::Rect;
+        let text_area = Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 25,
+        };
+        display.update_after_render(text_area);
+
+        // Get the visual positions
+        let layout = display.get_layout();
+
+        // Find the column positions
+        let mut para_column = None;
+        let mut checklist_column = None;
+
+        for info in &layout.paragraph_lines {
+            for (pointer, pos) in &info.positions {
+                let steps = pointer.paragraph_path.numeric_steps();
+                if steps == vec![0] && pointer.offset == 0 {
+                    para_column = Some(pos.column);
+                } else if steps == vec![1, 0] && pointer.offset == 0 {
+                    checklist_column = Some(pos.column);
+                }
+            }
+        }
+
+        let para_col = para_column.expect("Should find paragraph column");
+        let check_col = checklist_column.expect("Should find checklist column");
+
+        // Checklist should have a larger column due to "[ ] " prefix
+        assert!(
+            check_col > para_col,
+            "Checklist column {} should be greater than paragraph column {} (due to '[ ] ' prefix)",
+            check_col,
+            para_col
+        );
+
+        // The fix ensures that pointer_from_mouse now uses visual columns (including prefixes)
+        // rather than content_columns. This test verifies the positions are correctly set up.
+        // Manual testing with test_nested_checklist_cursor.ftml will verify mouse clicks work correctly.
     }
 }

@@ -402,9 +402,9 @@ For each paragraph:
    - Calculates target visual line: `scroll_top + (row - text_area.y)`
 
 2. **Find Nearest Position**:
-   - Calls `closest_pointer_near_line(visual_line, relative_column)`
-   - Searches `visual_positions` for entries on that line
-   - Finds closest position by column distance
+   - Calls `closest_pointer_near_line_visual(visual_line, relative_column)`
+   - Checks whether the click lands inside a reveal tag's visual width and, if so, selects that tag's pointer directly
+   - Otherwise searches `visual_positions` for entries on that line and finds the closest position by column distance
    - If line empty, searches nearby lines (alternating above/below)
    - Returns `CursorDisplay` with pointer and position
 
@@ -437,7 +437,7 @@ For each paragraph:
 
 3. **Render with Tags**: `display.render_document(...)`
    - Passes reveal tags to renderer
-   - Renderer inserts reveal tag fragments (e.g., `[Bold>`, `<Bold]`)
+   - Renderer inserts reveal tag fragments (e.g., `[Bold>`, `<Bold]`) and attaches marker events so hit-testing can target them
    - Tags styled distinctly (yellow on blue background)
    - Cursor can be positioned at tag boundaries
    - Tags have zero `content_width` (don't affect content column tracking)
