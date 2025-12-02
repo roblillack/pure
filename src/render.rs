@@ -1192,7 +1192,21 @@ impl<'a> DirectRenderer<'a> {
             if !indent.is_empty() {
                 spans.push(Span::styled(indent.to_string(), base_style).to_owned());
             }
-            spans.push(Span::styled(marker.to_string(), self.theme.structural_style()).to_owned());
+            let structural_style = self.theme.structural_style();
+            match marker {
+                "[✓] " => {
+                    spans.push(Span::styled("[".to_string(), structural_style.clone()).to_owned());
+                    spans.push(
+                        Span::styled("✓".to_string(), self.theme.checkmark_style()).to_owned(),
+                    );
+                    spans.push(Span::styled("] ".to_string(), structural_style.clone()).to_owned());
+                }
+                _ => {
+                    spans.push(
+                        Span::styled(marker.to_string(), structural_style.clone()).to_owned(),
+                    );
+                }
+            }
             if !tail.is_empty() {
                 spans.push(Span::styled(tail.to_string(), base_style).to_owned());
             }
@@ -2006,8 +2020,8 @@ mod tests {
     #[test]
     fn nested_checklist_markers_use_structural_style() {
         let child =
-            tdoc::ChecklistItem::new(false).with_content(vec![DocSpan::new_text("Nested task")]);
-        let parent = tdoc::ChecklistItem::new(false)
+            tdoc::ChecklistItem::new(true).with_content(vec![DocSpan::new_text("Nested task")]);
+        let parent = tdoc::ChecklistItem::new(true)
             .with_content(vec![DocSpan::new_text("Parent task")])
             .with_children(vec![child]);
         let checklist = Paragraph::new_checklist().with_checklist_items(vec![parent]);
@@ -2021,6 +2035,7 @@ mod tests {
         let theme = Theme::default();
         let rendered = render_document_direct(&document, 120, 0, &[], tracking, &theme);
         let structural_style = theme.structural_style();
+        let checkmark_style = theme.checkmark_style();
 
         let rendered_strings = lines_to_strings(&rendered.lines);
         let parent_line_index = rendered_strings
@@ -2034,20 +2049,36 @@ mod tests {
         let parent_line = &rendered.lines[parent_line_index];
         let nested_line = &rendered.lines[nested_line_index];
 
-        let marker_is_structural = |line: &Line<'_>| {
-            line.spans.iter().any(|span| {
+        let marker_styles = |line: &Line<'_>| {
+            let has_structural_brackets = line.spans.iter().any(|span| {
                 let text = span.content.as_ref();
-                (text == "[ ] " || text == "[✓] ") && span.style == structural_style
-            })
+                (text.contains('[') || text.contains(']')) && span.style == structural_style
+            });
+            let has_colored_checkmark = line
+                .spans
+                .iter()
+                .any(|span| span.content.as_ref() == "✓" && span.style == checkmark_style);
+            (has_structural_brackets, has_colored_checkmark)
         };
 
+        let (parent_structural, parent_checkmark) = marker_styles(parent_line);
         assert!(
-            marker_is_structural(parent_line),
-            "top-level checklist marker should use structural color"
+            parent_structural,
+            "top-level checklist brackets should use structural color"
         );
         assert!(
-            marker_is_structural(nested_line),
-            "nested checklist marker should use structural color"
+            parent_checkmark,
+            "top-level checklist checkmark should use checkmark color"
+        );
+
+        let (nested_structural, nested_checkmark) = marker_styles(nested_line);
+        assert!(
+            nested_structural,
+            "nested checklist brackets should use structural color"
+        );
+        assert!(
+            nested_checkmark,
+            "nested checklist checkmark should use checkmark color"
         );
     }
 
