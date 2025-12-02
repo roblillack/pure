@@ -442,9 +442,13 @@ impl<'a> DirectRenderer<'a> {
                 HeaderLevel::Three => '-',
                 HeaderLevel::One => '=',
             };
-            let underline_width = width.saturating_sub(self.left_padding);
+            let prefix_width = visible_width(prefix);
+            let underline_width = width
+                .saturating_sub(self.left_padding)
+                .saturating_sub(prefix_width);
             let underline = underline_string(underline_width, underline_char);
-            self.push_styled_line(&underline, self.theme.structural_style(), false);
+            let underline_line = format!("{}{}", prefix, underline);
+            self.push_styled_line(&underline_line, self.theme.structural_style(), false);
         }
     }
 
@@ -488,7 +492,7 @@ impl<'a> DirectRenderer<'a> {
     fn render_unordered_list(&mut self, paragraph: &Paragraph, prefix: &str) {
         for (entry_idx, entry) in paragraph.entries().iter().enumerate() {
             if entry_idx > 0 {
-                self.push_plain_line("", false);
+                self.push_structural_margin_line(prefix, false);
             }
             let marker = "• ";
             let first_prefix = format!("{}{}", prefix, marker);
@@ -500,7 +504,7 @@ impl<'a> DirectRenderer<'a> {
     fn render_ordered_list(&mut self, paragraph: &Paragraph, prefix: &str) {
         for (entry_idx, entry) in paragraph.entries().iter().enumerate() {
             if entry_idx > 0 {
-                self.push_plain_line("", false);
+                self.push_structural_margin_line(prefix, false);
             }
             let number_label = format!("{}. ", entry_idx + 1);
             let first_prefix = format!("{}{}", prefix, number_label);
@@ -518,7 +522,7 @@ impl<'a> DirectRenderer<'a> {
     fn render_checklist(&mut self, paragraph: &Paragraph, prefix: &str) {
         for (item_idx, item) in paragraph.checklist_items().iter().enumerate() {
             if item_idx > 0 {
-                self.push_plain_line("", false);
+                self.push_structural_margin_line(prefix, false);
             }
             self.render_checklist_item_struct(item, vec![item_idx], prefix);
         }
@@ -673,7 +677,7 @@ impl<'a> DirectRenderer<'a> {
             self.current_paragraph_path.push_entry(entry_idx, para_idx);
 
             if rest.paragraph_type() == ParagraphType::Text {
-                self.push_plain_line("", false);
+                self.push_structural_margin_line(continuation_prefix, false);
             }
             self.render_paragraph(rest, continuation_prefix);
 
@@ -1143,9 +1147,23 @@ impl<'a> DirectRenderer<'a> {
     }
 
     fn push_plain_line(&mut self, content: &str, counts_as_content: bool) {
-        let mut spans = Vec::new();
-        if !content.is_empty() {
-            spans.push(Span::raw(content.to_string()).to_owned());
+        self.push_line_segments(
+            vec![(content.to_string(), Style::default())],
+            counts_as_content,
+        );
+    }
+
+    fn push_styled_line(&mut self, content: &str, style: Style, counts_as_content: bool) {
+        self.push_line_segments(vec![(content.to_string(), style)], counts_as_content);
+    }
+
+    fn push_line_segments(&mut self, segments: Vec<(String, Style)>, counts_as_content: bool) {
+        let mut spans: Vec<Span<'static>> = Vec::new();
+        for (text, style) in segments {
+            if text.is_empty() {
+                continue;
+            }
+            spans.extend(self.style_structural_prefix(&text, style));
         }
         let spans = self.prepend_padding(spans);
         let line = Line::from(spans);
@@ -1154,16 +1172,35 @@ impl<'a> DirectRenderer<'a> {
         self.current_line_index += 1;
     }
 
-    fn push_styled_line(&mut self, content: &str, style: Style, counts_as_content: bool) {
-        let mut spans = Vec::new();
-        if !content.is_empty() {
-            spans.push(Span::styled(content.to_string(), style).to_owned());
+    fn push_structural_margin_line(&mut self, prefix: &str, counts_as_content: bool) {
+        if let Some(margin) = Self::structural_margin_prefix(prefix) {
+            self.push_plain_line(&margin, counts_as_content);
+        } else {
+            self.push_plain_line("", counts_as_content);
         }
-        let spans = self.prepend_padding(spans);
-        let line = Line::from(spans);
-        self.lines.push(line);
-        self.line_metrics.push(LineMetric { counts_as_content });
-        self.current_line_index += 1;
+    }
+
+    fn structural_margin_prefix(prefix: &str) -> Option<String> {
+        let mut margin = String::new();
+        let mut rest = prefix;
+        let mut has_bar = false;
+        while !rest.is_empty() {
+            if rest.len() >= 2 && &rest.as_bytes()[..2] == b"| " {
+                margin.push_str("| ");
+                rest = &rest[2..];
+                has_bar = true;
+                continue;
+            }
+            let mut chars = rest.chars();
+            let ch = chars.next().unwrap();
+            if ch.is_whitespace() && ch != '\n' && ch != '\r' {
+                margin.push(ch);
+                rest = chars.as_str();
+                continue;
+            }
+            break;
+        }
+        if has_bar { Some(margin) } else { None }
     }
 
     /// Detects and styles structural prefix characters in a segment
@@ -1173,47 +1210,49 @@ impl<'a> DirectRenderer<'a> {
             return vec![Span::styled(String::new(), base_style).to_owned()];
         }
 
-        // Preserve indentation while still detecting structural markers after it
-        let mut indent_len = 0;
-        for ch in text.chars() {
-            if ch.is_whitespace() {
-                indent_len += ch.len_utf8();
-            } else {
-                break;
+        let structural_style = self.theme.structural_style();
+        let mut spans = Vec::new();
+        let mut remaining = text;
+
+        while !remaining.is_empty() {
+            let whitespace_len = remaining
+                .chars()
+                .take_while(|ch| ch.is_whitespace())
+                .map(|ch| ch.len_utf8())
+                .sum::<usize>();
+            if whitespace_len > 0 {
+                let (whitespace, tail) = remaining.split_at(whitespace_len);
+                spans.push(Span::styled(whitespace.to_string(), base_style).to_owned());
+                remaining = tail;
+                continue;
             }
-        }
-        let (indent, rest) = text.split_at(indent_len);
-        if rest.is_empty() {
-            return vec![Span::styled(text.to_string(), base_style).to_owned()];
+
+            if let Some((marker, tail)) = Self::extract_structural_marker(remaining) {
+                match marker {
+                    "[✓] " => {
+                        spans.push(Span::styled("[".to_string(), structural_style).to_owned());
+                        spans.push(
+                            Span::styled("✓".to_string(), self.theme.checkmark_style()).to_owned(),
+                        );
+                        spans.push(Span::styled("] ".to_string(), structural_style).to_owned());
+                    }
+                    _ => {
+                        spans.push(Span::styled(marker.to_string(), structural_style).to_owned());
+                    }
+                }
+                remaining = tail;
+                continue;
+            }
+
+            spans.push(Span::styled(remaining.to_string(), base_style).to_owned());
+            break;
         }
 
-        if let Some((marker, tail)) = Self::extract_structural_marker(rest) {
-            let mut spans = Vec::new();
-            if !indent.is_empty() {
-                spans.push(Span::styled(indent.to_string(), base_style).to_owned());
-            }
-            let structural_style = self.theme.structural_style();
-            match marker {
-                "[✓] " => {
-                    spans.push(Span::styled("[".to_string(), structural_style).to_owned());
-                    spans.push(
-                        Span::styled("✓".to_string(), self.theme.checkmark_style()).to_owned(),
-                    );
-                    spans.push(Span::styled("] ".to_string(), structural_style).to_owned());
-                }
-                _ => {
-                    spans.push(
-                        Span::styled(marker.to_string(), structural_style).to_owned(),
-                    );
-                }
-            }
-            if !tail.is_empty() {
-                spans.push(Span::styled(tail.to_string(), base_style).to_owned());
-            }
-            spans
-        } else {
-            vec![Span::styled(text.to_string(), base_style).to_owned()]
+        if spans.is_empty() {
+            spans.push(Span::styled(String::new(), base_style).to_owned());
         }
+
+        spans
     }
 
     fn extract_structural_marker(text: &str) -> Option<(&str, &str)> {
@@ -2079,6 +2118,174 @@ mod tests {
         assert!(
             nested_checkmark,
             "nested checklist checkmark should use checkmark color"
+        );
+    }
+
+    #[test]
+    fn nested_quote_bars_use_structural_style() {
+        let input = r#"
+<blockquote>
+  <p>Outer paragraph</p>
+  <blockquote>
+    <p>Inner paragraph</p>
+  </blockquote>
+</blockquote>
+"#;
+        let rendered = render_input(input);
+        let lines = lines_to_strings(&rendered.lines);
+        let inner_line_index = lines
+            .iter()
+            .position(|line| line.contains("Inner paragraph"))
+            .expect("missing inner quote line");
+        let theme = Theme::default();
+        let structural_style = theme.structural_style();
+        let inner_line = &rendered.lines[inner_line_index];
+        let quote_prefix_count = inner_line
+            .spans
+            .iter()
+            .filter(|span| span.style == structural_style && span.content.as_ref() == "| ")
+            .count();
+        assert!(
+            quote_prefix_count >= 2,
+            "expected both quote bars to use structural style, line was {:?}",
+            lines[inner_line_index]
+        );
+    }
+
+    #[test]
+    fn quoted_headers_include_structural_prefix_in_underline() {
+        let input = r#"
+<blockquote>
+  <h2>Quoted Header</h2>
+</blockquote>
+"#;
+        let rendered = render_input(input);
+        let lines = lines_to_strings(&rendered.lines);
+        let header_index = lines
+            .iter()
+            .position(|line| line.contains("Quoted Header"))
+            .expect("missing header line inside quote");
+        assert!(
+            header_index + 1 < lines.len(),
+            "missing underline for quoted header"
+        );
+        let underline_text = &lines[header_index + 1];
+        assert!(
+            underline_text.starts_with("| "),
+            "quoted header underline should start with quote prefix, got {underline_text:?}"
+        );
+
+        let theme = Theme::default();
+        let structural_style = theme.structural_style();
+        let underline_line = &rendered.lines[header_index + 1];
+        let has_structural_prefix = underline_line
+            .spans
+            .iter()
+            .any(|span| span.style == structural_style && span.content.as_ref().starts_with("| "));
+        assert!(
+            has_structural_prefix,
+            "quote prefix in underline should use structural style"
+        );
+    }
+
+    #[test]
+    fn quote_inside_list_keeps_structural_bar_style() {
+        let input = r#"
+<ul>
+  <li>
+    <blockquote>
+      <p>Nested quote</p>
+    </blockquote>
+  </li>
+</ul>
+"#;
+        let rendered = render_input(input);
+        let lines = lines_to_strings(&rendered.lines);
+        let quote_line_index = lines
+            .iter()
+            .position(|line| line.contains("Nested quote"))
+            .expect("missing nested quote content");
+        let quote_line = &rendered.lines[quote_line_index];
+        let theme = Theme::default();
+        let structural_style = theme.structural_style();
+        let has_structural_bar = quote_line
+            .spans
+            .iter()
+            .any(|span| span.content.as_ref() == "| " && span.style == structural_style);
+        let has_unstyled_bar = quote_line
+            .spans
+            .iter()
+            .any(|span| span.content.as_ref() == "| " && span.style != structural_style);
+        assert!(
+            has_structural_bar,
+            "quote bar inside list should use structural style"
+        );
+        assert!(
+            !has_unstyled_bar,
+            "quote bar should not fall back to default styling"
+        );
+    }
+
+    #[test]
+    fn quoted_lists_keep_structural_margins() {
+        let input = r#"
+<blockquote>
+  <ul>
+    <li><p>First item</p></li>
+    <li><p>Second item</p></li>
+  </ul>
+</blockquote>
+"#;
+        let rendered = render_input(input);
+        let lines = lines_to_strings(&rendered.lines);
+        let margin_index = lines
+            .iter()
+            .position(|line| line == "| ")
+            .expect("missing structural margin between quoted list items");
+        let margin_line = &rendered.lines[margin_index];
+        let theme = Theme::default();
+        let structural_style = theme.structural_style();
+        let has_structural_bar = margin_line
+            .spans
+            .iter()
+            .any(|span| span.content.as_ref() == "| " && span.style == structural_style);
+        assert!(
+            has_structural_bar,
+            "quoted list margin should include structural quote bar"
+        );
+    }
+
+    #[test]
+    fn quote_list_quote_keeps_nested_bars_colored() {
+        let input = r#"
+<blockquote>
+  <ul>
+    <li>
+      <blockquote>
+        <p>You can never have enough nesting of paragraphs.</p>
+      </blockquote>
+    </li>
+  </ul>
+</blockquote>
+"#;
+        let rendered = render_input(input);
+        let lines = lines_to_strings(&rendered.lines);
+        let line_index = lines
+            .iter()
+            .position(|line| line.contains("enough nesting"))
+            .expect("missing deeply nested quote line");
+        let line = &rendered.lines[line_index];
+        let theme = Theme::default();
+        let structural_style = theme.structural_style();
+        let structural_bar_count = line
+            .spans
+            .iter()
+            .filter(|span| span.style == structural_style && span.content.as_ref() == "| ")
+            .count();
+        assert!(
+            structural_bar_count >= 2,
+            "expected both quote bars to use structural style, line was {:?}",
+            lines[line_index]
         );
     }
 
