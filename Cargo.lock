@@ -1154,7 +1154,7 @@ checksum = "007d8adb5ddab6f8e3f491ac63566a7d5002cc7ed73901f72057943fa71ae1ae"
 
 [[package]]
 name = "pure-tui"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "crossterm 0.29.0",
