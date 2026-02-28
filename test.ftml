@@ -157,6 +157,7 @@ if width &lt; 60 {
     left_padding = (width.saturating_sub(100)) / 2 + 4;
     wrap_width = width.saturating_sub(left_padding);
 }
+
 </pre>
 
 <h2>FTML improvements</h2>
