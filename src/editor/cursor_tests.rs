@@ -279,3 +279,176 @@ fn move_down_at_different_offsets() {
         assert!(result, "Failed to move down from offset 3");
     }
 }
+
+/// Build "Hello [Bold>World<Bold]!" with text directly on the bold span.
+fn document_with_flat_bold_span() -> Document {
+    let mut bold = Span::new_text("World");
+    bold.style = InlineStyle::Bold;
+    let paragraph = Paragraph::new_text().with_content(vec![
+        Span::new_text("Hello "),
+        bold,
+        Span::new_text("!"),
+    ]);
+    Document::new().with_paragraphs(vec![paragraph])
+}
+
+#[test]
+fn move_word_left_lands_on_reveal_end_tag() {
+    // Cursor is on "!" (right after <Bold]), word-left should land ON the
+    // RevealEnd tag (the tag counts as one word).
+    let mut editor = DocumentEditor::new(document_with_flat_bold_span());
+    editor.set_reveal_codes(true);
+    editor.ensure_cursor_selectable();
+
+    // Navigate to "!" by moving to end and then left until on "!" text segment
+    while editor.move_right() {}
+    // Cursor is now at end of "!" segment (offset=1).
+    // Move left once to be at offset 0 of "!" (right after <Bold]).
+    editor.move_left();
+    assert_eq!(editor.cursor_pointer().segment_kind, SegmentKind::Text);
+    assert_eq!(editor.cursor_pointer().offset, 0);
+
+    // word-left: should land ON the <Bold] tag
+    assert!(editor.move_word_left());
+    assert!(
+        matches!(
+            editor.cursor_pointer().segment_kind,
+            SegmentKind::RevealEnd(_)
+        ),
+        "word-left from after RevealEnd should land on the RevealEnd tag"
+    );
+    assert_eq!(
+        editor.cursor_pointer().offset,
+        0,
+        "cursor offset on reveal tag should be 0"
+    );
+
+    // word-left again: should move past the tag into "World"
+    assert!(editor.move_word_left());
+    assert_eq!(
+        editor.cursor_pointer().segment_kind,
+        SegmentKind::Text,
+        "second word-left should land on a Text segment"
+    );
+    assert_eq!(
+        editor.cursor_pointer().span_path.indices(),
+        &[1],
+        "should land on the bold span"
+    );
+}
+
+#[test]
+fn move_word_left_lands_on_reveal_start_tag() {
+    // Cursor is on "World" at offset 0 (right after [Bold>), word-left should
+    // land ON the RevealStart tag, then a second word-left goes into "Hello ".
+    let mut editor = DocumentEditor::new(document_with_flat_bold_span());
+    editor.set_reveal_codes(true);
+    editor.ensure_cursor_selectable();
+
+    // Navigate to "World" at offset 0
+    // Segments: Text("Hello "), RevealStart(Bold), Text("World"), RevealEnd(Bold), Text("!")
+    while editor.cursor_pointer().segment_kind != SegmentKind::Text
+        || editor.cursor_pointer().span_path.indices() != &[1]
+    {
+        assert!(editor.move_right());
+    }
+    // Move to offset 0 of "World"
+    while editor.cursor_pointer().offset > 0 {
+        editor.move_left();
+    }
+    assert_eq!(editor.cursor_pointer().segment_kind, SegmentKind::Text);
+    assert_eq!(editor.cursor_pointer().span_path.indices(), &[1]);
+    assert_eq!(editor.cursor_pointer().offset, 0);
+
+    // word-left: should land ON the [Bold> tag
+    assert!(editor.move_word_left());
+    assert!(
+        matches!(
+            editor.cursor_pointer().segment_kind,
+            SegmentKind::RevealStart(_)
+        ),
+        "word-left from after RevealStart should land on the RevealStart tag"
+    );
+    assert_eq!(editor.cursor_pointer().offset, 0);
+
+    // word-left again: should move into "Hello " span
+    assert!(editor.move_word_left());
+    assert_eq!(
+        editor.cursor_pointer().segment_kind,
+        SegmentKind::Text,
+        "second word-left should land on a Text segment"
+    );
+    assert_eq!(
+        editor.cursor_pointer().span_path.indices(),
+        &[0],
+        "should land on the 'Hello ' span"
+    );
+}
+
+#[test]
+fn move_word_right_lands_on_reveal_start_tag() {
+    // From end of "Hello ", word-right should land ON [Bold>, then next
+    // word-right goes into "World".
+    let mut editor = DocumentEditor::new(document_with_flat_bold_span());
+    editor.set_reveal_codes(true);
+    editor.ensure_cursor_selectable();
+
+    // Move to end of "Hello " text span
+    assert_eq!(editor.cursor_pointer().span_path.indices(), &[0]);
+    editor.move_to_segment_end();
+
+    // word-right: should land ON the [Bold> tag
+    assert!(editor.move_word_right());
+    assert!(
+        matches!(
+            editor.cursor_pointer().segment_kind,
+            SegmentKind::RevealStart(_)
+        ),
+        "word-right from end of 'Hello ' should land on RevealStart tag"
+    );
+
+    // word-right again: should move into "World"
+    assert!(editor.move_word_right());
+    assert_eq!(
+        editor.cursor_pointer().segment_kind,
+        SegmentKind::Text,
+        "second word-right should land on Text"
+    );
+    assert_eq!(editor.cursor_pointer().span_path.indices(), &[1]);
+}
+
+#[test]
+fn move_word_right_lands_on_reveal_end_tag() {
+    // From end of "World", word-right should land ON <Bold], then next
+    // word-right goes into "!".
+    let mut editor = DocumentEditor::new(document_with_flat_bold_span());
+    editor.set_reveal_codes(true);
+    editor.ensure_cursor_selectable();
+
+    // Navigate to "World" text and move to end
+    while editor.cursor_pointer().segment_kind != SegmentKind::Text
+        || editor.cursor_pointer().span_path.indices() != &[1]
+    {
+        assert!(editor.move_right());
+    }
+    editor.move_to_segment_end();
+
+    // word-right: should land ON the <Bold] tag
+    assert!(editor.move_word_right());
+    assert!(
+        matches!(
+            editor.cursor_pointer().segment_kind,
+            SegmentKind::RevealEnd(_)
+        ),
+        "word-right from end of 'World' should land on RevealEnd tag"
+    );
+
+    // word-right again: should move into "!"
+    assert!(editor.move_word_right());
+    assert_eq!(
+        editor.cursor_pointer().segment_kind,
+        SegmentKind::Text,
+        "second word-right should land on Text"
+    );
+    assert_eq!(editor.cursor_pointer().span_path.indices(), &[2]);
+}

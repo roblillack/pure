@@ -266,6 +266,14 @@ impl DocumentEditor {
             if len == 0 {
                 continue;
             }
+            // Reveal tags count as one word; land at offset 0
+            if matches!(
+                self.current_segment_kind(),
+                Some(SegmentKind::RevealStart(_) | SegmentKind::RevealEnd(_))
+            ) {
+                self.cursor.offset = 0;
+                return true;
+            }
             if let Some(text) = self.current_span_text() {
                 let new_offset = previous_word_boundary(text, len);
                 self.cursor.offset = new_offset;
@@ -296,6 +304,13 @@ impl DocumentEditor {
             self.cursor.offset = 0;
             if len == 0 {
                 continue;
+            }
+            // Reveal tags count as one word; land at offset 0
+            if matches!(
+                self.current_segment_kind(),
+                Some(SegmentKind::RevealStart(_) | SegmentKind::RevealEnd(_))
+            ) {
+                return true;
             }
             if let Some(text) = self.current_span_text() {
                 let new_offset = skip_leading_whitespace(text).min(len);

@@ -945,14 +945,11 @@ impl<'a> DirectRenderer<'a> {
             let tag_style = self.theme.reveal_tag_style();
             let width = visible_width(&display);
 
-            // Track position for the reveal end tag so it can be clicked
-            // The reveal end is at the end of the span text
-            let end_offset = span.text.chars().count();
-            let direct_events = self.check_position_match(
-                span_path,
-                end_offset,
-                SegmentKind::RevealEnd(span.style),
-            );
+            // Track position for the reveal end tag so it can be clicked.
+            // The cursor offset on a RevealEnd segment is always 0 (normalized
+            // by normalize_cursor_after_backward_move), so we must match at 0.
+            let direct_events =
+                self.check_position_match(span_path, 0, SegmentKind::RevealEnd(span.style));
 
             // Convert DirectTextEvents to TextEvents
             let events: Vec<TextEvent> = direct_events
@@ -2975,26 +2972,6 @@ mod tests {
         ) {
             let pointer = editor.cursor_pointer();
 
-            // TODO: The direct renderer doesn't currently support rendering cursors at reveal tag
-            // positions because those segments only exist in the editor's internal representation,
-            // not in the original document. For now, we verify the cursor can be positioned at
-            // these locations but skip rendering verification.
-            if matches!(
-                pointer.segment_kind,
-                SegmentKind::RevealStart(_) | SegmentKind::RevealEnd(_)
-            ) {
-                let actual_char = match pointer.segment_kind {
-                    SegmentKind::RevealStart(_) => '>',
-                    SegmentKind::RevealEnd(_) => '<',
-                    _ => unreachable!(),
-                };
-                assert_eq!(
-                    actual_char, expected_char,
-                    "character mismatch for reveal tag while moving {context}"
-                );
-                return;
-            }
-
             let tracking = DirectCursorTracking {
                 cursor: Some(&pointer),
                 selection: None,
@@ -3012,6 +2989,8 @@ mod tests {
             );
 
             let actual_char = match pointer.segment_kind {
+                SegmentKind::RevealStart(_) => '>',
+                SegmentKind::RevealEnd(_) => '<',
                 SegmentKind::Text => {
                     assert!(
                         actual_position > 0,
@@ -3024,7 +3003,6 @@ mod tests {
                         '\n'
                     }
                 }
-                _ => unreachable!("non-text segments handled above"),
             };
             assert_eq!(
                 actual_char, expected_char,
@@ -3118,5 +3096,186 @@ mod tests {
             cursor0.content_column, cursor4.content_column,
             "cursor.content_column should be the same with different left_padding values"
         );
+    }
+
+    /// Helper: render with reveal codes and return the visual position of the cursor
+    fn render_cursor_position(
+        editor: &DocumentEditor,
+        reveal_tags: &[RevealTagRef],
+    ) -> Option<CursorVisualPosition> {
+        let tracking = DirectCursorTracking {
+            cursor: Some(&editor.cursor_pointer()),
+            selection: None,
+            track_all_positions: false,
+        };
+        let theme = Theme::default();
+        let rendered =
+            render_document_direct(editor.document(), 120, 0, reveal_tags, tracking, &theme);
+        rendered.cursor
+    }
+
+    /// Build "Hello [Bold>World<Bold]!" with text directly on the bold span
+    /// (as opposed to ftml! which creates a parent span with empty text and children).
+    /// This is the structure that triggers the bug: span.text = "World", so
+    /// span.text.chars().count() = 5, but cursor.offset on RevealEnd = 0.
+    fn document_with_flat_bold_span() -> Document {
+        let mut bold = DocSpan::new_text("World");
+        bold.style = InlineStyle::Bold;
+        let paragraph = Paragraph::new_text().with_content(vec![
+            DocSpan::new_text("Hello "),
+            bold,
+            DocSpan::new_text("!"),
+        ]);
+        Document::new().with_paragraphs(vec![paragraph])
+    }
+
+    /// Helper: set up editor with reveal codes using a flat bold span document
+    fn setup_flat_bold_editor() -> (DocumentEditor, Vec<RevealTagRef>) {
+        let document = document_with_flat_bold_span();
+        let mut editor = DocumentEditor::new(document);
+        editor.set_reveal_codes(true);
+        editor.ensure_cursor_selectable();
+
+        let (_, _, reveal_tags, _) = editor.clone_with_markers(
+            SENTINELS.cursor,
+            None,
+            SENTINELS.selection_start,
+            SENTINELS.selection_end,
+        );
+
+        (editor, reveal_tags)
+    }
+
+    #[test]
+    fn reveal_end_tag_cursor_has_visual_position_flat_span() {
+        // When the cursor is on a RevealEnd tag (<Bold]) with text directly on the
+        // styled span, the renderer must report a visual position (not None).
+        // This is the bug: the render checks offset = span.text.chars().count() (5),
+        // but the cursor's offset on RevealEnd is always 0.
+        let (mut editor, reveal_tags) = setup_flat_bold_editor();
+
+        // Move cursor to the RevealEnd tag
+        while editor.move_right() {}
+        while !matches!(
+            editor.cursor_pointer().segment_kind,
+            SegmentKind::RevealEnd(_)
+        ) {
+            assert!(editor.move_left(), "should reach RevealEnd by moving left");
+        }
+
+        let position = render_cursor_position(&editor, &reveal_tags);
+        assert!(
+            position.is_some(),
+            "cursor on RevealEnd tag must have a visual position (got None / ?:?)"
+        );
+    }
+
+    #[test]
+    fn reveal_start_tag_cursor_has_visual_position_flat_span() {
+        // Verify RevealStart tags report a visual position (baseline, should work).
+        let (mut editor, reveal_tags) = setup_flat_bold_editor();
+
+        while !matches!(
+            editor.cursor_pointer().segment_kind,
+            SegmentKind::RevealStart(_)
+        ) {
+            assert!(
+                editor.move_right(),
+                "should reach RevealStart by moving right"
+            );
+        }
+
+        let position = render_cursor_position(&editor, &reveal_tags);
+        assert!(
+            position.is_some(),
+            "cursor on RevealStart tag must have a visual position"
+        );
+    }
+
+    #[test]
+    fn reveal_end_tag_content_column_matches_text_boundary_flat_span() {
+        // The content_column when the cursor is on <Bold] should be at the
+        // boundary right after the styled text ends.
+        let (mut editor, reveal_tags) = setup_flat_bold_editor();
+
+        while editor.move_right() {}
+        while !matches!(
+            editor.cursor_pointer().segment_kind,
+            SegmentKind::RevealEnd(_)
+        ) {
+            assert!(editor.move_left());
+        }
+
+        let end_tag_pos = render_cursor_position(&editor, &reveal_tags);
+        let end_tag_pos = end_tag_pos.expect("RevealEnd should have a visual position");
+
+        // "Hello " = 6 chars + "World" = 5 chars → content_column should be 11
+        assert_eq!(
+            end_tag_pos.content_column, 11,
+            "RevealEnd content_column should be at the end of the styled text"
+        );
+    }
+
+    #[test]
+    fn reveal_tags_full_navigation_flat_span() {
+        // Navigate through "Hello [Bold>World<Bold]!" step by step,
+        // verifying that every cursor position is reported by the renderer.
+        let (mut editor, reveal_tags) = setup_flat_bold_editor();
+
+        // Verify rendered text
+        let tracking = DirectCursorTracking {
+            cursor: None,
+            selection: None,
+            track_all_positions: false,
+        };
+        let theme = Theme::default();
+        let rendered =
+            render_document_direct(editor.document(), 120, 0, &reveal_tags, tracking, &theme);
+        let lines = lines_to_strings(&rendered.lines);
+        assert_eq!(lines, vec!["Hello [Bold>World<Bold]!"]);
+
+        // Collect cursor positions while moving right
+        let mut positions: Vec<(SegmentKind, usize, Option<CursorVisualPosition>)> = Vec::new();
+        loop {
+            let pointer = editor.cursor_pointer();
+            let pos = render_cursor_position(&editor, &reveal_tags);
+            positions.push((pointer.segment_kind, pointer.offset, pos));
+            if !editor.move_right() {
+                break;
+            }
+        }
+
+        // Every position must be Some - no ?:? in the status bar
+        for (i, (kind, offset, pos)) in positions.iter().enumerate() {
+            assert!(
+                pos.is_some(),
+                "forward position {i} ({kind:?} offset={offset}) should have a visual position, got None"
+            );
+        }
+    }
+
+    #[test]
+    fn reveal_tags_backward_navigation_flat_span() {
+        // Same but moving backward.
+        let (mut editor, reveal_tags) = setup_flat_bold_editor();
+
+        while editor.move_right() {}
+
+        let mut positions: Vec<(SegmentKind, usize, Option<CursorVisualPosition>)> = Vec::new();
+        loop {
+            let pointer = editor.cursor_pointer();
+            let pos = render_cursor_position(&editor, &reveal_tags);
+            positions.push((pointer.segment_kind, pointer.offset, pos));
+            if !editor.move_left() {
+                break;
+            }
+        }
+
+        for (i, (kind, offset, pos)) in positions.iter().enumerate() {
+            assert!(
+                pos.is_some(),
+                "backward position {i} ({kind:?} offset={offset}) should have a visual position, got None"
+            );
+        }
     }
 }
