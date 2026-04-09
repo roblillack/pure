@@ -348,7 +348,7 @@ fn move_word_left_lands_on_reveal_start_tag() {
     // Navigate to "World" at offset 0
     // Segments: Text("Hello "), RevealStart(Bold), Text("World"), RevealEnd(Bold), Text("!")
     while editor.cursor_pointer().segment_kind != SegmentKind::Text
-        || editor.cursor_pointer().span_path.indices() != &[1]
+        || editor.cursor_pointer().span_path.indices() != [1]
     {
         assert!(editor.move_right());
     }
@@ -427,7 +427,7 @@ fn move_word_right_lands_on_reveal_end_tag() {
 
     // Navigate to "World" text and move to end
     while editor.cursor_pointer().segment_kind != SegmentKind::Text
-        || editor.cursor_pointer().span_path.indices() != &[1]
+        || editor.cursor_pointer().span_path.indices() != [1]
     {
         assert!(editor.move_right());
     }
