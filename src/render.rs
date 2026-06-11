@@ -294,11 +294,7 @@ impl<'a> DirectRenderer<'a> {
             // Layout this paragraph using the standalone function
             let direct_tracking = DirectCursorTracking {
                 cursor: self.cursor_pointer,
-                selection: if self.selection_start.is_some() && self.selection_end.is_some() {
-                    Some((self.selection_start.unwrap(), self.selection_end.unwrap()))
-                } else {
-                    None
-                },
+                selection: self.selection_start.zip(self.selection_end),
                 track_all_positions: self.track_all_positions,
             };
 
