@@ -624,6 +624,28 @@ The system re-renders the document in several scenarios:
 
 ---
 
+## Snapshot Testing
+
+Full-app interactions are tested headlessly via SVG snapshots:
+
+- **`App` (`src/app.rs`)**: The complete interactive application (state,
+  drawing, key/mouse handling) lives in the library; the `pure` binary is a
+  thin shell providing the terminal setup and event loop. This allows tests to
+  drive real event handling without a terminal.
+- **`TestApp` (`src/test_harness.rs`)**: Wraps an `App` and a ratatui
+  `TestBackend` terminal. Tests feed synthetic key/mouse events
+  (`key()`, `ctrl()`, `type_text()`, `click()`); every event renders a frame,
+  mirroring the live event loop.
+- **SVG rendering**: `buffer_to_svg()` maps the terminal cell buffer 1:1 onto
+  an SVG grid of background rects and text runs (colors, bold/italic,
+  reverse-video selection, cursor overlay). No fonts are rasterized, so the
+  output is byte-identical on every machine and diffs as text.
+- **Snapshots (`src/snapshot_tests.rs`)**: Compared with
+  `insta::assert_binary_snapshot!`, stored as `src/snapshots/*.snap.svg` —
+  directly viewable in a browser. Review changes with `cargo insta review`.
+
+---
+
 ## Thread Safety
 
 The current implementation is **not thread-safe**:
