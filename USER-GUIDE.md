@@ -640,7 +640,35 @@ The current paragraph merges with the previous one.
 
 When you delete a paragraph break between two different paragraph types (for example, merging a heading into a text paragraph), the resulting merged paragraph takes the type of the paragraph where the cursor is positioned.
 
-Undo functionality is planned for future releases. Currently, deleted text cannot be recovered.
+If you delete text by accident, press **Ctrl+Z** to undo the deletion.
+
+---
+
+### Undo and Redo
+
+**Purpose:** Revert recent edits or re-apply changes you have undone.
+
+**Keyboard Shortcuts:** Ctrl+Z (undo), Ctrl+Y (redo)
+
+#### To undo a change:
+
+Press **Ctrl+Z**.
+
+The most recent edit is reverted and the cursor returns to where the edit happened. Press **Ctrl+Z** repeatedly to step further back through your changes.
+
+#### To redo a change:
+
+Press **Ctrl+Y**.
+
+The most recently undone edit is re-applied.
+
+#### Additional Information
+
+Undo covers all document edits: typing, deleting, paragraph breaks, indenting, paragraph type changes, inline styles, and checklist toggles. Cursor movement and scrolling are not recorded.
+
+Consecutive typing is grouped into a single undo step, as are runs of Backspace or Delete presses. Moving the cursor between edits starts a new step.
+
+Making a new edit after undoing discards the redo history.
 
 ---
 
@@ -1464,6 +1492,10 @@ There are no automatic saves or backup copies. Remember to save frequently (Ctrl
 **Ctrl+W** / **Ctrl+Backspace** / **Alt+Backspace** - Delete word backward
 
 **Ctrl+Delete** / **Alt+Delete** - Delete word forward
+
+**Ctrl+Z** - Undo last change
+
+**Ctrl+Y** - Redo last undone change
 
 ### File Operations
 

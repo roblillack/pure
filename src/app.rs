@@ -1,6 +1,12 @@
+//! The interactive editor application: state, drawing, and event handling.
+//!
+//! This lives in the library (rather than the `pure` binary) so that tests
+//! can drive the full application — key and mouse events through real event
+//! handling, rendered via `ratatui`'s `TestBackend` — without a terminal.
+
 use std::{
     cmp::Ordering,
-    env, fs, io,
+    fs, io,
     path::{Path, PathBuf},
     time::{Duration, Instant},
 };
@@ -9,15 +15,13 @@ use anyhow::{Context, Result};
 use crossterm::{
     cursor::SetCursorStyle,
     event::{
-        self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind,
-        KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+        Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent,
+        MouseEventKind,
     },
     execute,
-    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 use ratatui::{
-    Frame, Terminal,
-    backend::CrosstermBackend,
+    Frame,
     layout::{Constraint, Direction, Layout, Position, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
@@ -25,15 +29,15 @@ use ratatui::{
 };
 use tdoc::{Document, InlineStyle, ParagraphType, markdown, parse, writer::Writer};
 
-use pure_tui::editor::{CursorPointer, DocumentEditor};
-use pure_tui::editor_display::{CursorDisplay, EditorDisplay};
+use crate::editor::{CursorPointer, DocumentEditor};
+use crate::editor_display::{CursorDisplay, EditorDisplay};
 
 const STATUS_TIMEOUT: Duration = Duration::from_secs(4);
 const DOUBLE_CLICK_TIMEOUT: Duration = Duration::from_millis(400);
 const MOUSE_SCROLL_LINES: usize = 3;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum DocumentFormat {
+pub enum DocumentFormat {
     Ftml,
     Markdown,
 }
@@ -51,10 +55,6 @@ impl DocumentFormat {
             _ => DocumentFormat::Ftml,
         }
     }
-}
-
-fn main() -> Result<()> {
-    run()
 }
 
 fn editor_wrap_configuration(width: usize) -> (usize, usize) {
@@ -79,41 +79,7 @@ fn editor_wrap_configuration(width: usize) -> (usize, usize) {
     (wrap_width, left_padding)
 }
 
-fn run() -> Result<()> {
-    let mut args = env::args().skip(1);
-    let Some(path_arg) = args.next() else {
-        eprintln!("Usage: cargo run -- <file.ftml>");
-        return Ok(());
-    };
-    let path = PathBuf::from(path_arg);
-
-    let (document, format, initial_status) = load_document(&path)?;
-    let mut app = App::new(document, path, format, initial_status);
-
-    enable_raw_mode().context("failed to enable raw mode")?;
-    let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)
-        .context("failed to initialize terminal")?;
-    let backend = CrosstermBackend::new(stdout);
-    let mut terminal = Terminal::new(backend).context("failed to create terminal backend")?;
-    terminal.clear().ok();
-
-    let res = run_app(&mut terminal, &mut app).context("application error");
-
-    disable_raw_mode().ok();
-    execute!(
-        terminal.backend_mut(),
-        LeaveAlternateScreen,
-        DisableMouseCapture,
-        SetCursorStyle::DefaultUserShape
-    )
-    .ok();
-    terminal.show_cursor().ok();
-
-    res
-}
-
-fn load_document(path: &PathBuf) -> Result<(Document, DocumentFormat, Option<String>)> {
+pub fn load_document(path: &PathBuf) -> Result<(Document, DocumentFormat, Option<String>)> {
     let format = DocumentFormat::from_path(path);
     if path.exists() {
         let content = fs::read_to_string(path)
@@ -133,56 +99,6 @@ fn load_document(path: &PathBuf) -> Result<(Document, DocumentFormat, Option<Str
     } else {
         Ok((Document::new(), format, Some("New document".to_string())))
     }
-}
-
-fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> {
-    let tick_rate = Duration::from_millis(250);
-    let mut last_tick = Instant::now();
-    let mut needs_redraw = true;
-
-    while !app.should_quit() {
-        // Only draw if needed
-        if needs_redraw {
-            terminal
-                .draw(|frame| app.draw(frame))
-                .context("failed to draw frame")?;
-            needs_redraw = false;
-        }
-
-        let timeout = tick_rate
-            .checked_sub(last_tick.elapsed())
-            .unwrap_or_else(|| Duration::from_secs(0));
-
-        // Block waiting for events
-        if event::poll(timeout).context("event poll failed")? {
-            let evt = event::read().context("failed to read event")?;
-
-            // Skip spurious Resize events that don't change size
-            if let Event::Resize(_, _) = evt {
-                // Always redraw on resize to handle terminal size changes
-                needs_redraw = true;
-                continue;
-            }
-
-            app.handle_event(evt)?;
-
-            // Mark that we need to redraw after handling event
-            needs_redraw = true;
-        }
-
-        // Handle tick for status message updates
-        if last_tick.elapsed() >= tick_rate {
-            let had_message_before = app.has_status_message();
-            app.on_tick();
-            last_tick = Instant::now();
-            // Only redraw if status message changed (was pruned)
-            if had_message_before && !app.has_status_message() {
-                needs_redraw = true;
-            }
-        }
-    }
-
-    Ok(())
 }
 
 #[derive(Clone, Copy)]
@@ -594,7 +510,7 @@ enum DragState {
     Scrollbar(ScrollbarDrag),
 }
 
-struct App {
+pub struct App {
     display: EditorDisplay,
     file_path: PathBuf,
     document_format: DocumentFormat,
@@ -619,7 +535,7 @@ struct App {
 }
 
 impl App {
-    fn new(
+    pub fn new(
         document: Document,
         path: PathBuf,
         format: DocumentFormat,
@@ -653,11 +569,11 @@ impl App {
         }
     }
 
-    fn should_quit(&self) -> bool {
+    pub fn should_quit(&self) -> bool {
         self.should_quit
     }
 
-    fn has_status_message(&self) -> bool {
+    pub fn has_status_message(&self) -> bool {
         self.status_message.is_some()
     }
 
@@ -840,7 +756,7 @@ impl App {
         }
     }
 
-    fn draw(&mut self, frame: &mut Frame) {
+    pub fn draw(&mut self, frame: &mut Frame) {
         let area = frame.area();
         if area.height == 0 || area.width == 0 {
             return;
@@ -1682,7 +1598,7 @@ impl App {
         }
     }
 
-    fn handle_event(&mut self, event: Event) -> Result<()> {
+    pub fn handle_event(&mut self, event: Event) -> Result<()> {
         match event {
             Event::Key(KeyEvent {
                 code,
@@ -1933,7 +1849,7 @@ impl App {
         Ok(())
     }
 
-    fn on_tick(&mut self) {
+    pub fn on_tick(&mut self) {
         self.prune_status_message();
     }
 

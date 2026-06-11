@@ -72,6 +72,7 @@ Pure is designed for efficiency with comprehensive keyboard shortcuts:
 
 - **Ctrl+S** - Save document
 - **Ctrl+Q** - Quit (with save prompt)
+- **Ctrl+Z / Ctrl+Y** - Undo / redo
 - **Esc** - Open context menu
 - **F9** - Toggle reveal codes
 - **Ctrl+P** - Create new paragraph at same level
@@ -137,6 +138,8 @@ pure webpage.html
 - Shift+Enter - Newline within paragraph
 - Backspace/Delete - Remove text
 - Ctrl+W - Delete word backward
+- Ctrl+Z - Undo
+- Ctrl+Y - Redo
 
 **Formatting:**
 
@@ -225,7 +228,7 @@ Pure is under active development. Current status:
 
 **Advanced Features:**
 
-- [ ] Undo/Redo
+- [x] Undo/Redo (Ctrl+Z / Ctrl+Y)
 - [ ] Find and replace
 - [ ] Multiple documents with tabs
 - [ ] System clipboard integration
@@ -296,7 +299,6 @@ Contributions are welcome! Pure is under active development. Please see the [iss
 
 Areas where contributions would be especially valuable:
 
-- Undo/redo implementation
 - Clipboard integration
 - Find and replace functionality
 - Additional export formats
