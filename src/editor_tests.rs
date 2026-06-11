@@ -3244,3 +3244,67 @@ fn split_nested_checkbox_item_moves_children_to_new_item() {
         "Second nested child should be preserved"
     );
 }
+
+#[test]
+fn backspace_after_reveal_start_tag_removes_style_without_merging_paragraphs() {
+    let mut styled = Span::new_text("terminal-based word processor");
+    styled.style = InlineStyle::Italic;
+    let second = Paragraph::new_text().with_content(vec![
+        Span::new_text("Pure is a modern, "),
+        styled,
+        Span::new_text(" for structured documents."),
+    ]);
+    let document = Document::new().with_paragraphs(vec![text_paragraph("Intro paragraph"), second]);
+    let mut editor = DocumentEditor::new(document);
+    editor.set_reveal_codes(true);
+
+    // Place the cursor between `[Italic>` and "terminal-based…".
+    let mut pointer = pointer_to_root_span(1);
+    pointer.span_path = SpanPath::new(vec![1]);
+    assert!(editor.move_to_pointer(&pointer));
+
+    assert!(editor.backspace());
+
+    let doc = editor.document();
+    assert_eq!(doc.paragraphs.len(), 2, "paragraphs must not be merged");
+    assert_eq!(doc.paragraphs[0].content()[0].text, "Intro paragraph");
+    let spans = doc.paragraphs[1].content();
+    assert_eq!(spans.len(), 1, "removing the style should merge the spans");
+    assert_eq!(spans[0].style, InlineStyle::None);
+    assert_eq!(
+        spans[0].text,
+        "Pure is a modern, terminal-based word processor for structured documents."
+    );
+
+    // The cursor should stay where the start tag was removed.
+    let cursor = editor.cursor_pointer();
+    assert_eq!(cursor.paragraph_path, ParagraphPath::new_root(1));
+    assert_eq!(cursor.offset, 18);
+}
+
+#[test]
+fn backspace_at_styled_span_start_deletes_previous_character() {
+    let mut styled = Span::new_text("styled");
+    styled.style = InlineStyle::Bold;
+    let second = Paragraph::new_text().with_content(vec![
+        Span::new_text("Some "),
+        styled,
+        Span::new_text(" text"),
+    ]);
+    let document = Document::new().with_paragraphs(vec![text_paragraph("Intro"), second]);
+    let mut editor = DocumentEditor::new(document);
+
+    // Cursor at offset 0 of the styled span, i.e. between "Some " and "styled".
+    let mut pointer = pointer_to_root_span(1);
+    pointer.span_path = SpanPath::new(vec![1]);
+    assert!(editor.move_to_pointer(&pointer));
+
+    assert!(editor.backspace());
+
+    let doc = editor.document();
+    assert_eq!(doc.paragraphs.len(), 2, "paragraphs must not be merged");
+    let spans = doc.paragraphs[1].content();
+    assert_eq!(spans[0].text, "Some");
+    assert_eq!(spans[1].text, "styled");
+    assert_eq!(spans[1].style, InlineStyle::Bold);
+}

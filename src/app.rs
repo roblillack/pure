@@ -625,7 +625,6 @@ impl App {
             self.mark_dirty();
             self.display.set_preferred_column(None);
             self.selection_anchor = None;
-            let _ = self.display.move_to_pointer(&selection.1);
             true
         } else {
             false

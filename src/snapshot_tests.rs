@@ -158,6 +158,41 @@ fn menu_view_toggles_reveal_codes() {
 }
 
 #[test]
+fn inline_style_keeps_cursor_and_backspace_after_reveal_tag_removes_style() {
+    let document = ftml! {
+        p { "Intro paragraph." }
+        p { "Pure is a modern, terminal-based word processor." }
+    };
+    let mut app = TestApp::new(WIDTH, HEIGHT, document);
+
+    // Select "terminal-based word processor" in the second paragraph.
+    app.key(KeyCode::Down);
+    for _ in 0..18 {
+        app.key(KeyCode::Right);
+    }
+    for _ in 0..29 {
+        app.key_with(KeyCode::Right, KeyModifiers::SHIFT);
+    }
+
+    // Apply italic via the context menu; the cursor must stay at the end of
+    // the styled text instead of jumping to the start of the selection.
+    app.key(KeyCode::Esc);
+    app.key(KeyCode::Char('i'));
+    assert_svg("italic_keeps_cursor_at_selection_end", &mut app);
+
+    // Enable reveal codes, move the cursor right behind the `[Italic>` tag
+    // and press backspace: the style is removed, the paragraphs stay intact,
+    // and the cursor stays at the position of the removed tag.
+    app.key_with(KeyCode::Char('v'), KeyModifiers::ALT);
+    app.key(KeyCode::Enter);
+    for _ in 0..29 {
+        app.key(KeyCode::Left);
+    }
+    app.key(KeyCode::Backspace);
+    assert_svg("backspace_after_reveal_tag_removes_style", &mut app);
+}
+
+#[test]
 fn menu_format_opens_formatting_menu() {
     let mut app = sample_app();
     app.key(KeyCode::F(10));
