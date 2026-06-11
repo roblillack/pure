@@ -246,10 +246,7 @@ impl EditorDisplay {
 
         // Get reveal tags if in reveal codes mode
         let reveal_tags = if self.editor.reveal_codes() {
-            let (_, _, tags, _) = self
-                .editor
-                .clone_with_markers('\u{F8FF}', None, '\u{F8FE}', '\u{F8FD}');
-            tags
+            self.editor.reveal_tag_refs()
         } else {
             Vec::new()
         };
@@ -473,9 +470,14 @@ impl EditorDisplay {
         let old_end_line = para_info.end_line;
         let old_line_count = old_end_line - old_start_line + 1;
 
-        // Skip reveal tags for incremental updates to avoid expensive document clone
-        // Reveal codes will be updated on the next full render
-        let reveal_tags = Vec::new();
+        // Keep reveal tags in the incrementally updated layout; the cached
+        // layout persists, so dropping them here would hide the codes until
+        // the next full render.
+        let reveal_tags = if self.editor.reveal_codes() {
+            self.editor.reveal_tag_refs()
+        } else {
+            Vec::new()
+        };
 
         // Layout the paragraph
         let cursor_pointer = self.editor.cursor_pointer();
@@ -658,13 +660,8 @@ impl EditorDisplay {
         let cursor_pointer = self.editor.cursor_pointer();
 
         // Get reveal tags for reveal codes mode
-        // TODO: Optimize this - we currently need to call clone_with_markers just for reveal_tags
-        // In the future, extract reveal tag generation into a separate non-cloning function
         let reveal_tags = if self.editor.reveal_codes() {
-            let (_, _, tags, _) = self
-                .editor
-                .clone_with_markers('\u{F8FF}', None, '\u{F8FE}', '\u{F8FD}');
-            tags
+            self.editor.reveal_tag_refs()
         } else {
             Vec::new()
         };

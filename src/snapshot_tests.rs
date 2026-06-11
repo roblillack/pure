@@ -193,6 +193,41 @@ fn inline_style_keeps_cursor_and_backspace_after_reveal_tag_removes_style() {
 }
 
 #[test]
+fn editing_keeps_reveal_codes_visible() {
+    let document = ftml! {
+        p { "Pure is a modern, " i { "terminal-based word processor" } "." }
+    };
+    let mut app = TestApp::new(WIDTH, HEIGHT, document);
+
+    // Enable reveal codes via the View menu.
+    app.key_with(KeyCode::Char('v'), KeyModifiers::ALT);
+    app.key(KeyCode::Enter);
+    assert!(
+        app.svg().contains("[Italic&gt;"),
+        "reveal tags should be visible after enabling reveal codes"
+    );
+
+    // Delete the space after "Pure" with backspace; the reveal tags later in
+    // the line must stay visible.
+    for _ in 0..5 {
+        app.key(KeyCode::Right);
+    }
+    app.key(KeyCode::Backspace);
+    assert!(
+        app.svg().contains("[Italic&gt;"),
+        "reveal tags must stay visible after deleting a character"
+    );
+
+    // Same when typing the space back in.
+    app.key(KeyCode::Char(' '));
+    assert!(
+        app.svg().contains("[Italic&gt;"),
+        "reveal tags must stay visible after inserting a character"
+    );
+    assert_svg("editing_keeps_reveal_codes_visible", &mut app);
+}
+
+#[test]
 fn menu_format_opens_formatting_menu() {
     let mut app = sample_app();
     app.key(KeyCode::F(10));

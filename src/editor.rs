@@ -476,6 +476,22 @@ impl DocumentEditor {
         self.rebuild_segments();
     }
 
+    /// Reveal tag references for all reveal segments, in document order.
+    /// Produces the same tags as `clone_with_markers` without cloning the
+    /// document.
+    pub fn reveal_tag_refs(&self) -> Vec<RevealTagRef> {
+        self.segments
+            .iter()
+            .filter_map(|segment| match segment.kind {
+                SegmentKind::RevealStart(style) => Some((style, RevealTagKind::Start)),
+                SegmentKind::RevealEnd(style) => Some((style, RevealTagKind::End)),
+                SegmentKind::Text => None,
+            })
+            .enumerate()
+            .map(|(id, (style, kind))| RevealTagRef { id, style, kind })
+            .collect()
+    }
+
     pub fn clone_with_markers(
         &self,
         cursor_sentinel: char,
