@@ -153,6 +153,9 @@ Saves the current document.
 **Esc** or **Ctrl+Space**
 Opens the context menu, which provides quick access to formatting options and paragraph types.
 
+**F10**
+Opens the menu bar at the top of the screen. You can also open a specific menu directly with its Alt accelerator, for example **Alt+F** for the File menu.
+
 **F9**
 Toggles Reveal Codes mode, which displays the underlying formatting structure of your document.
 
@@ -1099,6 +1102,44 @@ Pure uses FTML as its primary format because FTML preserves all formatting infor
 
 ---
 
+### Menu Bar
+
+**Purpose:** Access all of Pure's commands through drop-down menus, in the style of classic DOS applications.
+
+**Keyboard Shortcut:** F10, or Alt plus the highlighted letter of a menu
+
+The menu bar stays hidden while you write. When activated, it appears at the top of the screen with these menus:
+
+- **File** - Save (Ctrl+S), Quit (Ctrl+Q)
+- **Edit** - Undo (Ctrl+Z), Redo (Ctrl+Y), Cut, Copy, Paste
+- **Insert** - Line Break (Ctrl+J), Sibling Paragraph (Ctrl+P)
+- **Format** - Formatting Menu (Esc or Ctrl+Space)
+- **View** - Reveal Codes (F9)
+
+#### To open the menu bar:
+
+Press **F10**. The menu bar appears with the File menu highlighted.
+
+Alternatively, press **Alt** plus a menu's highlighted letter (for example, **Alt+F** for File or **Alt+E** for Edit) to open that menu's drop-down directly.
+
+#### To navigate the menus:
+
+- Press **Left/Right** arrow keys to move between menus
+- Press **Down**, **Up**, or **Enter** to open the highlighted menu
+- Press **Up/Down** arrow keys to move between items in an open menu
+- Press **Enter** to execute the selected item
+- Press **Esc** or **F10** to close the menu bar without making a choice
+
+#### Additional Information
+
+Each menu item shows its keyboard shortcut on the right, making the menu bar a convenient way to discover and learn Pure's shortcuts.
+
+Items that are not currently available (such as clipboard operations, which are still under development) appear dimmed.
+
+The View menu shows a checkmark next to Reveal Codes while the mode is enabled.
+
+---
+
 ### Mouse Support
 
 **Purpose:** Use your mouse or trackpad to navigate, select, and scroll through documents.
@@ -1530,6 +1571,20 @@ There are no automatic saves or backup copies. Remember to save frequently (Ctrl
 **8** - Bullet list
 
 **9** - Checklist
+
+### Menu Bar
+
+**F10** - Open/close the menu bar
+
+**Alt+F / Alt+E / Alt+I / Alt+O / Alt+V** - Open the File, Edit, Insert, Format, or View menu
+
+**Left** / **Right** - Move between menus
+
+**Up** / **Down** - Move between menu items
+
+**Enter** - Execute selected menu item
+
+**Esc** - Close the menu bar
 
 ### Special Features
 

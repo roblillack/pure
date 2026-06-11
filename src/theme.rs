@@ -162,6 +162,38 @@ impl Theme {
             .bg(self.scrollbar_track_bg)
     }
 
+    /// Get the style for the menu bar row
+    pub fn menu_bar_style(&self) -> Style {
+        Style::default()
+            .fg(self.status_bar_fg)
+            .bg(self.status_bar_bg)
+    }
+
+    /// Get the style for accelerator letters in the menu bar
+    pub fn menu_bar_accel_style(&self) -> Style {
+        use ratatui::style::Modifier;
+        Style::default()
+            .fg(self.filename_color)
+            .bg(self.status_bar_bg)
+            .add_modifier(Modifier::BOLD)
+    }
+
+    /// Get the style for the selected menu title in the menu bar
+    pub fn menu_bar_selected_style(&self) -> Style {
+        Style::default()
+            .fg(self.menu_selected_fg)
+            .bg(self.menu_selected_bg)
+    }
+
+    /// Get the style for the accelerator letter of the selected menu title
+    pub fn menu_bar_selected_accel_style(&self) -> Style {
+        use ratatui::style::Modifier;
+        Style::default()
+            .fg(self.filename_color)
+            .bg(self.menu_selected_bg)
+            .add_modifier(Modifier::BOLD)
+    }
+
     /// Get the style for the menu/popup
     pub fn menu_style(&self) -> Style {
         Style::default().fg(self.menu_fg).bg(self.menu_bg)

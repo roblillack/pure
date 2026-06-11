@@ -18,6 +18,6 @@
 <rect x="40" y="340" width="100" height="20" fill="#2472c8"/>
 <text x="40" y="355" fill="#f5f543" textLength="100" lengthAdjust="spacingAndGlyphs" xml:space="preserve">test.ftml*</text>
 <rect x="140" y="340" width="580" height="20" fill="#2472c8"/>
-<text x="140" y="355" fill="#ffffff" textLength="580" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> Text, 15 lines, 13 words                  ^S:Save ^Q:Quit</text>
+<text x="140" y="355" fill="#ffffff" textLength="580" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> Text, 15 lines, 13 words         F10:Menu ^S:Save ^Q:Quit</text>
 <rect x="20" y="140" width="10" height="20" fill="#ffffff" fill-opacity="0.4"/>
 </svg>

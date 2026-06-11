@@ -106,3 +106,62 @@ fn click_positions_cursor() {
     app.click(12, 6);
     assert_svg("click_positions_cursor", &mut app);
 }
+
+#[test]
+fn f10_activates_menu_bar() {
+    let mut app = sample_app();
+    app.key(KeyCode::F(10));
+    assert_svg("menu_bar_activated", &mut app);
+}
+
+#[test]
+fn alt_f_opens_file_menu() {
+    let mut app = sample_app();
+    app.key_with(KeyCode::Char('f'), KeyModifiers::ALT);
+    assert_svg("menu_bar_file_menu", &mut app);
+}
+
+#[test]
+fn cursor_keys_walk_through_menus() {
+    let mut app = sample_app();
+    app.key_with(KeyCode::Char('f'), KeyModifiers::ALT);
+    app.key(KeyCode::Right);
+    app.key(KeyCode::Down);
+    assert_svg("menu_bar_edit_menu_second_item", &mut app);
+}
+
+#[test]
+fn esc_closes_menu_bar() {
+    let mut app = sample_app();
+    app.key(KeyCode::F(10));
+    app.key(KeyCode::Esc);
+    assert_svg("menu_bar_closed", &mut app);
+}
+
+#[test]
+fn menu_undo_reverts_typing() {
+    let mut app = sample_app();
+    app.type_text("Summer ");
+    app.key_with(KeyCode::Char('e'), KeyModifiers::ALT);
+    app.key(KeyCode::Enter);
+    assert_svg("menu_undo_reverts_typing", &mut app);
+}
+
+#[test]
+fn menu_view_toggles_reveal_codes() {
+    let mut app = sample_app();
+    app.key_with(KeyCode::Char('v'), KeyModifiers::ALT);
+    app.key(KeyCode::Enter);
+    assert_svg("menu_reveal_codes_enabled", &mut app);
+    app.key_with(KeyCode::Char('v'), KeyModifiers::ALT);
+    assert_svg("menu_reveal_codes_checkmark", &mut app);
+}
+
+#[test]
+fn menu_format_opens_formatting_menu() {
+    let mut app = sample_app();
+    app.key(KeyCode::F(10));
+    app.key_with(KeyCode::Char('o'), KeyModifiers::NONE);
+    app.key(KeyCode::Enter);
+    assert_svg("menu_format_opens_formatting_menu", &mut app);
+}
