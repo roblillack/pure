@@ -532,6 +532,9 @@ pub struct App {
     last_scrollbar_column: u16,
     /// Flag to track when we need to rebuild visual positions (after edits, mouse clicks, etc.)
     needs_position_rebuild: bool,
+    /// Whether we are attached to a real terminal. The test harness sets this
+    /// to false so drawing never writes escape sequences to stdout.
+    interactive: bool,
 }
 
 impl App {
@@ -566,7 +569,12 @@ impl App {
             last_total_lines: 0,
             last_scrollbar_column: 0,
             needs_position_rebuild: true, // Rebuild on first render
+            interactive: true,
         }
+    }
+
+    pub fn set_interactive(&mut self, interactive: bool) {
+        self.interactive = interactive;
     }
 
     pub fn should_quit(&self) -> bool {
@@ -830,12 +838,14 @@ impl App {
             frame.set_cursor_position(Position::new(cursor_x, cursor_y));
 
             // Change cursor style based on selection state
-            let cursor_style = if self.selection_anchor.is_some() {
-                SetCursorStyle::BlinkingUnderScore
-            } else {
-                SetCursorStyle::DefaultUserShape
-            };
-            execute!(io::stdout(), cursor_style).ok();
+            if self.interactive {
+                let cursor_style = if self.selection_anchor.is_some() {
+                    SetCursorStyle::BlinkingUnderScore
+                } else {
+                    SetCursorStyle::DefaultUserShape
+                };
+                execute!(io::stdout(), cursor_style).ok();
+            }
         }
 
         let status_line =

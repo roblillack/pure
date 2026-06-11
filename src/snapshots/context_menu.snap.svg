@@ -1,0 +1,128 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="360" viewBox="0 0 720 360" font-family="'DejaVu Sans Mono', Menlo, Consolas, monospace" font-size="16px">
+<rect width="100%" height="100%" fill="#101010"/>
+<rect x="240" y="0" width="230" height="20" fill="#000000"/>
+<text x="240" y="15" fill="#e5e5e5" textLength="230" lengthAdjust="spacingAndGlyphs" xml:space="preserve">┌Context Menu─────────┐</text>
+<rect x="240" y="20" width="10" height="20" fill="#000000"/>
+<text x="240" y="35" fill="#e5e5e5" textLength="10" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<rect x="250" y="20" width="140" height="20" fill="#000000"/>
+<text x="250" y="35" fill="#ffffff" textLength="140" lengthAdjust="spacingAndGlyphs" xml:space="preserve" font-weight="bold">Paragraph type</text>
+<rect x="390" y="20" width="70" height="20" fill="#000000"/>
+<rect x="460" y="20" width="10" height="20" fill="#000000"/>
+<text x="460" y="35" fill="#e5e5e5" textLength="10" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<rect x="240" y="40" width="10" height="20" fill="#000000"/>
+<text x="240" y="55" fill="#e5e5e5" textLength="10" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<rect x="250" y="40" width="210" height="20" fill="#3b8eea"/>
+<text x="250" y="55" fill="#ffffff" textLength="210" lengthAdjust="spacingAndGlyphs" xml:space="preserve">Text              0  </text>
+<rect x="460" y="40" width="10" height="20" fill="#000000"/>
+<text x="460" y="55" fill="#e5e5e5" textLength="10" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<rect x="240" y="60" width="10" height="20" fill="#000000"/>
+<text x="240" y="75" fill="#e5e5e5" textLength="10" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<rect x="250" y="60" width="210" height="20" fill="#000000"/>
+<text x="250" y="75" fill="#ffffff" textLength="210" lengthAdjust="spacingAndGlyphs" xml:space="preserve">Heading 1         1  </text>
+<rect x="460" y="60" width="10" height="20" fill="#000000"/>
+<text x="460" y="75" fill="#e5e5e5" textLength="10" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<rect x="240" y="80" width="10" height="20" fill="#000000"/>
+<text x="240" y="95" fill="#e5e5e5" textLength="10" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<rect x="250" y="80" width="210" height="20" fill="#000000"/>
+<text x="250" y="95" fill="#ffffff" textLength="210" lengthAdjust="spacingAndGlyphs" xml:space="preserve">Heading 2         2  </text>
+<rect x="460" y="80" width="10" height="20" fill="#000000"/>
+<text x="460" y="95" fill="#e5e5e5" textLength="10" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<rect x="240" y="100" width="10" height="20" fill="#000000"/>
+<text x="240" y="115" fill="#e5e5e5" textLength="10" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<rect x="250" y="100" width="210" height="20" fill="#000000"/>
+<text x="250" y="115" fill="#ffffff" textLength="210" lengthAdjust="spacingAndGlyphs" xml:space="preserve">Heading 3         3  </text>
+<rect x="460" y="100" width="10" height="20" fill="#000000"/>
+<text x="460" y="115" fill="#e5e5e5" textLength="10" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<rect x="240" y="120" width="10" height="20" fill="#000000"/>
+<text x="240" y="135" fill="#e5e5e5" textLength="10" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<rect x="250" y="120" width="210" height="20" fill="#000000"/>
+<text x="250" y="135" fill="#ffffff" textLength="210" lengthAdjust="spacingAndGlyphs" xml:space="preserve">Quote             5  </text>
+<rect x="460" y="120" width="10" height="20" fill="#000000"/>
+<text x="460" y="135" fill="#e5e5e5" textLength="10" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="0" y="155" fill="#d8d8d8" textLength="110" lengthAdjust="spacingAndGlyphs" xml:space="preserve">  Pack the </text>
+<text x="110" y="155" fill="#d8d8d8" textLength="100" lengthAdjust="spacingAndGlyphs" xml:space="preserve" font-weight="bold">essentials</text>
+<text x="210" y="155" fill="#d8d8d8" textLength="30" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> be</text>
+<rect x="240" y="140" width="10" height="20" fill="#000000"/>
+<text x="240" y="155" fill="#e5e5e5" textLength="10" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<rect x="250" y="140" width="210" height="20" fill="#000000"/>
+<text x="250" y="155" fill="#ffffff" textLength="210" lengthAdjust="spacingAndGlyphs" xml:space="preserve">Code              6  </text>
+<rect x="460" y="140" width="10" height="20" fill="#000000"/>
+<text x="460" y="155" fill="#e5e5e5" textLength="10" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<rect x="240" y="160" width="10" height="20" fill="#000000"/>
+<text x="240" y="175" fill="#e5e5e5" textLength="10" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<rect x="250" y="160" width="210" height="20" fill="#000000"/>
+<text x="250" y="175" fill="#ffffff" textLength="210" lengthAdjust="spacingAndGlyphs" xml:space="preserve">Numbered List     7  </text>
+<rect x="460" y="160" width="10" height="20" fill="#000000"/>
+<text x="460" y="175" fill="#e5e5e5" textLength="10" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="20" y="195" fill="#e5e5e5" textLength="20" lengthAdjust="spacingAndGlyphs" xml:space="preserve" opacity="0.6">• </text>
+<text x="40" y="195" fill="#d8d8d8" textLength="200" lengthAdjust="spacingAndGlyphs" xml:space="preserve">Passport            </text>
+<rect x="240" y="180" width="10" height="20" fill="#000000"/>
+<text x="240" y="195" fill="#e5e5e5" textLength="10" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<rect x="250" y="180" width="210" height="20" fill="#000000"/>
+<text x="250" y="195" fill="#ffffff" textLength="210" lengthAdjust="spacingAndGlyphs" xml:space="preserve">Bullet List       8  </text>
+<rect x="460" y="180" width="10" height="20" fill="#000000"/>
+<text x="460" y="195" fill="#e5e5e5" textLength="10" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<rect x="240" y="200" width="10" height="20" fill="#000000"/>
+<text x="240" y="215" fill="#e5e5e5" textLength="10" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<rect x="250" y="200" width="210" height="20" fill="#000000"/>
+<text x="250" y="215" fill="#ffffff" textLength="210" lengthAdjust="spacingAndGlyphs" xml:space="preserve">Checklist         9  </text>
+<rect x="460" y="200" width="10" height="20" fill="#000000"/>
+<text x="460" y="215" fill="#e5e5e5" textLength="10" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="20" y="235" fill="#e5e5e5" textLength="20" lengthAdjust="spacingAndGlyphs" xml:space="preserve" opacity="0.6">• </text>
+<text x="40" y="235" fill="#d8d8d8" textLength="200" lengthAdjust="spacingAndGlyphs" xml:space="preserve">Tickets             </text>
+<rect x="240" y="220" width="10" height="20" fill="#000000"/>
+<text x="240" y="235" fill="#e5e5e5" textLength="10" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<rect x="250" y="220" width="190" height="20" fill="#000000"/>
+<text x="250" y="235" fill="#666666" textLength="190" lengthAdjust="spacingAndGlyphs" xml:space="preserve">───────────────────</text>
+<rect x="440" y="220" width="20" height="20" fill="#000000"/>
+<rect x="460" y="220" width="10" height="20" fill="#000000"/>
+<text x="460" y="235" fill="#e5e5e5" textLength="10" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<rect x="240" y="240" width="10" height="20" fill="#000000"/>
+<text x="240" y="255" fill="#e5e5e5" textLength="10" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<rect x="250" y="240" width="120" height="20" fill="#000000"/>
+<text x="250" y="255" fill="#ffffff" textLength="120" lengthAdjust="spacingAndGlyphs" xml:space="preserve" font-weight="bold">Inline style</text>
+<rect x="370" y="240" width="90" height="20" fill="#000000"/>
+<rect x="460" y="240" width="10" height="20" fill="#000000"/>
+<text x="460" y="255" fill="#e5e5e5" textLength="10" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="20" y="275" fill="#e5e5e5" textLength="20" lengthAdjust="spacingAndGlyphs" xml:space="preserve" opacity="0.6">| </text>
+<text x="40" y="275" fill="#d8d8d8" textLength="200" lengthAdjust="spacingAndGlyphs" xml:space="preserve">Travel light.       </text>
+<rect x="240" y="260" width="10" height="20" fill="#000000"/>
+<text x="240" y="275" fill="#e5e5e5" textLength="10" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<rect x="250" y="260" width="190" height="20" fill="#000000"/>
+<text x="250" y="275" fill="#666666" textLength="190" lengthAdjust="spacingAndGlyphs" xml:space="preserve">Bold              b</text>
+<rect x="440" y="260" width="20" height="20" fill="#000000"/>
+<rect x="460" y="260" width="10" height="20" fill="#000000"/>
+<text x="460" y="275" fill="#e5e5e5" textLength="10" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<rect x="240" y="280" width="10" height="20" fill="#000000"/>
+<text x="240" y="295" fill="#e5e5e5" textLength="10" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<rect x="250" y="280" width="190" height="20" fill="#000000"/>
+<text x="250" y="295" fill="#666666" textLength="190" lengthAdjust="spacingAndGlyphs" xml:space="preserve">Italic            i</text>
+<rect x="440" y="280" width="20" height="20" fill="#000000"/>
+<rect x="460" y="280" width="10" height="20" fill="#000000"/>
+<text x="460" y="295" fill="#e5e5e5" textLength="10" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<rect x="240" y="300" width="10" height="20" fill="#000000"/>
+<text x="240" y="315" fill="#e5e5e5" textLength="10" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<rect x="250" y="300" width="190" height="20" fill="#000000"/>
+<text x="250" y="315" fill="#666666" textLength="190" lengthAdjust="spacingAndGlyphs" xml:space="preserve">Underline         u</text>
+<rect x="440" y="300" width="20" height="20" fill="#000000"/>
+<rect x="460" y="300" width="10" height="20" fill="#000000"/>
+<text x="460" y="315" fill="#e5e5e5" textLength="10" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<rect x="240" y="320" width="10" height="20" fill="#000000"/>
+<text x="240" y="335" fill="#e5e5e5" textLength="10" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<rect x="250" y="320" width="190" height="20" fill="#000000"/>
+<text x="250" y="335" fill="#666666" textLength="190" lengthAdjust="spacingAndGlyphs" xml:space="preserve">Code              C</text>
+<rect x="440" y="320" width="20" height="20" fill="#000000"/>
+<rect x="460" y="320" width="10" height="20" fill="#000000"/>
+<text x="460" y="335" fill="#e5e5e5" textLength="10" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<rect x="0" y="340" width="40" height="20" fill="#2472c8"/>
+<text x="0" y="355" fill="#ffffff" textLength="40" lengthAdjust="spacingAndGlyphs" xml:space="preserve">4:1 </text>
+<rect x="40" y="340" width="90" height="20" fill="#2472c8"/>
+<text x="40" y="355" fill="#f5f543" textLength="90" lengthAdjust="spacingAndGlyphs" xml:space="preserve">test.ftml</text>
+<rect x="130" y="340" width="110" height="20" fill="#2472c8"/>
+<text x="130" y="355" fill="#ffffff" textLength="110" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> Header Lvl</text>
+<rect x="240" y="340" width="230" height="20" fill="#000000"/>
+<text x="240" y="355" fill="#e5e5e5" textLength="230" lengthAdjust="spacingAndGlyphs" xml:space="preserve">└─────────────────────┘</text>
+<rect x="470" y="340" width="250" height="20" fill="#2472c8"/>
+<text x="470" y="355" fill="#ffffff" textLength="250" lengthAdjust="spacingAndGlyphs" xml:space="preserve">          ^S:Save ^Q:Quit</text>
+<rect x="290" y="60" width="10" height="20" fill="#ffffff" fill-opacity="0.4"/>
+</svg>
