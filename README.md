@@ -57,6 +57,7 @@ Pure provides an intuitive editing experience:
 - **Word Wrapping**: Automatic text flow without manual line breaks
 - **Mouse Support**: Click to position cursor, drag to select, double-click to select words, triple-click for paragraphs
 - **Reveal Codes**: Press F9 to see the underlying formatting structure (inspired by WordPerfect)
+- **Menu Bar**: Press F10 (or an Alt accelerator like Alt+F) for a TurboVision-style menu bar
 - **Context Menu**: Press Esc to access all formatting options
 - **Real-time Rendering**: See your formatted document as you type
 
@@ -74,6 +75,7 @@ Pure is designed for efficiency with comprehensive keyboard shortcuts:
 - **Ctrl+Q** - Quit (with save prompt)
 - **Ctrl+Z / Ctrl+Y** - Undo / redo
 - **Esc** - Open context menu
+- **F10** - Open the menu bar (Alt+F, Alt+E, ... open a menu directly)
 - **F9** - Toggle reveal codes
 - **Ctrl+P** - Create new paragraph at same level
 - **Ctrl+J** - Insert line break within paragraph (useful for addresses, poetry, etc.)
@@ -154,6 +156,7 @@ pure webpage.html
 
 **Special Features:**
 
+- F10 - Menu bar (Alt+F/E/I/O/V open a menu directly)
 - F9 - Reveal codes mode
 
 ## What is FTML?

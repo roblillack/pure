@@ -1,5 +1,28 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="720" height="360" viewBox="0 0 720 360" font-family="'DejaVu Sans Mono', Menlo, Consolas, monospace" font-size="16px">
 <rect width="100%" height="100%" fill="#101010"/>
+<rect x="0" y="0" width="10" height="20" fill="#2472c8"/>
+<rect x="10" y="0" width="10" height="20" fill="#3b8eea"/>
+<rect x="20" y="0" width="10" height="20" fill="#3b8eea"/>
+<text x="20" y="15" fill="#f5f543" textLength="10" lengthAdjust="spacingAndGlyphs" xml:space="preserve" font-weight="bold">F</text>
+<rect x="30" y="0" width="40" height="20" fill="#3b8eea"/>
+<text x="30" y="15" fill="#ffffff" textLength="40" lengthAdjust="spacingAndGlyphs" xml:space="preserve">ile </text>
+<rect x="70" y="0" width="10" height="20" fill="#2472c8"/>
+<rect x="80" y="0" width="10" height="20" fill="#2472c8"/>
+<text x="80" y="15" fill="#f5f543" textLength="10" lengthAdjust="spacingAndGlyphs" xml:space="preserve" font-weight="bold">E</text>
+<rect x="90" y="0" width="50" height="20" fill="#2472c8"/>
+<text x="90" y="15" fill="#ffffff" textLength="50" lengthAdjust="spacingAndGlyphs" xml:space="preserve">dit  </text>
+<rect x="140" y="0" width="10" height="20" fill="#2472c8"/>
+<text x="140" y="15" fill="#f5f543" textLength="10" lengthAdjust="spacingAndGlyphs" xml:space="preserve" font-weight="bold">I</text>
+<rect x="150" y="0" width="80" height="20" fill="#2472c8"/>
+<text x="150" y="15" fill="#ffffff" textLength="80" lengthAdjust="spacingAndGlyphs" xml:space="preserve">nsert  F</text>
+<rect x="230" y="0" width="10" height="20" fill="#2472c8"/>
+<text x="230" y="15" fill="#f5f543" textLength="10" lengthAdjust="spacingAndGlyphs" xml:space="preserve" font-weight="bold">o</text>
+<rect x="240" y="0" width="60" height="20" fill="#2472c8"/>
+<text x="240" y="15" fill="#ffffff" textLength="60" lengthAdjust="spacingAndGlyphs" xml:space="preserve">rmat  </text>
+<rect x="300" y="0" width="10" height="20" fill="#2472c8"/>
+<text x="300" y="15" fill="#f5f543" textLength="10" lengthAdjust="spacingAndGlyphs" xml:space="preserve" font-weight="bold">V</text>
+<rect x="310" y="0" width="410" height="20" fill="#2472c8"/>
+<text x="310" y="15" fill="#ffffff" textLength="410" lengthAdjust="spacingAndGlyphs" xml:space="preserve">iew                                      </text>
 <text x="290" y="75" fill="#d8d8d8" textLength="120" lengthAdjust="spacingAndGlyphs" xml:space="preserve" font-weight="bold">Packing List</text>
 <text x="0" y="155" fill="#d8d8d8" textLength="110" lengthAdjust="spacingAndGlyphs" xml:space="preserve">  Pack the </text>
 <text x="110" y="155" fill="#d8d8d8" textLength="100" lengthAdjust="spacingAndGlyphs" xml:space="preserve" font-weight="bold">essentials</text>

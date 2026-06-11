@@ -31,6 +31,9 @@ use tdoc::{Document, InlineStyle, ParagraphType, markdown, parse, writer::Writer
 
 use crate::editor::{CursorPointer, DocumentEditor};
 use crate::editor_display::{CursorDisplay, EditorDisplay};
+use crate::menu_bar::{
+    AppAction, MENU_BAR, MenuBarEntry, MenuBarState, menu_title_offset, menu_with_accel,
+};
 
 const STATUS_TIMEOUT: Duration = Duration::from_secs(4);
 const DOUBLE_CLICK_TIMEOUT: Duration = Duration::from_millis(400);
@@ -520,6 +523,7 @@ pub struct App {
     status_message: Option<(String, Instant)>,
     selection_anchor: Option<CursorPointer>,
     context_menu: Option<ContextMenuState>,
+    menu_bar: Option<MenuBarState>,
     last_click_instant: Option<Instant>,
     last_click_position: Option<(u16, u16)>,
     last_click_button: Option<MouseButton>,
@@ -558,6 +562,7 @@ impl App {
             status_message: initial_status.map(|msg| (msg, Instant::now())),
             selection_anchor: None,
             context_menu: None,
+            menu_bar: None,
             last_click_instant: None,
             last_click_position: None,
             last_click_button: None,
@@ -858,6 +863,167 @@ impl App {
         if self.context_menu.is_some() {
             self.render_context_menu(frame, area);
         }
+
+        if self.menu_bar.is_some() {
+            self.render_menu_bar(frame, area);
+        }
+    }
+
+    fn render_menu_bar(&self, frame: &mut Frame, area: Rect) {
+        let Some(state) = &self.menu_bar else {
+            return;
+        };
+        if area.width == 0 || area.height == 0 {
+            return;
+        }
+
+        let theme = self.display.theme();
+        let bar_style = theme.menu_bar_style();
+        let bar_area = Rect::new(area.x, area.y, area.width, 1);
+
+        let mut spans = vec![Span::styled(" ", bar_style)];
+        for (index, menu) in MENU_BAR.iter().enumerate() {
+            let selected = index == state.selected_menu();
+            let (text_style, accel_style) = if selected {
+                (
+                    theme.menu_bar_selected_style(),
+                    theme.menu_bar_selected_accel_style(),
+                )
+            } else {
+                (bar_style, theme.menu_bar_accel_style())
+            };
+
+            let accel_start = menu
+                .title
+                .char_indices()
+                .nth(menu.accel_index)
+                .map(|(byte, ch)| (byte, ch.len_utf8()))
+                .unwrap_or((0, 0));
+            let before = &menu.title[..accel_start.0];
+            let accel = &menu.title[accel_start.0..accel_start.0 + accel_start.1];
+            let after = &menu.title[accel_start.0 + accel_start.1..];
+
+            spans.push(Span::styled(" ", text_style));
+            spans.push(Span::styled(before, text_style));
+            spans.push(Span::styled(accel, accel_style));
+            spans.push(Span::styled(after, text_style));
+            spans.push(Span::styled(" ", text_style));
+        }
+
+        frame.render_widget(Clear, bar_area);
+        frame.render_widget(Paragraph::new(Line::from(spans)).style(bar_style), bar_area);
+
+        if let Some(selected_item) = state.dropdown_item() {
+            self.render_menu_dropdown(frame, area, state.selected_menu(), selected_item);
+        }
+    }
+
+    fn render_menu_dropdown(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        menu_index: usize,
+        selected_item: usize,
+    ) {
+        if area.width < 5 || area.height < 4 {
+            return;
+        }
+
+        let menu = &MENU_BAR[menu_index];
+        let theme = self.display.theme();
+
+        // Resolve labels up front: checked toggles get a checkmark prefix.
+        let rows: Vec<Option<(String, Option<&'static str>, bool)>> = menu
+            .entries
+            .iter()
+            .map(|entry| match entry {
+                MenuBarEntry::Separator => None,
+                MenuBarEntry::Item(item) => {
+                    let checked = item.action == Some(AppAction::ToggleRevealCodes)
+                        && self.display.reveal_codes();
+                    let label = if checked {
+                        format!("✓ {}", item.label)
+                    } else {
+                        item.label.to_string()
+                    };
+                    Some((label, item.shortcut, item.action.is_some()))
+                }
+            })
+            .collect();
+
+        let max_label_width = rows
+            .iter()
+            .flatten()
+            .map(|(label, _, _)| label.chars().count())
+            .max()
+            .unwrap_or(0);
+        let max_shortcut_width = rows
+            .iter()
+            .flatten()
+            .filter_map(|(_, shortcut, _)| shortcut.map(|s| s.chars().count()))
+            .max()
+            .unwrap_or(0);
+        let gap_width = if max_shortcut_width > 0 { 2 } else { 0 };
+        let content_width = max_label_width + gap_width + max_shortcut_width;
+
+        let width = ((content_width + 4) as u16).min(area.width);
+        let height = (menu.entries.len() as u16 + 2).min(area.height.saturating_sub(1));
+        let mut x = area.x + menu_title_offset(menu_index) as u16;
+        if x + width > area.right() {
+            x = area.right().saturating_sub(width);
+        }
+        let popup_area = Rect::new(x, area.y + 1, width, height);
+
+        frame.render_widget(Clear, popup_area);
+
+        let popup_style = theme.menu_style();
+        let separator_width = popup_area.width.saturating_sub(2) as usize;
+
+        let mut items = Vec::new();
+        for row in &rows {
+            match row {
+                None => {
+                    let line = "─".repeat(separator_width);
+                    items.push(ListItem::new(Line::from(Span::styled(
+                        line,
+                        Style::default().fg(Color::DarkGray),
+                    ))));
+                }
+                Some((label, shortcut, enabled)) => {
+                    let content = format!(
+                        " {label:<max_label_width$}{gap}{shortcut:>max_shortcut_width$} ",
+                        gap = " ".repeat(gap_width),
+                        shortcut = shortcut.unwrap_or(""),
+                    );
+                    let style = if *enabled {
+                        Style::default()
+                    } else {
+                        theme.menu_disabled_style()
+                    };
+                    items.push(ListItem::new(Line::from(Span::styled(content, style))));
+                }
+            }
+        }
+
+        let highlight_style = match rows.get(selected_item) {
+            Some(Some((_, _, false))) => theme.menu_selected_disabled_style(),
+            _ => theme.menu_selected_style(),
+        };
+
+        let mut list_state = ListState::default();
+        list_state.select(Some(selected_item));
+
+        let list = List::new(items)
+            .highlight_style(highlight_style)
+            .style(popup_style)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .style(popup_style)
+                    .border_style(Style::default().fg(Color::Gray)),
+            );
+
+        frame.render_stateful_widget(list, popup_area, &mut list_state);
     }
 
     fn draw_scrollbar(&self, frame: &mut Frame, area: Rect) {
@@ -1155,6 +1321,117 @@ impl App {
         }
     }
 
+    fn toggle_reveal_codes(&mut self) {
+        let snapshot = self.capture_reveal_toggle_snapshot();
+        let enabled = !self.display.reveal_codes();
+        self.display.set_reveal_codes(enabled);
+        self.restore_view_after_reveal_toggle(snapshot);
+        self.display.set_preferred_column(None);
+        let message = if enabled {
+            "Reveal codes enabled"
+        } else {
+            "Reveal codes disabled"
+        };
+        self.status_message = Some((message.to_string(), Instant::now()));
+    }
+
+    fn close_menu_bar(&mut self) {
+        self.menu_bar = None;
+    }
+
+    /// Handle a key press for the menu bar. Returns `true` when the key was
+    /// consumed: while the bar is active it captures all keyboard input, like
+    /// the context menu does.
+    fn handle_menu_bar_key(&mut self, code: KeyCode, modifiers: KeyModifiers) -> Result<bool> {
+        let Some(menu) = self.menu_bar.as_mut() else {
+            if self.context_menu.is_some() {
+                return Ok(false);
+            }
+            // Activation from normal editing
+            match code {
+                KeyCode::F(10) => {
+                    self.menu_bar = Some(MenuBarState::new());
+                    return Ok(true);
+                }
+                KeyCode::Char(ch) if modifiers.contains(KeyModifiers::ALT) => {
+                    if let Some(index) = menu_with_accel(ch) {
+                        self.menu_bar = Some(MenuBarState::open_at(index));
+                        return Ok(true);
+                    }
+                    return Ok(false);
+                }
+                _ => return Ok(false),
+            }
+        };
+
+        match code {
+            KeyCode::Esc | KeyCode::F(10) => {
+                self.close_menu_bar();
+            }
+            KeyCode::Left => {
+                menu.move_menu(-1);
+            }
+            KeyCode::Right => {
+                menu.move_menu(1);
+            }
+            KeyCode::Up => {
+                if menu.dropdown_item().is_some() {
+                    menu.move_item(-1);
+                } else {
+                    menu.open_dropdown();
+                }
+            }
+            KeyCode::Down => {
+                if menu.dropdown_item().is_some() {
+                    menu.move_item(1);
+                } else {
+                    menu.open_dropdown();
+                }
+            }
+            KeyCode::Enter => {
+                if menu.dropdown_item().is_none() {
+                    menu.open_dropdown();
+                } else if let Some(action) = menu.selected_action() {
+                    self.close_menu_bar();
+                    self.execute_app_action(action)?;
+                }
+            }
+            KeyCode::Char(ch) => {
+                if let Some(index) = menu_with_accel(ch) {
+                    menu.select_menu(index);
+                }
+            }
+            _ => {}
+        }
+        Ok(true)
+    }
+
+    fn execute_app_action(&mut self, action: AppAction) -> Result<()> {
+        let previous_cursor = self.display.cursor_pointer();
+        match action {
+            AppAction::Save => self.save()?,
+            AppAction::Quit => self.should_quit = true,
+            AppAction::Undo => self.undo(),
+            AppAction::Redo => self.redo(),
+            AppAction::InsertLineBreak => {
+                self.insert_char_with_selection('\n');
+            }
+            AppAction::InsertSiblingParagraph => {
+                self.prepare_selection(false);
+                if self.display.insert_paragraph_break_as_sibling() {
+                    self.mark_dirty();
+                    self.display.set_preferred_column(None);
+                }
+            }
+            AppAction::FormattingMenu => self.open_context_menu(),
+            AppAction::ToggleRevealCodes => self.toggle_reveal_codes(),
+        }
+        if self.display.cursor_pointer() != previous_cursor {
+            self.display.set_cursor_following(true);
+        }
+        Ok(())
+    }
+
     fn status_line(&mut self, content_lines: usize, terminal_width: usize) -> Line<'static> {
         self.prune_status_message();
 
@@ -1174,7 +1451,7 @@ impl App {
         let word_count = self.count_words();
 
         // Shortcuts ordered from least to most important (reversed order for display)
-        let all_shortcuts = ["^S:Save", "^Q:Quit"];
+        let all_shortcuts = ["F10:Menu", "^S:Save", "^Q:Quit"];
 
         // Build the left part of the status line
         let mut spans = Vec::new();
@@ -1482,6 +1759,13 @@ impl App {
     }
 
     fn handle_mouse_event(&mut self, event: MouseEvent) {
+        if self.menu_bar.is_some() {
+            if matches!(event.kind, MouseEventKind::Down(MouseButton::Left)) {
+                self.close_menu_bar();
+            }
+            return;
+        }
+
         if self.context_menu.is_some() {
             if matches!(event.kind, MouseEventKind::Down(MouseButton::Left)) {
                 self.close_context_menu();
@@ -1616,6 +1900,10 @@ impl App {
                 kind: KeyEventKind::Press,
                 ..
             }) => {
+                if self.handle_menu_bar_key(code, modifiers)? {
+                    return Ok(());
+                }
+
                 if self.handle_context_menu_key(code, modifiers) {
                     return Ok(());
                 }
@@ -1643,17 +1931,7 @@ impl App {
                         self.save()?;
                     }
                     (KeyCode::F(9), _) => {
-                        let snapshot = self.capture_reveal_toggle_snapshot();
-                        let enabled = !self.display.reveal_codes();
-                        self.display.set_reveal_codes(enabled);
-                        self.restore_view_after_reveal_toggle(snapshot);
-                        self.display.set_preferred_column(None);
-                        let message = if enabled {
-                            "Reveal codes enabled"
-                        } else {
-                            "Reveal codes disabled"
-                        };
-                        self.status_message = Some((message.to_string(), Instant::now()));
+                        self.toggle_reveal_codes();
                     }
                     (KeyCode::Char('c'), m) if m.contains(KeyModifiers::CONTROL) => {
                         self.should_quit = true;
