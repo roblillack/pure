@@ -130,3 +130,32 @@ fn apply_inline_style_in_checklist_item() {
     assert_eq!(item.content[1].text, " tea");
     assert_eq!(item.content[1].style, InlineStyle::None);
 }
+
+#[test]
+fn apply_inline_style_keeps_cursor_position() {
+    let document = Document::new().with_paragraphs(vec![text_paragraph(
+        "Pure is a modern, terminal-based word processor for your terminal",
+    )]);
+    let mut editor = DocumentEditor::new(document);
+
+    // Select "terminal-based word processor" (chars 18..47) with the cursor
+    // sitting at the selection end, like after shift-selecting forward.
+    let mut start = pointer_to_root_span(0);
+    start.offset = 18;
+    let mut end = pointer_to_root_span(0);
+    end.offset = 47;
+    assert!(editor.move_to_pointer(&end));
+
+    assert!(editor.apply_inline_style_to_selection(&(start, end), InlineStyle::Italic));
+
+    let cursor = editor.cursor_pointer();
+    assert_eq!(
+        cursor.span_path.indices(),
+        &[1],
+        "cursor should stay on the newly styled span"
+    );
+    assert_eq!(
+        cursor.offset, 29,
+        "cursor should stay at the end of the styled text"
+    );
+}

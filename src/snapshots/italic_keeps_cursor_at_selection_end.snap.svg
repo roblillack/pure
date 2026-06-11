@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="360" viewBox="0 0 720 360" font-family="'DejaVu Sans Mono', Menlo, Consolas, monospace" font-size="16px">
+<rect width="100%" height="100%" fill="#101010"/>
+<text x="0" y="15" fill="#d8d8d8" textLength="720" lengthAdjust="spacingAndGlyphs" xml:space="preserve">  Intro paragraph.                                                      </text>
+<text x="0" y="55" fill="#d8d8d8" textLength="200" lengthAdjust="spacingAndGlyphs" xml:space="preserve">  Pure is a modern, </text>
+<text x="200" y="55" fill="#d8d8d8" textLength="290" lengthAdjust="spacingAndGlyphs" xml:space="preserve" font-style="italic">terminal-based word processor</text>
+<text x="490" y="55" fill="#d8d8d8" textLength="230" lengthAdjust="spacingAndGlyphs" xml:space="preserve">.                      </text>
+<rect x="0" y="340" width="50" height="20" fill="#2472c8"/>
+<text x="0" y="355" fill="#ffffff" textLength="50" lengthAdjust="spacingAndGlyphs" xml:space="preserve">3:48 </text>
+<rect x="50" y="340" width="100" height="20" fill="#2472c8"/>
+<text x="50" y="355" fill="#f5f543" textLength="100" lengthAdjust="spacingAndGlyphs" xml:space="preserve">test.ftml*</text>
+<rect x="150" y="340" width="570" height="20" fill="#2472c8"/>
+<text x="150" y="355" fill="#ffffff" textLength="570" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> Text &gt; Italic, 3 lines, 10 words         ^S:Save ^Q:Quit</text>
+<rect x="490" y="40" width="10" height="20" fill="#ffffff" fill-opacity="0.4"/>
+</svg>

@@ -45,6 +45,13 @@ impl DocumentEditor {
             return false;
         }
 
+        // Applying a style splits and merges spans, invalidating span paths.
+        // Remember the cursor as a character offset so it can be restored at
+        // the same document position afterwards.
+        let cursor_position = self
+            .paragraph_char_offset_of_pointer(&self.cursor)
+            .map(|char_offset| (self.cursor.paragraph_path.clone(), char_offset));
+
         let segments_snapshot = self.segments.clone();
         let mut changed = false;
         let mut touched_paragraphs: Vec<ParagraphPath> = Vec::new();
@@ -128,6 +135,10 @@ impl DocumentEditor {
                 // Multiple root paragraphs affected: fall back to full rebuild for simplicity
                 // (Could be optimized further to update each root incrementally)
                 self.rebuild_segments();
+            }
+
+            if let Some((paragraph_path, char_offset)) = cursor_position {
+                self.move_to_paragraph_char_offset(&paragraph_path, char_offset);
             }
         }
 

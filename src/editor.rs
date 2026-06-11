@@ -476,6 +476,22 @@ impl DocumentEditor {
         self.rebuild_segments();
     }
 
+    /// Reveal tag references for all reveal segments, in document order.
+    /// Produces the same tags as `clone_with_markers` without cloning the
+    /// document.
+    pub fn reveal_tag_refs(&self) -> Vec<RevealTagRef> {
+        self.segments
+            .iter()
+            .filter_map(|segment| match segment.kind {
+                SegmentKind::RevealStart(style) => Some((style, RevealTagKind::Start)),
+                SegmentKind::RevealEnd(style) => Some((style, RevealTagKind::End)),
+                SegmentKind::Text => None,
+            })
+            .enumerate()
+            .map(|(id, (style, kind))| RevealTagRef { id, style, kind })
+            .collect()
+    }
+
     pub fn clone_with_markers(
         &self,
         cursor_sentinel: char,
@@ -1361,13 +1377,11 @@ impl DocumentEditor {
         if let Some(segment) = self.segments.get(self.cursor_segment)
             && segment.kind != SegmentKind::Text
         {
-            if let Some(target_pointer) = self.remove_reveal_tag_segment(self.cursor_segment) {
+            if let Some((paragraph_path, char_offset)) =
+                self.remove_reveal_tag_segment(self.cursor_segment)
+            {
                 self.rebuild_segments();
-                if !self.move_to_pointer(&target_pointer)
-                    && !self.fallback_move_to_text(&target_pointer, false)
-                {
-                    self.ensure_cursor_selectable();
-                }
+                self.move_to_paragraph_char_offset(&paragraph_path, char_offset);
                 return true;
             } else {
                 return false;
@@ -1564,6 +1578,45 @@ impl DocumentEditor {
         true
     }
 
+    /// Character offset of a pointer within its paragraph, counting only text
+    /// segments. Survives span restructuring, unlike span paths.
+    pub(crate) fn paragraph_char_offset_of_pointer(
+        &self,
+        pointer: &CursorPointer,
+    ) -> Option<usize> {
+        let index = self
+            .segments
+            .iter()
+            .position(|segment| segment.matches_pointer(pointer))?;
+        let mut char_offset: usize = self.segments[..index]
+            .iter()
+            .filter(|segment| {
+                segment.paragraph_path == pointer.paragraph_path
+                    && matches!(segment.kind, SegmentKind::Text)
+            })
+            .map(|segment| segment.len)
+            .sum();
+        let segment = &self.segments[index];
+        if matches!(segment.kind, SegmentKind::Text) {
+            char_offset += pointer.offset.min(segment.len);
+        }
+        Some(char_offset)
+    }
+
+    pub(crate) fn move_to_paragraph_char_offset(
+        &mut self,
+        path: &ParagraphPath,
+        char_offset: usize,
+    ) {
+        if let Some(pointer) = self.pointer_at_paragraph_char_offset(path, char_offset) {
+            if !self.move_to_pointer(&pointer) && !self.fallback_move_to_text(&pointer, false) {
+                self.ensure_cursor_selectable();
+            }
+        } else {
+            self.ensure_cursor_selectable();
+        }
+    }
+
     fn pointer_at_paragraph_char_offset(
         &self,
         path: &ParagraphPath,
@@ -1598,6 +1651,21 @@ impl DocumentEditor {
             Some(segment) => segment.clone(),
             None => return false,
         };
+
+        // Only merge when the cursor sits at the very start of its paragraph:
+        // any non-empty segment before it in the same paragraph (text, or a
+        // reveal-codes tag) means backspace edits within the paragraph instead.
+        let mut idx = self.cursor_segment;
+        while idx > 0 {
+            idx -= 1;
+            let segment = &self.segments[idx];
+            if segment.paragraph_path != current_segment.paragraph_path {
+                break;
+            }
+            if segment.len > 0 {
+                return false;
+            }
+        }
 
         // Find the previous text segment in a different paragraph
         let mut prev_segment_idx = self.cursor_segment;
@@ -2201,13 +2269,11 @@ impl DocumentEditor {
         let current_len = self.current_segment_len();
         if self.cursor.offset < current_len {
             if self.cursor.segment_kind != SegmentKind::Text {
-                if let Some(target_pointer) = self.remove_reveal_tag_segment(self.cursor_segment) {
+                if let Some((paragraph_path, char_offset)) =
+                    self.remove_reveal_tag_segment(self.cursor_segment)
+                {
                     self.rebuild_segments();
-                    if !self.move_to_pointer(&target_pointer)
-                        && !self.fallback_move_to_text(&target_pointer, false)
-                    {
-                        self.ensure_cursor_selectable();
-                    }
+                    self.move_to_paragraph_char_offset(&paragraph_path, char_offset);
                     return true;
                 } else {
                     return false;
@@ -2230,13 +2296,11 @@ impl DocumentEditor {
 
         let next_segment = &self.segments[self.cursor_segment + 1];
         if next_segment.kind != SegmentKind::Text {
-            if let Some(target_pointer) = self.remove_reveal_tag_segment(self.cursor_segment + 1) {
+            if let Some((paragraph_path, char_offset)) =
+                self.remove_reveal_tag_segment(self.cursor_segment + 1)
+            {
                 self.rebuild_segments();
-                if !self.move_to_pointer(&target_pointer)
-                    && !self.fallback_move_to_text(&target_pointer, false)
-                {
-                    self.ensure_cursor_selectable();
-                }
+                self.move_to_paragraph_char_offset(&paragraph_path, char_offset);
                 return true;
             } else {
                 return false;
@@ -2370,12 +2434,27 @@ impl DocumentEditor {
         removed
     }
 
-    fn remove_reveal_tag_segment(&mut self, segment_index: usize) -> Option<CursorPointer> {
+    /// Remove the style behind a reveal tag segment. Returns the paragraph
+    /// path and the character offset the tag occupied, so the caller can
+    /// restore the cursor after the spans have been restructured (span paths
+    /// are not stable across `prune_and_merge_spans`).
+    fn remove_reveal_tag_segment(
+        &mut self,
+        segment_index: usize,
+    ) -> Option<(ParagraphPath, usize)> {
         let segment = self.segments.get(segment_index)?.clone();
         let style = match segment.kind {
             SegmentKind::RevealStart(style) | SegmentKind::RevealEnd(style) => style,
             SegmentKind::Text => return None,
         };
+        let char_offset: usize = self.segments[..segment_index]
+            .iter()
+            .filter(|other| {
+                other.paragraph_path == segment.paragraph_path
+                    && matches!(other.kind, SegmentKind::Text)
+            })
+            .map(|other| other.len)
+            .sum();
         let paragraph = paragraph_mut(&mut self.document, &segment.paragraph_path)?;
         let span = span_mut(paragraph, &segment.span_path)?;
         if span.style != style {
@@ -2384,19 +2463,8 @@ impl DocumentEditor {
         }
         span.style = InlineStyle::None;
         span.link_target = None;
-        let span_len = span.text.chars().count();
         prune_and_merge_spans(paragraph.content_mut());
-        let offset = match segment.kind {
-            SegmentKind::RevealStart(_) => 0,
-            SegmentKind::RevealEnd(_) => span_len,
-            SegmentKind::Text => span_len,
-        };
-        Some(CursorPointer {
-            paragraph_path: segment.paragraph_path,
-            span_path: segment.span_path,
-            offset,
-            segment_kind: SegmentKind::Text,
-        })
+        Some((segment.paragraph_path, char_offset))
     }
 
     fn current_paragraph_is_empty(&self) -> bool {
