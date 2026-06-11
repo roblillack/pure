@@ -21,6 +21,7 @@ While pre-1.0, the minor version is bumped for breaking changes.
   through synthetic key and mouse events and snapshot the rendered terminal as
   deterministic SVG, so styling, selection, and cursor placement diff as text
   and open in any browser. (#27)
+- We're now automatically adding release notes using the CI. (#30)
 
 ### Fixed
 
