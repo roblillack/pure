@@ -10,7 +10,28 @@ use crate::render::{
     render_document_direct,
 };
 use crate::theme::Theme;
-use tdoc::InlineStyle;
+use tdoc::{Document, InlineStyle};
+
+/// Maximum number of undo snapshots kept in memory.
+const MAX_UNDO_DEPTH: usize = 100;
+
+/// Classifies edits for undo coalescing: consecutive edits of the same kind
+/// continuing at the cursor position left by the previous edit collapse into
+/// a single undo step (e.g. typing a word, holding backspace).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum UndoEditKind {
+    InsertChar,
+    Backspace,
+    DeleteForward,
+    Other,
+}
+
+/// State captured before an edit so it can be restored by undo.
+#[derive(Debug)]
+struct UndoSnapshot {
+    document: Document,
+    cursor: CursorPointer,
+}
 
 /// EditorDisplay wraps a DocumentEditor and manages all visual/rendering concerns.
 /// This includes cursor movement in visual space, wrapping, and rendering.
@@ -40,6 +61,15 @@ pub struct EditorDisplay {
     last_selection: Option<(CursorPointer, CursorPointer)>,
     /// Theme for rendering
     theme: Theme,
+    /// Snapshots that undo restores (oldest first)
+    undo_stack: Vec<UndoSnapshot>,
+    /// Snapshots that redo restores (populated by undo, cleared on edit)
+    redo_stack: Vec<UndoSnapshot>,
+    /// Kind of the last recorded edit, used to coalesce edit runs
+    last_edit_kind: Option<UndoEditKind>,
+    /// Cursor position right after the last recorded edit; coalescing breaks
+    /// when the cursor moved away between edits
+    last_edit_cursor: Option<CursorPointer>,
 }
 
 enum SelectionIterationOrder {
@@ -69,6 +99,10 @@ impl EditorDisplay {
             last_modified_paragraphs: Vec::new(),
             last_selection: None,
             theme: Theme::default(),
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
+            last_edit_kind: None,
+            last_edit_cursor: None,
         }
     }
 
@@ -1234,30 +1268,119 @@ impl EditorDisplay {
         }
     }
 
+    fn undo_snapshot(&self) -> UndoSnapshot {
+        UndoSnapshot {
+            document: self.editor.document().clone(),
+            cursor: self.editor.cursor_pointer(),
+        }
+    }
+
+    /// Capture the pre-edit state unless this edit continues a run of the
+    /// same kind at the cursor position left by the previous edit, in which
+    /// case the run's existing snapshot already covers it.
+    fn begin_edit(&mut self, kind: UndoEditKind) -> Option<UndoSnapshot> {
+        let coalesce = kind != UndoEditKind::Other
+            && self.last_edit_kind == Some(kind)
+            && self.last_edit_cursor.as_ref() == Some(&self.editor.cursor_pointer())
+            && !self.undo_stack.is_empty();
+        if coalesce {
+            None
+        } else {
+            Some(self.undo_snapshot())
+        }
+    }
+
+    /// Record a completed edit: push the pre-edit snapshot (if the edit was
+    /// not coalesced) and invalidate the redo history.
+    fn commit_edit(&mut self, kind: UndoEditKind, snapshot: Option<UndoSnapshot>) {
+        if let Some(snapshot) = snapshot {
+            if self.undo_stack.len() >= MAX_UNDO_DEPTH {
+                self.undo_stack.remove(0);
+            }
+            self.undo_stack.push(snapshot);
+        }
+        self.redo_stack.clear();
+        self.last_edit_kind = Some(kind);
+        self.last_edit_cursor = Some(self.editor.cursor_pointer());
+    }
+
+    pub fn can_undo(&self) -> bool {
+        !self.undo_stack.is_empty()
+    }
+
+    pub fn can_redo(&self) -> bool {
+        !self.redo_stack.is_empty()
+    }
+
+    /// Revert the document to the state before the most recent edit.
+    /// Returns false if there is nothing to undo.
+    pub fn undo(&mut self) -> bool {
+        let Some(snapshot) = self.undo_stack.pop() else {
+            return false;
+        };
+        let current = self.undo_snapshot();
+        self.redo_stack.push(current);
+        self.restore_snapshot(snapshot);
+        true
+    }
+
+    /// Re-apply the most recently undone edit.
+    /// Returns false if there is nothing to redo.
+    pub fn redo(&mut self) -> bool {
+        let Some(snapshot) = self.redo_stack.pop() else {
+            return false;
+        };
+        let current = self.undo_snapshot();
+        if self.undo_stack.len() >= MAX_UNDO_DEPTH {
+            self.undo_stack.remove(0);
+        }
+        self.undo_stack.push(current);
+        self.restore_snapshot(snapshot);
+        true
+    }
+
+    fn restore_snapshot(&mut self, snapshot: UndoSnapshot) {
+        self.editor
+            .restore_document(snapshot.document, &snapshot.cursor);
+        self.last_edit_kind = None;
+        self.last_edit_cursor = None;
+        self.force_full_relayout();
+        self.clear_render_cache();
+    }
+
     /// Insert a character at the cursor position with incremental layout update
     pub fn insert_char(&mut self, c: char) -> bool {
+        let undo = self.begin_edit(UndoEditKind::InsertChar);
         let para_index = self.editor.cursor_pointer().paragraph_path.root_index();
         let result = self.editor.insert_char(c);
         if let Some(index) = para_index {
             self.mark_paragraph_modified(index);
         }
         self.clear_render_cache();
+        if result {
+            self.commit_edit(UndoEditKind::InsertChar, undo);
+        }
         result
     }
 
     /// Delete character before cursor with incremental layout update
     pub fn delete_char(&mut self) -> bool {
+        let undo = self.begin_edit(UndoEditKind::DeleteForward);
         let para_index = self.editor.cursor_pointer().paragraph_path.root_index();
         let result = self.editor.delete();
         if let Some(index) = para_index {
             self.mark_paragraph_modified(index);
         }
         self.clear_render_cache();
+        if result {
+            self.commit_edit(UndoEditKind::DeleteForward, undo);
+        }
         result
     }
 
     /// Backspace (delete character before cursor) with incremental layout update
     pub fn backspace(&mut self) -> bool {
+        let undo = self.begin_edit(UndoEditKind::Backspace);
         let para_count_before = self.editor.document().paragraphs.len();
         let para_index_before = self.editor.cursor_pointer().paragraph_path.root_index();
 
@@ -1273,11 +1396,15 @@ impl EditorDisplay {
             self.mark_paragraph_modified(index);
         }
         self.clear_render_cache();
+        if result {
+            self.commit_edit(UndoEditKind::Backspace, undo);
+        }
         result
     }
 
     /// Delete character at cursor with incremental layout update
     pub fn delete(&mut self) -> bool {
+        let undo = self.begin_edit(UndoEditKind::DeleteForward);
         let para_count_before = self.editor.document().paragraphs.len();
         let para_index = self.editor.cursor_pointer().paragraph_path.root_index();
 
@@ -1318,11 +1445,15 @@ impl EditorDisplay {
             self.mark_paragraph_modified(index);
         }
         self.clear_render_cache();
+        if result {
+            self.commit_edit(UndoEditKind::DeleteForward, undo);
+        }
         result
     }
 
     /// Delete word backward with incremental layout update
     pub fn delete_word_backward(&mut self) -> bool {
+        let undo = self.begin_edit(UndoEditKind::Other);
         let para_count_before = self.editor.document().paragraphs.len();
         let para_index = self.editor.cursor_pointer().paragraph_path.root_index();
         let result = self.editor.delete_word_backward();
@@ -1335,11 +1466,15 @@ impl EditorDisplay {
             self.mark_paragraph_modified(index);
         }
         self.clear_render_cache();
+        if result {
+            self.commit_edit(UndoEditKind::Other, undo);
+        }
         result
     }
 
     /// Delete word forward with incremental layout update
     pub fn delete_word_forward(&mut self) -> bool {
+        let undo = self.begin_edit(UndoEditKind::Other);
         let para_count_before = self.editor.document().paragraphs.len();
         let para_index = self.editor.cursor_pointer().paragraph_path.root_index();
         let result = self.editor.delete_word_forward();
@@ -1352,20 +1487,28 @@ impl EditorDisplay {
             self.mark_paragraph_modified(index);
         }
         self.clear_render_cache();
+        if result {
+            self.commit_edit(UndoEditKind::Other, undo);
+        }
         result
     }
 
     /// Insert paragraph break with layout update (requires full re-render as it affects multiple paragraphs)
     pub fn insert_paragraph_break(&mut self) -> bool {
+        let undo = self.begin_edit(UndoEditKind::Other);
         let result = self.editor.insert_paragraph_break();
         // Paragraph breaks affect structure - need full re-render
         self.force_full_relayout();
         self.clear_render_cache();
+        if result {
+            self.commit_edit(UndoEditKind::Other, undo);
+        }
         result
     }
 
     /// Insert a paragraph break as sibling (Ctrl-P) with layout update
     pub fn insert_paragraph_break_as_sibling(&mut self) -> bool {
+        let undo = self.begin_edit(UndoEditKind::Other);
         // Get the paragraph index before splitting
         let old_para_idx = self.editor.cursor_pointer().paragraph_path.root_index();
 
@@ -1381,12 +1524,14 @@ impl EditorDisplay {
                 self.mark_paragraph_modified(new_idx);
             }
             self.clear_render_cache();
+            self.commit_edit(UndoEditKind::Other, undo);
         }
         result
     }
 
     /// Indent current paragraph with layout update
     pub fn indent_current_paragraph(&mut self) -> bool {
+        let undo = self.begin_edit(UndoEditKind::Other);
         // Get the root paragraph index before indenting
         let old_para_idx = self.editor.cursor_pointer().paragraph_path.root_index();
 
@@ -1402,12 +1547,14 @@ impl EditorDisplay {
                 self.mark_paragraph_modified(new_idx);
             }
             self.clear_render_cache();
+            self.commit_edit(UndoEditKind::Other, undo);
         }
         result
     }
 
     /// Unindent current paragraph with layout update
     pub fn unindent_current_paragraph(&mut self) -> bool {
+        let undo = self.begin_edit(UndoEditKind::Other);
         // Get the root paragraph index before unindenting
         let old_para_idx = self.editor.cursor_pointer().paragraph_path.root_index();
 
@@ -1423,6 +1570,7 @@ impl EditorDisplay {
                 self.mark_paragraph_modified(new_idx);
             }
             self.clear_render_cache();
+            self.commit_edit(UndoEditKind::Other, undo);
         }
         result
     }
@@ -1448,6 +1596,7 @@ impl EditorDisplay {
             paragraph_targets.reverse();
         }
 
+        let undo = self.begin_edit(UndoEditKind::Other);
         let marker_inserted = self.place_temporary_cursor_marker(&selection.1);
         let mut changed = false;
 
@@ -1497,6 +1646,7 @@ impl EditorDisplay {
         if changed {
             self.force_full_relayout();
             self.clear_render_cache();
+            self.commit_edit(UndoEditKind::Other, undo);
         }
 
         changed
@@ -1520,6 +1670,7 @@ impl EditorDisplay {
 
     /// Set checklist item checked state with layout update
     pub fn set_current_checklist_item_checked(&mut self, checked: bool) -> bool {
+        let undo = self.begin_edit(UndoEditKind::Other);
         // Get the root paragraph index before modifying
         let paragraph_index = self.editor.cursor_pointer().paragraph_path.root_index();
 
@@ -1531,12 +1682,14 @@ impl EditorDisplay {
                 self.mark_paragraph_modified(para_idx);
             }
             self.clear_render_cache();
+            self.commit_edit(UndoEditKind::Other, undo);
         }
         result
     }
 
     /// Set paragraph type with layout update
     pub fn set_paragraph_type(&mut self, target: tdoc::ParagraphType) -> bool {
+        let undo = self.begin_edit(UndoEditKind::Other);
         // Track the paragraph count and affected paragraph before the change
         let para_count_before = self.editor.document().paragraphs.len();
         let para_index_before = self.editor.cursor_pointer().paragraph_path.root_index();
@@ -1577,6 +1730,7 @@ impl EditorDisplay {
         }
 
         self.clear_render_cache();
+        self.commit_edit(UndoEditKind::Other, undo);
         result
     }
 
@@ -1593,6 +1747,7 @@ impl EditorDisplay {
             return false;
         }
 
+        let undo = self.begin_edit(UndoEditKind::Other);
         let marker_inserted = self.place_temporary_cursor_marker(&selection.1);
         let mut changed = false;
 
@@ -1620,16 +1775,40 @@ impl EditorDisplay {
         if changed {
             self.force_full_relayout();
             self.clear_render_cache();
+            self.commit_edit(UndoEditKind::Other, undo);
         }
 
         changed
     }
 
     pub fn remove_selection(&mut self, selection: &(CursorPointer, CursorPointer)) -> bool {
+        let undo = self.begin_edit(UndoEditKind::Other);
         let result = self.editor.remove_selection(selection);
         if result {
             self.force_full_relayout();
             self.clear_render_cache();
+            self.commit_edit(UndoEditKind::Other, undo);
+        }
+        result
+    }
+
+    /// Apply an inline style to the selection.
+    ///
+    /// Shadows the `Deref` access to `DocumentEditor::apply_inline_style_to_selection`
+    /// so the edit is recorded for undo and the layout is invalidated.
+    pub fn apply_inline_style_to_selection(
+        &mut self,
+        selection: &(CursorPointer, CursorPointer),
+        style: InlineStyle,
+    ) -> bool {
+        let undo = self.begin_edit(UndoEditKind::Other);
+        let result = self
+            .editor
+            .apply_inline_style_to_selection(selection, style);
+        if result {
+            self.force_full_relayout();
+            self.clear_render_cache();
+            self.commit_edit(UndoEditKind::Other, undo);
         }
         result
     }
@@ -1669,6 +1848,10 @@ pub struct CursorDisplay {
 fn column_distance(a: u16, b: u16) -> u16 {
     a.abs_diff(b)
 }
+
+#[cfg(test)]
+#[path = "editor_display_undo_tests.rs"]
+mod undo_tests;
 
 fn reveal_tag_visual_width(style: InlineStyle, kind: RevealTagKind) -> u16 {
     let label = inline_style_label(style);

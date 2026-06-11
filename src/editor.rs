@@ -454,6 +454,19 @@ impl DocumentEditor {
         &self.document
     }
 
+    /// Replace the document wholesale and move the cursor as close as
+    /// possible to the given pointer. Used by undo/redo to restore snapshots.
+    pub fn restore_document(&mut self, document: Document, cursor: &CursorPointer) {
+        self.document = document;
+        self.rebuild_segments();
+        if !self.move_to_pointer(cursor)
+            && !self.fallback_move_to_text(cursor, false)
+            && !self.fallback_move_to_text(cursor, true)
+        {
+            self.ensure_cursor_selectable();
+        }
+    }
+
     pub fn reveal_codes(&self) -> bool {
         self.reveal_codes
     }

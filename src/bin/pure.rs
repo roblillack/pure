@@ -764,6 +764,29 @@ impl App {
         inserted
     }
 
+    fn undo(&mut self) {
+        if self.display.undo() {
+            self.after_history_restore();
+        } else {
+            self.status_message = Some(("Nothing to undo".to_string(), Instant::now()));
+        }
+    }
+
+    fn redo(&mut self) {
+        if self.display.redo() {
+            self.after_history_restore();
+        } else {
+            self.status_message = Some(("Nothing to redo".to_string(), Instant::now()));
+        }
+    }
+
+    fn after_history_restore(&mut self) {
+        self.mark_dirty();
+        self.selection_anchor = None;
+        self.display.set_preferred_column(None);
+        self.needs_position_rebuild = true;
+    }
+
     fn capture_reveal_toggle_snapshot(&self) -> RevealToggleSnapshot {
         let viewport = self.display.last_view_height().max(1);
         let max_scroll = self
@@ -1708,6 +1731,12 @@ impl App {
                     }
                     (KeyCode::Char('c'), m) if m.contains(KeyModifiers::CONTROL) => {
                         self.should_quit = true;
+                    }
+                    (KeyCode::Char('z'), m) if m.contains(KeyModifiers::CONTROL) => {
+                        self.undo();
+                    }
+                    (KeyCode::Char('y'), m) if m.contains(KeyModifiers::CONTROL) => {
+                        self.redo();
                     }
                     (KeyCode::Char(']'), m) if m.contains(KeyModifiers::CONTROL) => {
                         self.indent_selection_or_cursor();
