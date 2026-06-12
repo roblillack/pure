@@ -21,9 +21,18 @@ use anyhow::{Context, Result, bail};
 use crossterm::event::{KeyCode, KeyModifiers};
 use gif::{DisposalMethod, Encoder, Frame, Repeat};
 use pure_tui::menu_bar::{MENU_BAR, MenuBarEntry, menu_with_accel};
-use pure_tui::test_harness::TestApp;
+use pure_tui::test_harness::{CellMetrics, TestApp};
 use resvg::{tiny_skia, usvg};
 use tdoc::Document;
+
+/// Tighter rows than the snapshot default: 18px is DejaVu Sans Mono's
+/// natural line height at 16px, so the box-drawing characters of menu
+/// borders connect cleanly across rows instead of leaving gaps.
+const METRICS: CellMetrics = CellMetrics {
+    width: 10,
+    height: 18,
+    baseline: 14,
+};
 
 /// How long a frame stays on screen, by the interaction that produced it,
 /// in GIF time units (10ms).
@@ -242,7 +251,7 @@ impl Recorder {
     /// Rasterize the current frame and append it, or — when nothing visible
     /// changed — extend the previous frame's delay instead.
     fn capture(&mut self, delay: u32) {
-        let svg = self.app.svg();
+        let svg = self.app.svg_with(METRICS);
         let tree = usvg::Tree::from_str(&svg, &self.options).expect("harness SVG parses");
         let size = tree.size().to_int_size();
         let mut pixmap =

@@ -32,14 +32,33 @@ use tdoc::Document;
 
 use crate::app::{App, DocumentFormat};
 
-/// Pixel geometry of one terminal cell in the rendered SVG.
-const CELL_W: usize = 10;
-const CELL_H: usize = 20;
 const FONT_SIZE: usize = 16;
-/// Text baseline offset within a cell row.
-const BASELINE: usize = 15;
 const DEFAULT_FG: &str = "#d8d8d8";
 const DEFAULT_BG: &str = "#101010";
+
+/// Pixel geometry of one terminal cell in the rendered SVG.
+#[derive(Clone, Copy)]
+pub struct CellMetrics {
+    /// Cell width in px.
+    pub width: usize,
+    /// Cell height in px — the line height.
+    pub height: usize,
+    /// Text baseline offset from the top of a cell row.
+    pub baseline: usize,
+}
+
+impl Default for CellMetrics {
+    /// The snapshot geometry: 20px rows leave breathing room around the
+    /// 16px font, so snapshots stay legible with whatever monospace font
+    /// the viewer's browser resolves.
+    fn default() -> Self {
+        Self {
+            width: 10,
+            height: 20,
+            baseline: 15,
+        }
+    }
+}
 
 /// A `pure` application running against an in-memory terminal.
 pub struct TestApp {
@@ -117,8 +136,13 @@ impl TestApp {
 
     /// Render the current frame to SVG.
     pub fn svg(&mut self) -> String {
+        self.svg_with(CellMetrics::default())
+    }
+
+    /// Render the current frame to SVG with custom cell geometry.
+    pub fn svg_with(&mut self, metrics: CellMetrics) -> String {
         let cursor = self.terminal.get_cursor_position().ok();
-        buffer_to_svg(self.terminal.backend().buffer(), cursor)
+        buffer_to_svg(self.terminal.backend().buffer(), cursor, metrics)
     }
 }
 
@@ -213,10 +237,15 @@ fn xml_escape(text: &str) -> String {
 /// background `<rect>` (when not the default background) and a `<text>` with
 /// an exact `textLength`, so glyphs stay on the cell grid regardless of the
 /// font the viewer resolves `monospace` to.
-pub fn buffer_to_svg(buffer: &Buffer, cursor: Option<Position>) -> String {
+pub fn buffer_to_svg(buffer: &Buffer, cursor: Option<Position>, metrics: CellMetrics) -> String {
+    let CellMetrics {
+        width: cell_w,
+        height: cell_h,
+        baseline,
+    } = metrics;
     let area = buffer.area;
-    let width_px = area.width as usize * CELL_W;
-    let height_px = area.height as usize * CELL_H;
+    let width_px = area.width as usize * cell_w;
+    let height_px = area.height as usize * cell_h;
 
     let mut svg = String::new();
     let _ = writeln!(
@@ -243,14 +272,14 @@ pub fn buffer_to_svg(buffer: &Buffer, cursor: Option<Position>) -> String {
             }
         }
 
-        let row_px = y as usize * CELL_H;
+        let row_px = y as usize * cell_h;
         for (start, cells, text, style) in &runs {
             if style.bg != DEFAULT_BG {
                 let _ = writeln!(
                     svg,
-                    r#"<rect x="{}" y="{row_px}" width="{}" height="{CELL_H}" fill="{}"/>"#,
-                    start * CELL_W,
-                    cells * CELL_W,
+                    r#"<rect x="{}" y="{row_px}" width="{}" height="{cell_h}" fill="{}"/>"#,
+                    start * cell_w,
+                    cells * cell_w,
                     style.bg,
                 );
             }
@@ -276,10 +305,10 @@ pub fn buffer_to_svg(buffer: &Buffer, cursor: Option<Position>) -> String {
             let _ = writeln!(
                 svg,
                 r#"<text x="{}" y="{}" fill="{}" textLength="{}" lengthAdjust="spacingAndGlyphs" xml:space="preserve"{attrs}>{}</text>"#,
-                start * CELL_W,
-                row_px + BASELINE,
+                start * cell_w,
+                row_px + baseline,
                 style.fg,
-                cells * CELL_W,
+                cells * cell_w,
                 xml_escape(text),
             );
         }
@@ -288,9 +317,9 @@ pub fn buffer_to_svg(buffer: &Buffer, cursor: Option<Position>) -> String {
     if let Some(position) = cursor {
         let _ = writeln!(
             svg,
-            r##"<rect x="{}" y="{}" width="{CELL_W}" height="{CELL_H}" fill="#ffffff" fill-opacity="0.4"/>"##,
-            position.x as usize * CELL_W,
-            position.y as usize * CELL_H,
+            r##"<rect x="{}" y="{}" width="{cell_w}" height="{cell_h}" fill="#ffffff" fill-opacity="0.4"/>"##,
+            position.x as usize * cell_w,
+            position.y as usize * cell_h,
         );
     }
 
