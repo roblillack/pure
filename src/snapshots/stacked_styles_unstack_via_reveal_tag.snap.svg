@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="360" viewBox="0 0 720 360" font-family="'DejaVu Sans Mono', Menlo, Consolas, monospace" font-size="16px">
+<rect width="100%" height="100%" fill="#101010"/>
+<text x="0" y="15" fill="#d8d8d8" textLength="180" lengthAdjust="spacingAndGlyphs" xml:space="preserve">  Stacking styles </text>
+<rect x="180" y="0" width="110" height="20" fill="#e5e5e5"/>
+<text x="180" y="15" fill="#000000" textLength="110" lengthAdjust="spacingAndGlyphs" xml:space="preserve">[Highlight&gt;</text>
+<rect x="290" y="0" width="100" height="20" fill="#f5f543"/>
+<text x="290" y="15" fill="#000000" textLength="100" lengthAdjust="spacingAndGlyphs" xml:space="preserve">gets messy</text>
+<rect x="390" y="0" width="110" height="20" fill="#e5e5e5"/>
+<text x="390" y="15" fill="#000000" textLength="110" lengthAdjust="spacingAndGlyphs" xml:space="preserve">&lt;Highlight]</text>
+<text x="500" y="15" fill="#d8d8d8" textLength="220" lengthAdjust="spacingAndGlyphs" xml:space="preserve">.                     </text>
+<rect x="0" y="340" width="720" height="20" fill="#2472c8"/>
+<text x="0" y="355" fill="#ffffff" textLength="720" lengthAdjust="spacingAndGlyphs" xml:space="preserve">1:27 Reveal codes enabled                                               </text>
+<rect x="390" y="0" width="10" height="20" fill="#ffffff" fill-opacity="0.4"/>
+</svg>
