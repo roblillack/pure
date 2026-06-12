@@ -21,7 +21,7 @@ While pre-1.0, the minor version is bumped for breaking changes.
   the terminal with the OSC 52 escape sequence, and pasting from other
   applications works through the terminal's own paste shortcut (bracketed
   paste), arriving as a single undoable edit that turns blank lines back
-  into paragraph breaks.
+  into paragraph breaks. (#33)
 - A menu bar in the typical TUI style: File, Edit, Format, and View menus
   across the top of the screen, opened with F10 or an Alt+letter accelerator
   and driven with the keyboard. (#29)
