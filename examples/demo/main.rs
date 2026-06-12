@@ -89,8 +89,8 @@ fn main() -> anyhow::Result<()> {
     }
     demo.context_menu('b'); // Bold
 
-    // … then highlight "gets messy" on top of it — which quietly knocks a
-    // hole into the bold span.
+    // … then highlight "gets messy" on top of it — the highlight stacks
+    // with the bold, nesting inside the bold span.
     demo.end();
     demo.cursor_left();
     demo.shift_word_left();
@@ -107,15 +107,12 @@ fn main() -> anyhow::Result<()> {
     demo.menu('v', "Reveal Codes");
     demo.pause(2000);
 
-    // … and clean up the mess: walk up to the spurious <Bold] end tag and
-    // delete it. The bold formatting goes away; the highlight stays.
-    demo.cursor_up();
+    // … and clean up the mess: walk up behind the <Bold] end tag and delete
+    // it. The whole phrase loses its bold; the nested highlight stays.
     demo.cursor_up();
     demo.cursor_up();
     demo.end();
-    for _ in 0..11 {
-        demo.cursor_left();
-    }
+    demo.cursor_left();
     demo.backspace();
     demo.pause(3000);
 

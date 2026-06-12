@@ -1,14 +1,18 @@
-use super::content::{apply_style_to_span_path, prune_and_merge_spans};
+use super::content::{apply_style_to_content_range, prune_and_merge_spans};
+use super::inspect::{checklist_item_ref, paragraph_ref};
 use super::{
-    CursorPointer, DocumentEditor, ParagraphPath, SegmentKind, SegmentRef, checklist_item_mut,
-    paragraph_mut,
+    CursorPointer, DocumentEditor, ParagraphPath, SegmentKind, SegmentRef, SpanPath,
+    checklist_item_mut, paragraph_mut,
 };
-use tdoc::InlineStyle;
+use tdoc::{InlineStyle, Span};
 
-enum InlineStyleScope {
-    None,
-    Paragraph,
-    Checklist,
+/// The portion of one content root (paragraph or checklist item) covered by
+/// a selection, delimited by leaf span positions.
+struct StyledRange {
+    paragraph_path: ParagraphPath,
+    is_checklist_item: bool,
+    start: (SpanPath, usize),
+    end: (SpanPath, usize),
 }
 
 impl DocumentEditor {
@@ -45,6 +49,55 @@ impl DocumentEditor {
             return false;
         }
 
+        // Collect the selected text ranges grouped by content root. While at
+        // it, detect when the whole selection already carries the requested
+        // style (or is plain already, when clearing) so re-applying it does
+        // not pile up redundant spans.
+        let mut ranges: Vec<StyledRange> = Vec::new();
+        let mut already_styled = true;
+        for segment_index in start_key.segment_index..=end_key.segment_index {
+            let Some(segment) = self.segments.get(segment_index) else {
+                continue;
+            };
+            if segment.kind != SegmentKind::Text {
+                continue;
+            }
+            let seg_start = if segment_index == start_key.segment_index {
+                start_key.offset.min(segment.len)
+            } else {
+                0
+            };
+            let seg_end = if segment_index == end_key.segment_index {
+                end_key.offset.min(segment.len)
+            } else {
+                segment.len
+            };
+            if seg_start >= seg_end {
+                continue;
+            }
+
+            if !self.segment_already_styled(segment, style) {
+                already_styled = false;
+            }
+
+            match ranges.last_mut() {
+                Some(range) if range.paragraph_path == segment.paragraph_path => {
+                    range.end = (segment.span_path.clone(), seg_end);
+                }
+                _ => ranges.push(StyledRange {
+                    paragraph_path: segment.paragraph_path.clone(),
+                    is_checklist_item: checklist_item_ref(&self.document, &segment.paragraph_path)
+                        .is_some(),
+                    start: (segment.span_path.clone(), seg_start),
+                    end: (segment.span_path.clone(), seg_end),
+                }),
+            }
+        }
+
+        if ranges.is_empty() || already_styled {
+            return false;
+        }
+
         // Applying a style splits and merges spans, invalidating span paths.
         // Remember the cursor as a character offset so it can be restored at
         // the same document position afterwards.
@@ -52,48 +105,42 @@ impl DocumentEditor {
             .paragraph_char_offset_of_pointer(&self.cursor)
             .map(|char_offset| (self.cursor.paragraph_path.clone(), char_offset));
 
-        let segments_snapshot = self.segments.clone();
         let mut changed = false;
         let mut touched_paragraphs: Vec<ParagraphPath> = Vec::new();
         let mut touched_checklists: Vec<ParagraphPath> = Vec::new();
 
-        for segment_index in (start_key.segment_index..=end_key.segment_index).rev() {
-            let Some(segment) = segments_snapshot.get(segment_index) else {
-                continue;
-            };
-            let len = segment.len;
-            if len == 0 || segment.kind != SegmentKind::Text {
-                continue;
-            }
-
-            let seg_start = if segment_index == start_key.segment_index {
-                start_key.offset.min(len)
-            } else {
-                0
-            };
-            let seg_end = if segment_index == end_key.segment_index {
-                end_key.offset.min(len)
-            } else {
-                len
-            };
-
-            if seg_start >= seg_end {
-                continue;
-            }
-
-            match self.apply_inline_style_to_segment(segment, seg_start, seg_end, style) {
-                InlineStyleScope::None => {}
-                InlineStyleScope::Paragraph => {
+        for range in ranges.iter().rev() {
+            if range.is_checklist_item {
+                let Some(item) = checklist_item_mut(&mut self.document, &range.paragraph_path)
+                else {
+                    continue;
+                };
+                if apply_style_to_content_range(
+                    &mut item.content,
+                    range.start.0.indices(),
+                    range.start.1,
+                    range.end.0.indices(),
+                    range.end.1,
+                    style,
+                ) {
                     changed = true;
-                    if !touched_paragraphs.contains(&segment.paragraph_path) {
-                        touched_paragraphs.push(segment.paragraph_path.clone());
-                    }
+                    touched_checklists.push(range.paragraph_path.clone());
                 }
-                InlineStyleScope::Checklist => {
+            } else {
+                let Some(paragraph) = paragraph_mut(&mut self.document, &range.paragraph_path)
+                else {
+                    continue;
+                };
+                if apply_style_to_content_range(
+                    paragraph.content_mut(),
+                    range.start.0.indices(),
+                    range.start.1,
+                    range.end.0.indices(),
+                    range.end.1,
+                    style,
+                ) {
                     changed = true;
-                    if !touched_checklists.contains(&segment.paragraph_path) {
-                        touched_checklists.push(segment.paragraph_path.clone());
-                    }
+                    touched_paragraphs.push(range.paragraph_path.clone());
                 }
             }
         }
@@ -145,39 +192,35 @@ impl DocumentEditor {
         changed
     }
 
-    fn apply_inline_style_to_segment(
-        &mut self,
-        segment: &SegmentRef,
-        start: usize,
-        end: usize,
-        style: InlineStyle,
-    ) -> InlineStyleScope {
-        if let Some(item) = checklist_item_mut(&mut self.document, &segment.paragraph_path) {
-            if apply_style_to_span_path(
-                &mut item.content,
-                segment.span_path.indices(),
-                start,
-                end,
-                style,
-            ) {
-                return InlineStyleScope::Checklist;
-            }
-            return InlineStyleScope::None;
+    /// Returns whether the segment's chain of span styles — its leaf and all
+    /// ancestors — already provides `style`. For `InlineStyle::None` this
+    /// checks that the chain is entirely unstyled (nothing to clear).
+    fn segment_already_styled(&self, segment: &SegmentRef, style: InlineStyle) -> bool {
+        let spans: &[Span] =
+            if let Some(item) = checklist_item_ref(&self.document, &segment.paragraph_path) {
+                &item.content
+            } else if let Some(paragraph) = paragraph_ref(&self.document, &segment.paragraph_path) {
+                paragraph.content()
+            } else {
+                return false;
+            };
+
+        let mut current = spans;
+        let mut chain_styles = Vec::new();
+        for &idx in segment.span_path.indices() {
+            let Some(span) = current.get(idx) else {
+                return false;
+            };
+            chain_styles.push(span.style);
+            current = &span.children;
         }
 
-        let Some(paragraph) = paragraph_mut(&mut self.document, &segment.paragraph_path) else {
-            return InlineStyleScope::None;
-        };
-        if apply_style_to_span_path(
-            paragraph.content_mut(),
-            segment.span_path.indices(),
-            start,
-            end,
-            style,
-        ) {
-            InlineStyleScope::Paragraph
+        if style == InlineStyle::None {
+            chain_styles
+                .iter()
+                .all(|&chain_style| chain_style == InlineStyle::None)
         } else {
-            InlineStyleScope::None
+            chain_styles.contains(&style)
         }
     }
 }
