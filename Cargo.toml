@@ -22,6 +22,11 @@ pre-release-replacements = [
     { file = "CHANGELOG.md", search = "<!-- next-url -->", replace = "<!-- next-url -->\n[Unreleased]: https://github.com/roblillack/pure/compare/{{tag_name}}...HEAD", exactly = 1 },
 ]
 
+[features]
+# Compiles the headless test harness into the library so examples can drive
+# the app without a terminal. Used by `examples/demo` to record `demo.gif`.
+recorder = []
+
 [dependencies]
 anyhow = "1.0"
 crossterm = "0.29.0"
@@ -30,7 +35,14 @@ tdoc = { version = "0.10.0", default-features = false }
 unicode-width = "0.2.0"
 
 [dev-dependencies]
+gif = "0.14"
 insta = "1.43"
+resvg = "0.47"
+
+[[example]]
+name = "demo"
+path = "examples/demo/main.rs"
+required-features = ["recorder"]
 
 [[bench]]
 name = "performance"

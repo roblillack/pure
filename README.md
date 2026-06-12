@@ -260,6 +260,9 @@ cargo test
 # Run benchmarks
 cargo bench
 
+# Re-record the demo GIF above (scripted in examples/demo)
+cargo run --release --example demo --features recorder
+
 # The binary will be in target/release/pure
 ./target/release/pure
 ```

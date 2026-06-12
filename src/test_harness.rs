@@ -10,6 +10,10 @@
 //!
 //! Snapshots live in `src/snapshots/*.snap.svg`. Review changes with
 //! `cargo insta review`, or set `INSTA_UPDATE=always` to rewrite them.
+//!
+//! With the `recorder` feature the harness is also compiled into the
+//! library itself, so `examples/demo` can drive the app headlessly and
+//! record the README's `demo.gif` from the same SVG frames.
 
 use std::fmt::Write as _;
 use std::path::PathBuf;
@@ -47,12 +51,13 @@ impl TestApp {
     /// Create an app showing `document` in a `width`×`height` cell terminal
     /// and render the first frame.
     pub fn new(width: u16, height: u16, document: Document) -> Self {
-        let mut app = App::new(
-            document,
-            PathBuf::from("test.ftml"),
-            DocumentFormat::Ftml,
-            None,
-        );
+        Self::with_path(width, height, document, PathBuf::from("test.ftml"))
+    }
+
+    /// Like [`TestApp::new`], but with a custom file path (shown in the
+    /// status bar).
+    pub fn with_path(width: u16, height: u16, document: Document, path: PathBuf) -> Self {
+        let mut app = App::new(document, path, DocumentFormat::Ftml, None);
         app.set_interactive(false);
         let terminal = Terminal::new(TestBackend::new(width, height)).expect("test terminal");
         let mut test_app = Self { app, terminal };
@@ -218,7 +223,10 @@ pub fn buffer_to_svg(buffer: &Buffer, cursor: Option<Position>) -> String {
         svg,
         r#"<svg xmlns="http://www.w3.org/2000/svg" width="{width_px}" height="{height_px}" viewBox="0 0 {width_px} {height_px}" font-family="'DejaVu Sans Mono', Menlo, Consolas, monospace" font-size="{FONT_SIZE}px">"#
     );
-    let _ = writeln!(svg, r#"<rect width="100%" height="100%" fill="{DEFAULT_BG}"/>"#);
+    let _ = writeln!(
+        svg,
+        r#"<rect width="100%" height="100%" fill="{DEFAULT_BG}"/>"#
+    );
 
     for y in 0..area.height {
         // Coalesce the row into runs of (start cell, cell count, text, style)
@@ -290,5 +298,6 @@ pub fn buffer_to_svg(buffer: &Buffer, cursor: Option<Position>) -> String {
     svg
 }
 
+#[cfg(test)]
 #[path = "snapshot_tests.rs"]
 mod snapshot_tests;

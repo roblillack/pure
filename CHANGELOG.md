@@ -22,6 +22,11 @@ While pre-1.0, the minor version is bumped for breaking changes.
   deterministic SVG, so styling, selection, and cursor placement diff as text
   and open in any browser. (#27)
 - We're now automatically adding release notes using the CI. (#30)
+- The README's demo GIF is now recorded automatically: `examples/demo`
+  scripts a Pure session as a series of simulated key presses, renders every
+  frame through the SVG snapshot harness, and assembles the result into
+  `demo.gif` — so the demo can be re-recorded with one command whenever the
+  interface changes.
 
 ### Fixed
 
