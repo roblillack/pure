@@ -72,6 +72,7 @@ Pure provides an intuitive editing experience:
 
 Pure is designed for efficiency with comprehensive keyboard shortcuts:
 
+- **Ctrl+O** - Open document (file dialog with tab completion)
 - **Ctrl+S** - Save document
 - **Ctrl+Q** - Quit (with save prompt)
 - **Ctrl+Z / Ctrl+Y** - Undo / redo
@@ -156,7 +157,9 @@ pure webpage.html
 
 **File Operations:**
 
+- Ctrl+O - Open (file dialog with tab completion)
 - Ctrl+S - Save
+- Save As... in the File menu saves under a new name
 - Ctrl+Q - Quit
 
 **Special Features:**

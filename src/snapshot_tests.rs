@@ -380,6 +380,113 @@ fn paste_preserves_inline_styles() {
 }
 
 #[test]
+fn ctrl_o_opens_file_dialog_and_lists_directory() {
+    let mut app = sample_app();
+    app.ctrl('o');
+    app.type_text("tests/fixtures/");
+    assert_svg("file_dialog_lists_directory", &mut app);
+}
+
+#[test]
+fn file_dialog_tab_completes_path() {
+    let mut app = sample_app();
+    app.ctrl('o');
+    app.type_text("tests/fixtures/al");
+    app.key(KeyCode::Tab);
+    assert_svg("file_dialog_tab_completed", &mut app);
+}
+
+#[test]
+fn open_dialog_loads_selected_file() {
+    let mut app = sample_app();
+    app.ctrl('o');
+    app.type_text("tests/fixtures/");
+    // Highlight alpha.ftml (the entry after the sub/ directory).
+    app.key(KeyCode::Down);
+    app.key(KeyCode::Down);
+    app.key(KeyCode::Enter);
+    assert_svg("file_dialog_opened_file", &mut app);
+}
+
+#[test]
+fn open_dialog_asks_before_discarding_unsaved_changes() {
+    let mut app = sample_app();
+    app.type_text("Summer ");
+    app.ctrl('o');
+    app.type_text("tests/fixtures/beta.md");
+    app.key(KeyCode::Enter);
+    assert_svg("file_dialog_unsaved_changes_warning", &mut app);
+    app.key(KeyCode::Enter);
+    assert_svg("file_dialog_discarded_and_opened", &mut app);
+}
+
+#[test]
+fn esc_cancels_file_dialog() {
+    let mut app = sample_app();
+    app.ctrl('o');
+    app.key(KeyCode::Esc);
+    app.type_text("Summer ");
+    assert_svg("file_dialog_cancelled", &mut app);
+}
+
+/// Open the Save As dialog through the File menu.
+fn open_save_as_dialog(app: &mut TestApp) {
+    app.key_with(KeyCode::Char('f'), KeyModifiers::ALT);
+    app.key(KeyCode::Down); // Save
+    app.key(KeyCode::Down); // Save As...
+    app.key(KeyCode::Enter);
+}
+
+#[test]
+fn save_as_via_menu_writes_new_file() {
+    let dir = std::env::temp_dir().join(format!("pure-save-as-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("create temp dir");
+    let target = dir.join("saved.ftml");
+    let _ = std::fs::remove_file(&target);
+
+    let mut app = sample_app();
+    open_save_as_dialog(&mut app);
+    // Replace the suggested "test.ftml" with the target path.
+    app.ctrl('w');
+    app.type_text(target.to_str().expect("utf-8 temp path"));
+    app.key(KeyCode::Enter);
+
+    let contents = std::fs::read_to_string(&target).expect("file saved under the new name");
+    assert!(
+        contents.contains("Packing List"),
+        "saved file must contain the document, got: {contents}"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn save_as_requires_confirmation_before_overwriting() {
+    let dir = std::env::temp_dir().join(format!("pure-overwrite-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("create temp dir");
+    let target = dir.join("existing.md");
+    std::fs::write(&target, "old contents").expect("seed existing file");
+
+    let mut app = sample_app();
+    open_save_as_dialog(&mut app);
+    app.ctrl('w');
+    app.type_text(target.to_str().expect("utf-8 temp path"));
+    app.key(KeyCode::Enter);
+    assert_eq!(
+        std::fs::read_to_string(&target).expect("file readable"),
+        "old contents",
+        "the first Enter must only warn, not overwrite"
+    );
+
+    app.key(KeyCode::Enter);
+    let contents = std::fs::read_to_string(&target).expect("file overwritten");
+    assert!(
+        contents.starts_with("# Packing List"),
+        "saving as .md must write Markdown, got: {contents}"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn paste_rebuilds_cut_list_items() {
     let mut app = sample_app();
     // Select both list items and cut them.

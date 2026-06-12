@@ -12,6 +12,14 @@ While pre-1.0, the minor version is bumped for breaking changes.
 
 ### Added
 
+- Open... (Ctrl+O) and Save As... in the File menu. Both show a modal file
+  dialog: a path input with shell-style Tab completion above a live listing
+  of the directory it points into, navigable with the arrow keys (Enter
+  descends into directories). Opening loads FTML or Markdown based on the
+  extension and starts a new document for nonexistent paths; Save As writes
+  in the format of the new extension, so saving a `.md` copy of an `.ftml`
+  document converts it. Destructive accepts — opening over unsaved changes,
+  overwriting another file — need a confirming second Enter.
 - Clipboard support: Ctrl+X/Ctrl+C cut/copy the selection and Ctrl+V pastes,
   all also available in the Edit and context menus. Ctrl+C therefore no
   longer quits Pure; use Ctrl+Q for that. The internal clipboard keeps the selection
