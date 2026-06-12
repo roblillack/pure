@@ -76,6 +76,16 @@ impl TestApp {
     /// Like [`TestApp::new`], but with a custom file path (shown in the
     /// status bar).
     pub fn with_path(width: u16, height: u16, document: Document, path: PathBuf) -> Self {
+        Self::build(width, height, document, Some(path))
+    }
+
+    /// Like [`TestApp::new`], but untitled — no backing file, as when Pure
+    /// is started without an argument.
+    pub fn untitled(width: u16, height: u16, document: Document) -> Self {
+        Self::build(width, height, document, None)
+    }
+
+    fn build(width: u16, height: u16, document: Document, path: Option<PathBuf>) -> Self {
         let mut app = App::new(document, path, DocumentFormat::Ftml, None);
         app.set_interactive(false);
         let terminal = Terminal::new(TestBackend::new(width, height)).expect("test terminal");

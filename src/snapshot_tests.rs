@@ -432,9 +432,88 @@ fn esc_cancels_file_dialog() {
 /// Open the Save As dialog through the File menu.
 fn open_save_as_dialog(app: &mut TestApp) {
     app.key_with(KeyCode::Char('f'), KeyModifiers::ALT);
+    app.key(KeyCode::Down); // Open...
     app.key(KeyCode::Down); // Save
     app.key(KeyCode::Down); // Save As...
     app.key(KeyCode::Enter);
+}
+
+#[test]
+fn untitled_document_shows_untitled_in_status_bar() {
+    let mut app = TestApp::untitled(WIDTH, HEIGHT, sample_document());
+    assert_svg("untitled_status_bar", &mut app);
+}
+
+#[test]
+fn ctrl_n_replaces_document_with_untitled_one() {
+    let mut app = sample_app();
+    app.ctrl('n');
+    assert_svg("new_document", &mut app);
+}
+
+#[test]
+fn ctrl_n_asks_before_discarding_unsaved_changes() {
+    let mut app = sample_app();
+    app.type_text("Summer ");
+    app.ctrl('n');
+    assert!(
+        app.svg().contains("Summer"),
+        "the first Ctrl+N must only warn, not discard the document"
+    );
+    assert_svg("new_document_unsaved_warning", &mut app);
+    app.ctrl('n');
+    assert_svg("new_document_after_confirm", &mut app);
+}
+
+#[test]
+fn typing_after_new_document_warning_requires_another_warning() {
+    let mut app = sample_app();
+    app.type_text("Summer ");
+    app.ctrl('n');
+    // Editing after the warning invalidates it: the next Ctrl+N warns again.
+    app.type_text("and Winter ");
+    app.ctrl('n');
+    assert!(
+        app.svg().contains("Winter"),
+        "Ctrl+N after further edits must warn again instead of discarding"
+    );
+}
+
+#[test]
+fn saving_untitled_document_opens_save_as_dialog() {
+    let dir = std::env::temp_dir().join(format!("pure-untitled-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("create temp dir");
+    let target = dir.join("named.ftml");
+    let _ = std::fs::remove_file(&target);
+
+    let mut app = TestApp::untitled(WIDTH, HEIGHT, sample_document());
+    app.ctrl('s');
+    assert!(
+        app.svg().contains("Save As"),
+        "Ctrl+S on an untitled document must open the Save As dialog"
+    );
+
+    app.type_text(target.to_str().expect("utf-8 temp path"));
+    app.key(KeyCode::Enter);
+    let contents = std::fs::read_to_string(&target).expect("file saved under the typed name");
+    assert!(
+        contents.contains("Packing List"),
+        "saved file must contain the document, got: {contents}"
+    );
+
+    // Now that the document has a name, Ctrl+S saves directly.
+    app.type_text("More ");
+    app.ctrl('s');
+    assert!(
+        !app.svg().contains("Save As"),
+        "Ctrl+S on a named document must save without a dialog"
+    );
+    let contents = std::fs::read_to_string(&target).expect("file saved again");
+    assert!(
+        contents.contains("More"),
+        "the second save must write the edited document, got: {contents}"
+    );
+    std::fs::remove_dir_all(&dir).ok();
 }
 
 #[test]

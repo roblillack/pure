@@ -9,6 +9,7 @@
 /// An application-level command reachable from the menu bar.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AppAction {
+    New,
     Open,
     Save,
     SaveAs,
@@ -71,6 +72,7 @@ pub const MENU_BAR: &[MenuDef] = &[
         title: "File",
         accel_index: 0,
         entries: &[
+            item("New", Some("^N"), AppAction::New),
             item("Open...", Some("^O"), AppAction::Open),
             MenuBarEntry::Separator,
             item("Save", Some("^S"), AppAction::Save),

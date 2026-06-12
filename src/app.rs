@@ -554,6 +554,9 @@ pub struct App {
     context_menu: Option<ContextMenuState>,
     menu_bar: Option<MenuBarState>,
     file_dialog: Option<FileDialogState>,
+    /// Whether the next New command may discard unsaved changes: the first
+    /// one only warns. Cleared again by any edit.
+    confirm_new: bool,
     last_click_instant: Option<Instant>,
     last_click_position: Option<(u16, u16)>,
     last_click_button: Option<MouseButton>,
@@ -1682,6 +1685,7 @@ impl App {
     fn execute_app_action(&mut self, action: AppAction) -> Result<()> {
         let previous_cursor = self.display.cursor_pointer();
         match action {
+            AppAction::New => self.new_document(),
             AppAction::Open => self.open_file_dialog(FileDialogKind::Open),
             AppAction::Save => self.save()?,
             AppAction::SaveAs => self.open_file_dialog(FileDialogKind::SaveAs),
@@ -1727,7 +1731,11 @@ impl App {
         }
 
         let position = self.cursor_position_text();
-        let filename = self.file_path.display().to_string();
+        let filename = self
+            .file_path
+            .as_ref()
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| "Untitled".to_string());
         let marker = if self.dirty { "*" } else { "" };
         let breadcrumbs = self.breadcrumbs_text();
         let word_count = self.count_words();
@@ -2219,6 +2227,9 @@ impl App {
                     (KeyCode::Char('o'), m) if m.contains(KeyModifiers::CONTROL) => {
                         self.open_file_dialog(FileDialogKind::Open);
                     }
+                    (KeyCode::Char('n'), m) if m.contains(KeyModifiers::CONTROL) => {
+                        self.new_document();
+                    }
                     (KeyCode::F(9), _) => {
                         self.toggle_reveal_codes();
                     }
@@ -2451,21 +2462,28 @@ impl App {
     }
 
     fn save(&mut self) -> Result<()> {
+        // An untitled document needs a name first; saving continues from
+        // the Save As dialog.
+        let Some(path) = &self.file_path else {
+            self.open_file_dialog(FileDialogKind::SaveAs);
+            return Ok(());
+        };
+
         match self.document_format {
             DocumentFormat::Ftml => {
                 let writer = Writer::new();
                 let contents = writer
                     .write_to_string(self.display.document())
                     .context("failed to render FTML")?;
-                fs::write(&self.file_path, contents)
-                    .with_context(|| format!("failed to write {}", self.file_path.display()))?;
+                fs::write(path, contents)
+                    .with_context(|| format!("failed to write {}", path.display()))?;
             }
             DocumentFormat::Markdown => {
                 let mut contents = Vec::new();
                 markdown::write(&mut contents, self.display.document())
                     .context("failed to render Markdown")?;
-                fs::write(&self.file_path, contents)
-                    .with_context(|| format!("failed to write {}", self.file_path.display()))?;
+                fs::write(path, contents)
+                    .with_context(|| format!("failed to write {}", path.display()))?;
             }
         }
 
@@ -2478,7 +2496,7 @@ impl App {
         let initial_input = match kind {
             // Start in the current file's directory so its siblings are
             // listed right away.
-            FileDialogKind::Open => match self.file_path.parent() {
+            FileDialogKind::Open => match self.file_path.as_ref().and_then(|path| path.parent()) {
                 Some(parent) if !parent.as_os_str().is_empty() => {
                     let parent = parent.display().to_string();
                     if parent.ends_with('/') {
@@ -2491,7 +2509,11 @@ impl App {
             },
             // Suggest the current path so saving under a sibling name only
             // needs the file name edited.
-            FileDialogKind::SaveAs => self.file_path.display().to_string(),
+            FileDialogKind::SaveAs => self
+                .file_path
+                .as_ref()
+                .map(|path| path.display().to_string())
+                .unwrap_or_default(),
         };
         self.file_dialog = Some(FileDialogState::new(kind, initial_input));
     }
@@ -2567,7 +2589,9 @@ impl App {
         let kind = dialog.kind();
         let needs_confirmation = match kind {
             FileDialogKind::Open => self.dirty,
-            FileDialogKind::SaveAs => path != self.file_path && path.exists(),
+            FileDialogKind::SaveAs => {
+                self.file_path.as_deref() != Some(path.as_path()) && path.exists()
+            }
         };
         if needs_confirmation && dialog.pending_confirm() != Some(path.as_path()) {
             dialog.set_pending_confirm(path);
@@ -2581,24 +2605,51 @@ impl App {
         }
     }
 
+    /// Swap in `document` as the current document and reset all
+    /// per-document state (undo history, selection, scroll, dirty flag).
+    /// Reveal codes mode survives the swap.
+    fn replace_document(
+        &mut self,
+        document: Document,
+        path: Option<PathBuf>,
+        format: DocumentFormat,
+    ) {
+        let reveal_codes = self.display.reveal_codes();
+        let mut editor = DocumentEditor::new(document);
+        editor.ensure_cursor_selectable();
+        self.display = EditorDisplay::new(editor);
+        self.display.set_reveal_codes(reveal_codes);
+        self.file_path = path;
+        self.document_format = format;
+        self.dirty = false;
+        self.confirm_new = false;
+        self.scroll_top = 0;
+        self.selection_anchor = None;
+        self.needs_position_rebuild = true;
+    }
+
+    /// Start an untitled document. With unsaved changes the first call only
+    /// warns; repeating the command discards them.
+    fn new_document(&mut self) {
+        if self.dirty && !self.confirm_new {
+            self.confirm_new = true;
+            self.status_message = Some((
+                "Unsaved changes — select New again to discard them".to_string(),
+                Instant::now(),
+            ));
+            return;
+        }
+        self.replace_document(Document::new(), None, DocumentFormat::Ftml);
+        self.status_message = Some(("New document".to_string(), Instant::now()));
+    }
+
     /// Replace the current document with the one loaded from `path`. A
     /// nonexistent path starts a new document there, mirroring the CLI.
     fn open_file(&mut self, path: PathBuf) {
         match load_document(&path) {
             Ok((document, format, message)) => {
-                let reveal_codes = self.display.reveal_codes();
-                let mut editor = DocumentEditor::new(document);
-                editor.ensure_cursor_selectable();
-                self.display = EditorDisplay::new(editor);
-                self.display.set_reveal_codes(reveal_codes);
-                self.file_path = path;
-                self.document_format = format;
-                self.dirty = false;
-                self.scroll_top = 0;
-                self.selection_anchor = None;
-                self.needs_position_rebuild = true;
-                let message =
-                    message.unwrap_or_else(|| format!("Opened {}", self.file_path.display()));
+                let message = message.unwrap_or_else(|| format!("Opened {}", path.display()));
+                self.replace_document(document, Some(path), format);
                 self.status_message = Some((message, Instant::now()));
             }
             Err(err) => {
@@ -2610,15 +2661,16 @@ impl App {
     /// Save under a new path; the format follows the new extension. On
     /// failure the previous path and format are restored.
     fn save_as(&mut self, path: PathBuf) {
-        let previous_path = std::mem::replace(&mut self.file_path, path);
+        let previous_path = self.file_path.take();
         let previous_format = self.document_format;
-        self.document_format = DocumentFormat::from_path(&self.file_path);
+        self.document_format = DocumentFormat::from_path(&path);
+        self.file_path = Some(path);
         match self.save() {
             Ok(()) => {
-                self.status_message = Some((
-                    format!("Saved {}", self.file_path.display()),
-                    Instant::now(),
-                ));
+                if let Some(path) = &self.file_path {
+                    self.status_message =
+                        Some((format!("Saved {}", path.display()), Instant::now()));
+                }
             }
             Err(err) => {
                 self.file_path = previous_path;
@@ -2630,6 +2682,7 @@ impl App {
 
     fn mark_dirty(&mut self) {
         self.dirty = true;
+        self.confirm_new = false;
         // EditorDisplay now handles layout updates automatically in its wrapper methods
         // (insert_char, delete, backspace, etc.) which includes position tracking via
         // incremental updates. No need to force a full re-render here.
