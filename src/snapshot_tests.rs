@@ -193,6 +193,44 @@ fn inline_style_keeps_cursor_and_backspace_after_reveal_tag_removes_style() {
 }
 
 #[test]
+fn stacked_inline_styles_render_combined_and_unstack_via_reveal_tag() {
+    let document = ftml! {
+        p { "Stacking styles gets messy." }
+    };
+    let mut app = TestApp::new(WIDTH, HEIGHT, document);
+
+    // Embolden "styles gets messy" …
+    for _ in 0..9 {
+        app.key(KeyCode::Right);
+    }
+    for _ in 0..17 {
+        app.key_with(KeyCode::Right, KeyModifiers::SHIFT);
+    }
+    app.key(KeyCode::Esc);
+    app.key(KeyCode::Char('b'));
+
+    // … then highlight "gets messy" on top: both styles must render.
+    for _ in 0..2 {
+        app.key_with(KeyCode::Left, KeyModifiers::CONTROL | KeyModifiers::SHIFT);
+    }
+    app.key(KeyCode::Esc);
+    app.key_with(KeyCode::Char('H'), KeyModifiers::SHIFT);
+    assert_svg("stacked_styles_render_combined", &mut app);
+
+    // Reveal codes shows the highlight nested inside the bold span.
+    app.key_with(KeyCode::Char('v'), KeyModifiers::ALT);
+    app.key(KeyCode::Enter);
+    assert_svg("stacked_styles_nest_in_reveal_codes", &mut app);
+
+    // Deleting the `<Bold]` end tag unstacks: the whole bold range loses its
+    // bold while the nested highlight survives.
+    app.key(KeyCode::End);
+    app.key(KeyCode::Left);
+    app.key(KeyCode::Backspace);
+    assert_svg("stacked_styles_unstack_via_reveal_tag", &mut app);
+}
+
+#[test]
 fn editing_keeps_reveal_codes_visible() {
     let document = ftml! {
         p { "Pure is a modern, " i { "terminal-based word processor" } "." }

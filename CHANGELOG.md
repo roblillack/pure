@@ -12,6 +12,10 @@ While pre-1.0, the minor version is bumped for breaking changes.
 
 ### Added
 
+- Inline styles now stack: applying a style to already-styled text layers it
+  on top instead of replacing it, so e.g. bold and highlight combine and
+  render together. Reveal codes show the nesting, and deleting a tag there
+  removes just that style while the styles stacked inside it survive. (#32)
 - A menu bar in the typical TUI style: File, Edit, Format, and View menus
   across the top of the screen, opened with F10 or an Alt+letter accelerator
   and driven with the keyboard. (#29)
