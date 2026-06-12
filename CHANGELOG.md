@@ -12,6 +12,16 @@ While pre-1.0, the minor version is bumped for breaking changes.
 
 ### Added
 
+- Clipboard support: Ctrl+X/Ctrl+C cut/copy the selection and Ctrl+V pastes,
+  all also available in the Edit and context menus. Ctrl+C therefore no
+  longer quits Pure; use Ctrl+Q for that. The internal clipboard keeps the selection
+  as document structure, so pasting within Pure restores inline styles,
+  paragraph types, and list structure. Copied text also reaches the system
+  clipboard — as plain text, with blank lines between paragraphs — through
+  the terminal with the OSC 52 escape sequence, and pasting from other
+  applications works through the terminal's own paste shortcut (bracketed
+  paste), arriving as a single undoable edit that turns blank lines back
+  into paragraph breaks. (#33)
 - Inline styles now stack: applying a style to already-styled text layers it
   on top instead of replacing it, so e.g. bold and highlight combine and
   render together. Reveal codes show the nesting, and deleting a tag there

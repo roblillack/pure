@@ -3308,3 +3308,225 @@ fn backspace_at_styled_span_start_deletes_previous_character() {
     assert_eq!(spans[1].text, "styled");
     assert_eq!(spans[1].style, InlineStyle::Bold);
 }
+
+#[test]
+fn selection_text_within_single_span() {
+    let document = Document::new().with_paragraphs(vec![text_paragraph("Alpha")]);
+    let editor = DocumentEditor::new(document);
+
+    let start = editor
+        .pointer_at_paragraph_char_offset(&ParagraphPath::new_root(0), 1)
+        .expect("pointer for start");
+    let end = editor
+        .pointer_at_paragraph_char_offset(&ParagraphPath::new_root(0), 4)
+        .expect("pointer for end");
+
+    assert_eq!(
+        editor.selection_text(&(start, end)),
+        Some("lph".to_string())
+    );
+}
+
+#[test]
+fn selection_text_concatenates_styled_spans() {
+    let mut styled = Span::new_text("essentials");
+    styled.style = InlineStyle::Bold;
+    let paragraph = Paragraph::new_text().with_content(vec![
+        Span::new_text("Pack the "),
+        styled,
+        Span::new_text(" now."),
+    ]);
+    let editor = DocumentEditor::new(Document::new().with_paragraphs(vec![paragraph]));
+
+    let start = editor
+        .pointer_at_paragraph_char_offset(&ParagraphPath::new_root(0), 5)
+        .expect("pointer for start");
+    let end = editor
+        .pointer_at_paragraph_char_offset(&ParagraphPath::new_root(0), 23)
+        .expect("pointer for end");
+
+    assert_eq!(
+        editor.selection_text(&(start, end)),
+        Some("the essentials now".to_string())
+    );
+}
+
+#[test]
+fn selection_text_separates_paragraphs_with_blank_line() {
+    let document = Document::new().with_paragraphs(vec![
+        text_paragraph("Alpha"),
+        text_paragraph("Beta"),
+        text_paragraph("Gamma"),
+    ]);
+    let editor = DocumentEditor::new(document);
+
+    let start = editor
+        .pointer_at_paragraph_char_offset(&ParagraphPath::new_root(0), 2)
+        .expect("pointer for start");
+    let end = editor
+        .pointer_at_paragraph_char_offset(&ParagraphPath::new_root(2), 3)
+        .expect("pointer for end");
+
+    assert_eq!(
+        editor.selection_text(&(start, end)),
+        Some("pha\n\nBeta\n\nGam".to_string())
+    );
+}
+
+#[test]
+fn selection_text_accepts_reversed_pointers() {
+    let document =
+        Document::new().with_paragraphs(vec![text_paragraph("Alpha"), text_paragraph("Beta")]);
+    let editor = DocumentEditor::new(document);
+
+    let start = editor
+        .pointer_at_paragraph_char_offset(&ParagraphPath::new_root(0), 2)
+        .expect("pointer for start");
+    let end = editor
+        .pointer_at_paragraph_char_offset(&ParagraphPath::new_root(1), 2)
+        .expect("pointer for end");
+
+    assert_eq!(
+        editor.selection_text(&(end, start)),
+        Some("pha\n\nBe".to_string())
+    );
+}
+
+#[test]
+fn selection_text_covers_list_entries() {
+    let document = Document::new().with_paragraphs(vec![unordered_list(&["Passport", "Tickets"])]);
+    let editor = DocumentEditor::new(document);
+
+    let start = pointer_to_entry_span(0, 0, 0);
+    let mut end = pointer_to_entry_span(0, 1, 0);
+    end.offset = 7;
+
+    assert_eq!(
+        editor.selection_text(&(start, end)),
+        Some("Passport\n\nTickets".to_string())
+    );
+}
+
+#[test]
+fn selection_text_is_none_for_empty_selection() {
+    let document = Document::new().with_paragraphs(vec![text_paragraph("Alpha")]);
+    let editor = DocumentEditor::new(document);
+
+    let pointer = editor
+        .pointer_at_paragraph_char_offset(&ParagraphPath::new_root(0), 2)
+        .expect("pointer");
+
+    assert_eq!(editor.selection_text(&(pointer.clone(), pointer)), None);
+}
+
+#[test]
+fn selection_fragment_preserves_inline_styles() {
+    let mut styled = Span::new_text("essentials");
+    styled.style = InlineStyle::Bold;
+    let paragraph = Paragraph::new_text().with_content(vec![
+        Span::new_text("Pack the "),
+        styled,
+        Span::new_text(" now."),
+    ]);
+    let editor = DocumentEditor::new(Document::new().with_paragraphs(vec![paragraph]));
+
+    // Select "the essentials".
+    let start = editor
+        .pointer_at_paragraph_char_offset(&ParagraphPath::new_root(0), 5)
+        .expect("pointer for start");
+    let end = editor
+        .pointer_at_paragraph_char_offset(&ParagraphPath::new_root(0), 19)
+        .expect("pointer for end");
+
+    let fragment = editor
+        .selection_fragment(&(start, end))
+        .expect("selection fragment");
+    assert_eq!(fragment.len(), 1);
+    let spans: Vec<(String, InlineStyle)> = fragment[0]
+        .content()
+        .iter()
+        .filter(|span| !span.text.is_empty())
+        .map(|span| (span.text.clone(), span.style))
+        .collect();
+    assert_eq!(
+        spans,
+        vec![
+            ("the ".to_string(), InlineStyle::None),
+            ("essentials".to_string(), InlineStyle::Bold),
+        ]
+    );
+}
+
+#[test]
+fn selection_fragment_preserves_paragraph_types() {
+    let document = ftml! {
+        h1 { "Packing List" }
+        p { "Pack things." }
+    };
+    let editor = DocumentEditor::new(document);
+
+    // From "List" in the heading into "Pack" in the text paragraph.
+    let start = editor
+        .pointer_at_paragraph_char_offset(&ParagraphPath::new_root(0), 8)
+        .expect("pointer for start");
+    let end = editor
+        .pointer_at_paragraph_char_offset(&ParagraphPath::new_root(1), 4)
+        .expect("pointer for end");
+
+    let fragment = editor
+        .selection_fragment(&(start, end))
+        .expect("selection fragment");
+    assert_eq!(fragment.len(), 2);
+    assert_eq!(fragment[0].paragraph_type(), ParagraphType::Header1);
+    assert_eq!(fragment[0].content()[0].text, "List");
+    assert_eq!(fragment[1].paragraph_type(), ParagraphType::Text);
+    assert_eq!(fragment[1].content()[0].text, "Pack");
+}
+
+#[test]
+fn selection_fragment_trims_list_entries() {
+    let document = Document::new().with_paragraphs(vec![unordered_list(&[
+        "Passport",
+        "Tickets",
+        "Sunscreen",
+    ])]);
+    let editor = DocumentEditor::new(document);
+
+    // From the middle of "Passport" to the middle of "Tickets".
+    let mut start = pointer_to_entry_span(0, 0, 0);
+    start.offset = 4;
+    let mut end = pointer_to_entry_span(0, 1, 0);
+    end.offset = 4;
+
+    let fragment = editor
+        .selection_fragment(&(start, end))
+        .expect("selection fragment");
+    assert_eq!(fragment.len(), 1);
+    assert_eq!(fragment[0].paragraph_type(), ParagraphType::UnorderedList);
+    let entries = fragment[0].entries();
+    assert_eq!(entries.len(), 2, "third entry must be trimmed away");
+    assert_eq!(entries[0][0].content()[0].text, "port");
+    assert_eq!(entries[1][0].content()[0].text, "Tick");
+}
+
+#[test]
+fn selection_fragment_does_not_modify_the_document() {
+    let document =
+        Document::new().with_paragraphs(vec![text_paragraph("Alpha"), text_paragraph("Beta")]);
+    let editor = DocumentEditor::new(document);
+
+    let start = editor
+        .pointer_at_paragraph_char_offset(&ParagraphPath::new_root(0), 2)
+        .expect("pointer for start");
+    let end = editor
+        .pointer_at_paragraph_char_offset(&ParagraphPath::new_root(1), 2)
+        .expect("pointer for end");
+
+    editor
+        .selection_fragment(&(start, end))
+        .expect("selection fragment");
+
+    assert_eq!(editor.document().paragraphs.len(), 2);
+    assert_eq!(editor.document().paragraphs[0].content()[0].text, "Alpha");
+    assert_eq!(editor.document().paragraphs[1].content()[0].text, "Beta");
+}

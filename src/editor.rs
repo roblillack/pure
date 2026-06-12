@@ -120,6 +120,14 @@ impl ParagraphPath {
             None
         }
     }
+
+    /// Shift the root index down by `base`, e.g. to re-anchor the path in a
+    /// document that contains only a slice of the original root paragraphs.
+    fn rebase_root(&mut self, base: usize) {
+        if let Some(PathStep::Root(idx)) = self.steps.first_mut() {
+            *idx = idx.saturating_sub(base);
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
@@ -358,6 +366,173 @@ impl DocumentEditor {
         ordered.extend(unkeyed);
 
         Some(ordered)
+    }
+
+    /// The plain text covered by a selection: span texts concatenated in
+    /// document order, with a blank line between paragraphs (so a paste of
+    /// the same text recreates the paragraph structure, and the result reads
+    /// naturally as Markdown). Line breaks within a paragraph are literal
+    /// `\n` characters in the span text and pass through unchanged.
+    pub fn selection_text(&self, selection: &(CursorPointer, CursorPointer)) -> Option<String> {
+        if self.segments.is_empty() {
+            return None;
+        }
+
+        let (start, end) = self.normalize_selection(selection)?;
+        let start_key = self.pointer_key(&start)?;
+        let end_key = self.pointer_key(&end)?;
+
+        let mut text = String::new();
+        let mut current_paragraph: Option<&ParagraphPath> = None;
+        for segment_index in start_key.segment_index..=end_key.segment_index {
+            let Some(segment) = self.segments.get(segment_index) else {
+                continue;
+            };
+            if segment.kind != SegmentKind::Text {
+                continue;
+            }
+            let Some(segment_text) = self.segment_text(segment) else {
+                continue;
+            };
+
+            let seg_start = if segment_index == start_key.segment_index {
+                start_key.offset.min(segment.len)
+            } else {
+                0
+            };
+            let seg_end = if segment_index == end_key.segment_index {
+                end_key.offset.min(segment.len)
+            } else {
+                segment.len
+            };
+
+            if let Some(previous) = current_paragraph
+                && *previous != segment.paragraph_path
+            {
+                text.push_str("\n\n");
+            }
+            current_paragraph = Some(&segment.paragraph_path);
+
+            if seg_start < seg_end {
+                text.extend(
+                    segment_text
+                        .chars()
+                        .skip(seg_start)
+                        .take(seg_end - seg_start),
+                );
+            }
+        }
+
+        if text.is_empty() { None } else { Some(text) }
+    }
+
+    /// The selection as document structure: clones of the root paragraphs the
+    /// selection touches, trimmed down to exactly the selected content. This
+    /// preserves paragraph types, list/checklist structure, and inline styles,
+    /// and is what the in-app clipboard stores so pasting can restore
+    /// formatting that the plain-text rendering loses.
+    ///
+    /// The trimming runs the regular selection-removal machinery on a scratch
+    /// editor: first everything behind the selection is removed, then
+    /// everything in front of it.
+    pub fn selection_fragment(
+        &self,
+        selection: &(CursorPointer, CursorPointer),
+    ) -> Option<Vec<Paragraph>> {
+        if self.segments.is_empty() {
+            return None;
+        }
+
+        let (mut start, mut end) = self.normalize_selection(selection)?;
+        self.pointer_key(&start)?;
+        self.pointer_key(&end)?;
+        let first_root = start.paragraph_path.root_index()?;
+        let last_root = end.paragraph_path.root_index()?;
+
+        let mut document = Document::new();
+        document.paragraphs = self
+            .document
+            .paragraphs
+            .get(first_root..=last_root)?
+            .to_vec();
+        start.paragraph_path.rebase_root(first_root);
+        end.paragraph_path.rebase_root(first_root);
+
+        let mut scratch = DocumentEditor::new(document);
+        // An end pointer sitting at the end of a span describes the same
+        // character position as the start of the following span, but the
+        // backward removal below stops on pointer identity — normalize to
+        // the latter form so it does not walk one span too far.
+        let end = scratch.start_biased_pointer(&end);
+        if let Some(document_end) = scratch.document_end_pointer()
+            && scratch.compare_pointers(&end, &document_end) == Some(Ordering::Less)
+        {
+            scratch.remove_selection(&(end, document_end));
+        }
+        if let Some(document_start) = scratch.document_start_pointer()
+            && scratch.compare_pointers(&document_start, &start) == Some(Ordering::Less)
+        {
+            scratch.remove_selection(&(document_start, start));
+        }
+
+        Some(std::mem::take(&mut scratch.document.paragraphs))
+    }
+
+    /// Re-express a pointer at the end of a span as the start of the next
+    /// span when both describe the same character position. Boundaries
+    /// between paragraphs are left alone — there the two forms are distinct
+    /// positions, not aliases.
+    fn start_biased_pointer(&self, pointer: &CursorPointer) -> CursorPointer {
+        let Some(offset) = self.global_char_offset_of_pointer(pointer) else {
+            return pointer.clone();
+        };
+        let Some(candidate) = self.pointer_at_global_char_offset(offset) else {
+            return pointer.clone();
+        };
+        if candidate.paragraph_path == pointer.paragraph_path {
+            candidate
+        } else {
+            pointer.clone()
+        }
+    }
+
+    /// A pointer's position as a character offset over the whole document's
+    /// text content. Counterpart to
+    /// [`DocumentEditor::pointer_at_global_char_offset`].
+    pub(crate) fn global_char_offset_of_pointer(&self, pointer: &CursorPointer) -> Option<usize> {
+        let key = self.pointer_key(pointer)?;
+        let mut offset = 0;
+        for segment in &self.segments[..key.segment_index] {
+            if segment.kind == SegmentKind::Text {
+                offset += segment.len;
+            }
+        }
+        Some(offset + key.offset)
+    }
+
+    fn document_start_pointer(&self) -> Option<CursorPointer> {
+        self.segments
+            .iter()
+            .find(|segment| segment.kind == SegmentKind::Text)
+            .map(|segment| CursorPointer {
+                paragraph_path: segment.paragraph_path.clone(),
+                span_path: segment.span_path.clone(),
+                offset: 0,
+                segment_kind: SegmentKind::Text,
+            })
+    }
+
+    fn document_end_pointer(&self) -> Option<CursorPointer> {
+        self.segments
+            .iter()
+            .rev()
+            .find(|segment| segment.kind == SegmentKind::Text)
+            .map(|segment| CursorPointer {
+                paragraph_path: segment.paragraph_path.clone(),
+                span_path: segment.span_path.clone(),
+                offset: segment.len,
+                segment_kind: SegmentKind::Text,
+            })
     }
 
     pub(crate) fn pointer_for_character(&self, target: char) -> Option<CursorPointer> {
@@ -1617,6 +1792,80 @@ impl DocumentEditor {
         }
     }
 
+    /// The cursor position as a character offset over the whole document's
+    /// text content. Character offsets are stable under restyling and
+    /// paragraph type changes (neither adds or removes characters), which
+    /// makes them suitable for re-finding positions across such edits.
+    pub(crate) fn cursor_global_char_offset(&self) -> usize {
+        let mut offset = 0;
+        for (index, segment) in self.segments.iter().enumerate() {
+            if index == self.cursor_segment {
+                if segment.kind == SegmentKind::Text {
+                    offset += self.cursor.offset.min(segment.len);
+                }
+                break;
+            }
+            if segment.kind == SegmentKind::Text {
+                offset += segment.len;
+            }
+        }
+        offset
+    }
+
+    /// Resolve a document-wide character offset back to a pointer. Offsets on
+    /// a paragraph boundary resolve to the start of the following paragraph.
+    pub(crate) fn pointer_at_global_char_offset(&self, offset: usize) -> Option<CursorPointer> {
+        let mut remaining = offset;
+        let mut last_text: Option<&SegmentRef> = None;
+        for segment in &self.segments {
+            if segment.kind != SegmentKind::Text {
+                continue;
+            }
+            if remaining < segment.len {
+                return Some(CursorPointer {
+                    paragraph_path: segment.paragraph_path.clone(),
+                    span_path: segment.span_path.clone(),
+                    offset: remaining,
+                    segment_kind: SegmentKind::Text,
+                });
+            }
+            remaining -= segment.len;
+            last_text = Some(segment);
+        }
+        if remaining == 0 {
+            last_text.map(|segment| CursorPointer {
+                paragraph_path: segment.paragraph_path.clone(),
+                span_path: segment.span_path.clone(),
+                offset: segment.len,
+                segment_kind: SegmentKind::Text,
+            })
+        } else {
+            None
+        }
+    }
+
+    /// Like [`DocumentEditor::pointer_at_global_char_offset`], but offsets on
+    /// a paragraph boundary resolve to the end of the preceding paragraph —
+    /// the right bias for placing the cursor at the end of inserted content.
+    pub(crate) fn pointer_at_global_char_offset_end(&self, offset: usize) -> Option<CursorPointer> {
+        let mut remaining = offset;
+        for segment in &self.segments {
+            if segment.kind != SegmentKind::Text {
+                continue;
+            }
+            if remaining <= segment.len {
+                return Some(CursorPointer {
+                    paragraph_path: segment.paragraph_path.clone(),
+                    span_path: segment.span_path.clone(),
+                    offset: remaining,
+                    segment_kind: SegmentKind::Text,
+                });
+            }
+            remaining -= segment.len;
+        }
+        None
+    }
+
     fn pointer_at_paragraph_char_offset(
         &self,
         path: &ParagraphPath,
@@ -2467,7 +2716,7 @@ impl DocumentEditor {
         Some((segment.paragraph_path, char_offset))
     }
 
-    fn current_paragraph_is_empty(&self) -> bool {
+    pub(crate) fn current_paragraph_is_empty(&self) -> bool {
         paragraph_ref(&self.document, &self.cursor.paragraph_path)
             .map(paragraph_is_empty)
             .unwrap_or(false)

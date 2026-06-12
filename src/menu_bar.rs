@@ -13,6 +13,9 @@ pub enum AppAction {
     Quit,
     Undo,
     Redo,
+    Cut,
+    Copy,
+    Paste,
     InsertLineBreak,
     InsertSiblingParagraph,
     FormattingMenu,
@@ -61,14 +64,6 @@ const fn item(
     })
 }
 
-const fn disabled_item(label: &'static str) -> MenuBarEntry {
-    MenuBarEntry::Item(MenuBarItem {
-        label,
-        shortcut: None,
-        action: None,
-    })
-}
-
 pub const MENU_BAR: &[MenuDef] = &[
     MenuDef {
         title: "File",
@@ -86,9 +81,9 @@ pub const MENU_BAR: &[MenuDef] = &[
             item("Undo", Some("^Z"), AppAction::Undo),
             item("Redo", Some("^Y"), AppAction::Redo),
             MenuBarEntry::Separator,
-            disabled_item("Cut"),
-            disabled_item("Copy"),
-            disabled_item("Paste"),
+            item("Cut", Some("^X"), AppAction::Cut),
+            item("Copy", Some("^C"), AppAction::Copy),
+            item("Paste", Some("^V"), AppAction::Paste),
         ],
     },
     MenuDef {
