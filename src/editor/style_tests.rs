@@ -132,6 +132,135 @@ fn apply_inline_style_in_checklist_item() {
 }
 
 #[test]
+fn apply_inline_style_stacks_on_styled_span() {
+    let document = Document::new().with_paragraphs(vec![text_paragraph(
+        "Sometimes, stacking multiple styles gets messy.",
+    )]);
+    let mut editor = DocumentEditor::new(document);
+
+    // Embolden "multiple styles gets messy" …
+    let mut start = pointer_to_root_span(0);
+    start.offset = 20;
+    let mut end = pointer_to_root_span(0);
+    end.offset = 46;
+    assert!(editor.apply_inline_style_to_selection(&(start, end), InlineStyle::Bold));
+
+    // … then highlight "gets messy" inside the bold range.
+    let mut start = pointer_to_root_span(0);
+    start.span_path = SpanPath::new(vec![1]);
+    start.offset = 16;
+    let mut end = pointer_to_root_span(0);
+    end.span_path = SpanPath::new(vec![1]);
+    end.offset = 26;
+    assert!(editor.apply_inline_style_to_selection(&(start, end), InlineStyle::Highlight));
+
+    let doc = editor.document();
+    let spans = doc.paragraphs[0].content();
+    assert_eq!(spans.len(), 3);
+    assert_eq!(spans[0].text, "Sometimes, stacking ");
+    assert_eq!(spans[0].style, InlineStyle::None);
+    assert_eq!(spans[1].text, "multiple styles ");
+    assert_eq!(spans[1].style, InlineStyle::Bold);
+    assert_eq!(spans[1].children.len(), 1);
+    assert_eq!(spans[1].children[0].text, "gets messy");
+    assert_eq!(spans[1].children[0].style, InlineStyle::Highlight);
+    assert_eq!(spans[2].text, ".");
+    assert_eq!(spans[2].style, InlineStyle::None);
+}
+
+#[test]
+fn apply_inline_style_already_styled_is_noop() {
+    let document = Document::new().with_paragraphs(vec![text_paragraph("hello world")]);
+    let mut editor = DocumentEditor::new(document);
+
+    let mut start = pointer_to_root_span(0);
+    start.offset = 0;
+    let mut end = pointer_to_root_span(0);
+    end.offset = 5;
+    assert!(
+        editor.apply_inline_style_to_selection(&(start.clone(), end.clone()), InlineStyle::Bold)
+    );
+
+    // Re-selecting part of the bold range and bolding again changes nothing.
+    let mut start = pointer_to_root_span(0);
+    start.offset = 1;
+    let mut end = pointer_to_root_span(0);
+    end.offset = 4;
+    assert!(!editor.apply_inline_style_to_selection(&(start, end), InlineStyle::Bold));
+
+    let doc = editor.document();
+    let spans = doc.paragraphs[0].content();
+    assert_eq!(spans.len(), 2);
+    assert_eq!(spans[0].text, "hello");
+    assert_eq!(spans[0].style, InlineStyle::Bold);
+    assert!(spans[0].children.is_empty());
+}
+
+#[test]
+fn apply_inline_style_across_styled_and_plain_spans_wraps_both() {
+    let paragraph = Paragraph::new_text().with_content(vec![
+        Span::new_text("plain "),
+        Span::new_styled(InlineStyle::Bold).with_text("bold"),
+    ]);
+    let document = Document::new().with_paragraphs(vec![paragraph]);
+    let mut editor = DocumentEditor::new(document);
+
+    let mut start = pointer_to_root_span(0);
+    start.span_path = SpanPath::new(vec![0]);
+    start.offset = 0;
+    let mut end = pointer_to_root_span(0);
+    end.span_path = SpanPath::new(vec![1]);
+    end.offset = 4;
+    assert!(editor.apply_inline_style_to_selection(&(start, end), InlineStyle::Italic));
+
+    let doc = editor.document();
+    let spans = doc.paragraphs[0].content();
+    assert_eq!(spans.len(), 1);
+    assert_eq!(spans[0].style, InlineStyle::Italic);
+    assert_eq!(spans[0].text, "plain ");
+    assert_eq!(spans[0].children.len(), 1);
+    assert_eq!(spans[0].children[0].style, InlineStyle::Bold);
+    assert_eq!(spans[0].children[0].text, "bold");
+}
+
+#[test]
+fn clear_inline_style_removes_stacked_styles() {
+    let paragraph = Paragraph::new_text().with_content(vec![
+        Span::new_text("a "),
+        Span::new_styled(InlineStyle::Bold)
+            .with_text("b ")
+            .with_children(vec![
+                Span::new_styled(InlineStyle::Highlight).with_text("c d"),
+            ]),
+    ]);
+    let document = Document::new().with_paragraphs(vec![paragraph]);
+    let mut editor = DocumentEditor::new(document);
+
+    // Clear formatting from "b c" — part of the bold text plus part of the
+    // nested highlight. Both styles must go, including the bold carried by
+    // the ancestor span.
+    let mut start = pointer_to_root_span(0);
+    start.span_path = SpanPath::new(vec![1]);
+    start.offset = 0;
+    let mut end = pointer_to_root_span(0);
+    end.span_path = SpanPath::new(vec![1, 0]);
+    end.offset = 1;
+    assert!(editor.apply_inline_style_to_selection(&(start, end), InlineStyle::None));
+
+    let doc = editor.document();
+    let spans = doc.paragraphs[0].content();
+    assert_eq!(spans.len(), 2);
+    assert_eq!(spans[0].text, "a b c");
+    assert_eq!(spans[0].style, InlineStyle::None);
+    assert!(spans[0].children.is_empty());
+    assert_eq!(spans[1].style, InlineStyle::Bold);
+    assert_eq!(spans[1].text, "");
+    assert_eq!(spans[1].children.len(), 1);
+    assert_eq!(spans[1].children[0].style, InlineStyle::Highlight);
+    assert_eq!(spans[1].children[0].text, " d");
+}
+
+#[test]
 fn apply_inline_style_keeps_cursor_position() {
     let document = Document::new().with_paragraphs(vec![text_paragraph(
         "Pure is a modern, terminal-based word processor for your terminal",
