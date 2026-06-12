@@ -30,7 +30,8 @@ recorder = []
 
 [dependencies]
 anyhow = "1.0"
-crossterm = "0.29.0"
+# `osc52` enables the clipboard module (copy via the OSC 52 escape sequence).
+crossterm = { version = "0.29.0", features = ["osc52"] }
 ratatui = "0.29"
 tdoc = { version = "0.10.0", default-features = false }
 unicode-width = "0.2.0"

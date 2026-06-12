@@ -13,6 +13,7 @@ use std::{
 
 use anyhow::{Context, Result};
 use crossterm::{
+    clipboard::CopyToClipboard,
     cursor::SetCursorStyle,
     event::{
         Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent,
@@ -111,6 +112,9 @@ enum MenuAction {
     ApplyInlineStyle(InlineStyle),
     IndentMore,
     IndentLess,
+    Cut,
+    Copy,
+    Paste,
 }
 
 #[derive(Clone, Copy)]
@@ -274,6 +278,7 @@ fn build_context_menu_entries(
     can_indent_more: bool,
     can_indent_less: bool,
     allow_paragraph_change: bool,
+    can_paste: bool,
 ) -> Vec<MenuEntry> {
     let mut entries = Vec::new();
 
@@ -312,6 +317,7 @@ fn build_context_menu_entries(
     entries.extend(default_context_menu_entries(
         has_selection,
         allow_paragraph_change,
+        can_paste,
     ));
     entries
 }
@@ -319,6 +325,7 @@ fn build_context_menu_entries(
 fn default_context_menu_entries(
     has_selection: bool,
     allow_paragraph_change: bool,
+    can_paste: bool,
 ) -> Vec<MenuEntry> {
     vec![
         MenuEntry::Section("Paragraph type"),
@@ -474,18 +481,21 @@ fn default_context_menu_entries(
         }),
         MenuEntry::Separator,
         MenuEntry::Section("Copy & paste"),
-        MenuEntry::Item(MenuItem::disabled_with_shortcut(
-            "Cut",
-            MenuShortcut::new('x'),
-        )),
-        MenuEntry::Item(MenuItem::disabled_with_shortcut(
-            "Copy",
-            MenuShortcut::new('c'),
-        )),
-        MenuEntry::Item(MenuItem::disabled_with_shortcut(
-            "Paste",
-            MenuShortcut::new('v'),
-        )),
+        MenuEntry::Item(if has_selection {
+            MenuItem::enabled_with_shortcut("Cut", MenuAction::Cut, MenuShortcut::new('x'))
+        } else {
+            MenuItem::disabled_with_shortcut("Cut", MenuShortcut::new('x'))
+        }),
+        MenuEntry::Item(if has_selection {
+            MenuItem::enabled_with_shortcut("Copy", MenuAction::Copy, MenuShortcut::new('c'))
+        } else {
+            MenuItem::disabled_with_shortcut("Copy", MenuShortcut::new('c'))
+        }),
+        MenuEntry::Item(if can_paste {
+            MenuItem::enabled_with_shortcut("Paste", MenuAction::Paste, MenuShortcut::new('v'))
+        } else {
+            MenuItem::disabled_with_shortcut("Paste", MenuShortcut::new('v'))
+        }),
     ]
 }
 
@@ -495,6 +505,17 @@ fn is_context_menu_shortcut(code: KeyCode, modifiers: KeyModifiers) -> bool {
         KeyCode::Char(' ') => modifiers.contains(KeyModifiers::CONTROL),
         _ => false,
     }
+}
+
+/// What a cut or copy leaves on the internal clipboard.
+struct ClipboardContents {
+    /// Plain-text rendering of the selection — what is offered to the system
+    /// clipboard via OSC 52.
+    text: String,
+    /// The selected paragraphs themselves, so in-app paste can restore
+    /// inline styles and paragraph structure. Empty when structured
+    /// extraction was not possible; paste then falls back to `text`.
+    fragment: Vec<tdoc::Paragraph>,
 }
 
 #[derive(Clone, Debug)]
@@ -522,6 +543,11 @@ pub struct App {
     dirty: bool,
     status_message: Option<(String, Instant)>,
     selection_anchor: Option<CursorPointer>,
+    /// The last cut/copied content. Copying also sends the plain text to the
+    /// system clipboard via OSC 52, but reading that back is blocked by most
+    /// terminals, so in-app paste (Ctrl+V, menus) uses this buffer while
+    /// system-clipboard paste arrives as a bracketed-paste event.
+    clipboard: Option<ClipboardContents>,
     context_menu: Option<ContextMenuState>,
     menu_bar: Option<MenuBarState>,
     last_click_instant: Option<Instant>,
@@ -561,6 +587,7 @@ impl App {
             dirty: false,
             status_message: initial_status.map(|msg| (msg, Instant::now())),
             selection_anchor: None,
+            clipboard: None,
             context_menu: None,
             menu_bar: None,
             last_click_instant: None,
@@ -690,6 +717,109 @@ impl App {
         }
 
         inserted
+    }
+
+    /// Extract the selection as clipboard contents: its plain text plus the
+    /// structured fragment that lets in-app paste restore formatting.
+    fn selection_clipboard_contents(
+        &mut self,
+        selection: &(CursorPointer, CursorPointer),
+    ) -> Option<ClipboardContents> {
+        let text = self.display.selection_text(selection)?;
+        let fragment = self
+            .display
+            .selection_fragment(selection)
+            .unwrap_or_default();
+        Some(ClipboardContents { text, fragment })
+    }
+
+    /// Store the contents on the internal clipboard and offer the plain text
+    /// to the system clipboard via the OSC 52 escape sequence. Whether the
+    /// system clipboard actually picks it up depends on the terminal (most
+    /// modern emulators support OSC 52; tmux needs `set-clipboard on`).
+    fn copy_to_clipboard(&mut self, contents: ClipboardContents) {
+        if self.interactive {
+            execute!(
+                io::stdout(),
+                CopyToClipboard::to_clipboard_from(&contents.text)
+            )
+            .ok();
+        }
+        self.clipboard = Some(contents);
+    }
+
+    fn copy_selection(&mut self) -> bool {
+        let Some(selection) = self.current_selection() else {
+            self.status_message = Some(("Nothing selected".to_string(), Instant::now()));
+            return false;
+        };
+        let Some(contents) = self.selection_clipboard_contents(&selection) else {
+            return false;
+        };
+        self.copy_to_clipboard(contents);
+        self.status_message = Some(("Copied to clipboard".to_string(), Instant::now()));
+        true
+    }
+
+    fn cut_selection(&mut self) -> bool {
+        let Some(selection) = self.current_selection() else {
+            self.status_message = Some(("Nothing selected".to_string(), Instant::now()));
+            return false;
+        };
+        let Some(contents) = self.selection_clipboard_contents(&selection) else {
+            return false;
+        };
+        if !self.display.remove_selection(&selection) {
+            return false;
+        }
+        self.copy_to_clipboard(contents);
+        self.selection_anchor = None;
+        self.mark_dirty();
+        self.display.set_preferred_column(None);
+        self.needs_position_rebuild = true;
+        self.status_message = Some(("Cut to clipboard".to_string(), Instant::now()));
+        true
+    }
+
+    /// Replace the selection (if any) and insert via `insert`. Shared tail
+    /// of the plain-text and structured paste paths.
+    fn paste_with(&mut self, insert: impl FnOnce(&mut EditorDisplay) -> bool) {
+        if let Some(selection) = self.current_selection() {
+            if !self.display.remove_selection(&selection) {
+                return;
+            }
+            self.selection_anchor = None;
+            self.mark_dirty();
+        }
+        if insert(&mut self.display) {
+            self.mark_dirty();
+            self.display.set_preferred_column(None);
+        }
+        self.needs_position_rebuild = true;
+        self.display.set_cursor_following(true);
+    }
+
+    /// Insert pasted plain text at the cursor. Used for bracketed paste
+    /// (system clipboard) and as fallback for internal paste.
+    fn paste_text(&mut self, text: &str) {
+        self.paste_with(|display| display.insert_text(text));
+    }
+
+    fn paste_from_clipboard(&mut self) {
+        let Some(contents) = &self.clipboard else {
+            self.status_message = Some((
+                "Nothing to paste — use the terminal's paste shortcut instead".to_string(),
+                Instant::now(),
+            ));
+            return;
+        };
+        if contents.fragment.is_empty() {
+            let text = contents.text.clone();
+            self.paste_text(&text);
+        } else {
+            let fragment = contents.fragment.clone();
+            self.paste_with(|display| display.insert_fragment(&fragment));
+        }
     }
 
     fn undo(&mut self) {
@@ -1210,6 +1340,7 @@ impl App {
             self.display.can_indent_more(),
             self.display.can_indent_less(),
             self.display.can_change_paragraph_type(),
+            self.clipboard.is_some(),
         );
         self.context_menu = Some(ContextMenuState::new(entries));
     }
@@ -1317,6 +1448,18 @@ impl App {
                 self.unindent_selection_or_cursor();
                 true
             }
+            MenuAction::Cut => {
+                self.cut_selection();
+                true
+            }
+            MenuAction::Copy => {
+                self.copy_selection();
+                true
+            }
+            MenuAction::Paste => {
+                self.paste_from_clipboard();
+                true
+            }
         }
     }
 
@@ -1412,6 +1555,13 @@ impl App {
             AppAction::Quit => self.should_quit = true,
             AppAction::Undo => self.undo(),
             AppAction::Redo => self.redo(),
+            AppAction::Cut => {
+                self.cut_selection();
+            }
+            AppAction::Copy => {
+                self.copy_selection();
+            }
+            AppAction::Paste => self.paste_from_clipboard(),
             AppAction::InsertLineBreak => {
                 self.insert_char_with_selection('\n');
             }
@@ -1933,7 +2083,17 @@ impl App {
                         self.toggle_reveal_codes();
                     }
                     (KeyCode::Char('c'), m) if m.contains(KeyModifiers::CONTROL) => {
-                        self.should_quit = true;
+                        // Copies the selection; without one the key is
+                        // ignored (quitting is Ctrl+Q).
+                        if self.current_selection().is_some() {
+                            self.copy_selection();
+                        }
+                    }
+                    (KeyCode::Char('x'), m) if m.contains(KeyModifiers::CONTROL) => {
+                        self.cut_selection();
+                    }
+                    (KeyCode::Char('v'), m) if m.contains(KeyModifiers::CONTROL) => {
+                        self.paste_from_clipboard();
                     }
                     (KeyCode::Char('z'), m) if m.contains(KeyModifiers::CONTROL) => {
                         self.undo();
@@ -2130,6 +2290,9 @@ impl App {
             }
             Event::Mouse(mouse_event) => {
                 self.handle_mouse_event(mouse_event);
+            }
+            Event::Paste(text) if self.context_menu.is_none() && self.menu_bar.is_none() => {
+                self.paste_text(&text);
             }
             _ => {}
         }

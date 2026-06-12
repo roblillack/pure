@@ -7,7 +7,10 @@ use std::{
 use anyhow::{Context, Result};
 use crossterm::{
     cursor::SetCursorStyle,
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event},
+    event::{
+        self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
+        Event,
+    },
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
@@ -32,8 +35,13 @@ fn run() -> Result<()> {
 
     enable_raw_mode().context("failed to enable raw mode")?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)
-        .context("failed to initialize terminal")?;
+    execute!(
+        stdout,
+        EnterAlternateScreen,
+        EnableMouseCapture,
+        EnableBracketedPaste
+    )
+    .context("failed to initialize terminal")?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend).context("failed to create terminal backend")?;
     terminal.clear().ok();
@@ -45,6 +53,7 @@ fn run() -> Result<()> {
         terminal.backend_mut(),
         LeaveAlternateScreen,
         DisableMouseCapture,
+        DisableBracketedPaste,
         SetCursorStyle::DefaultUserShape
     )
     .ok();

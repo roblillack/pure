@@ -5,7 +5,7 @@
 //! Review changed snapshots with `cargo insta review`; the `.snap.svg` files
 //! under `src/snapshots/` open directly in a browser.
 
-use crossterm::event::{KeyCode, KeyModifiers};
+use crossterm::event::{Event, KeyCode, KeyModifiers};
 use tdoc::{Document, ftml};
 
 use super::TestApp;
@@ -234,4 +234,126 @@ fn menu_format_opens_formatting_menu() {
     app.key_with(KeyCode::Char('o'), KeyModifiers::NONE);
     app.key(KeyCode::Enter);
     assert_svg("menu_format_opens_formatting_menu", &mut app);
+}
+
+#[test]
+fn cut_removes_selection_and_paste_reinserts_it() {
+    let mut app = sample_app();
+    // Select "Packing" in the heading and cut it.
+    for _ in 0..7 {
+        app.key_with(KeyCode::Right, KeyModifiers::SHIFT);
+    }
+    app.ctrl('x');
+    assert_svg("cut_removes_selection", &mut app);
+
+    // Paste it back at the end of the heading line.
+    app.key(KeyCode::End);
+    app.ctrl('v');
+    assert_svg("paste_reinserts_cut_text", &mut app);
+}
+
+#[test]
+fn ctrl_c_copies_selection_and_is_ignored_without_one() {
+    let mut app = sample_app();
+    for _ in 0..7 {
+        app.key_with(KeyCode::Right, KeyModifiers::SHIFT);
+    }
+    app.ctrl('c');
+    assert!(
+        !app.app.should_quit(),
+        "Ctrl+C with a selection must copy, not quit"
+    );
+    assert_svg("ctrl_c_copies_selection", &mut app);
+
+    // Collapse the selection; now Ctrl+C is simply ignored.
+    app.key(KeyCode::Right);
+    app.ctrl('c');
+    assert!(
+        !app.app.should_quit(),
+        "Ctrl+C without a selection must do nothing"
+    );
+}
+
+#[test]
+fn bracketed_paste_inserts_text_and_paragraphs() {
+    let mut app = sample_app();
+    // Paste at the end of the "Pack the essentials..." paragraph.
+    app.key(KeyCode::Down);
+    app.key(KeyCode::End);
+    app.event(Event::Paste(
+        " Plus a pasted line break\nand a\n\npasted paragraph.".to_string(),
+    ));
+    assert_svg("bracketed_paste_inserts_text_and_paragraphs", &mut app);
+}
+
+#[test]
+fn paste_replaces_selection_and_undoes_in_one_step() {
+    let mut app = sample_app();
+    // Select "Packing" and paste over it.
+    for _ in 0..7 {
+        app.key_with(KeyCode::Right, KeyModifiers::SHIFT);
+    }
+    app.event(Event::Paste("Shopping".to_string()));
+    assert_svg("paste_replaces_selection", &mut app);
+
+    // The paste itself is one undo step; a second undo restores the
+    // cut-away selection.
+    app.ctrl('z');
+    app.ctrl('z');
+    assert_svg("paste_undo_restores_selection_text", &mut app);
+}
+
+#[test]
+fn paste_with_empty_clipboard_shows_hint() {
+    let mut app = sample_app();
+    app.ctrl('v');
+    assert_svg("paste_with_empty_clipboard_shows_hint", &mut app);
+}
+
+#[test]
+fn paste_preserves_inline_styles() {
+    let mut app = sample_app();
+    // Select the whole "Pack the essentials before the long trip." line,
+    // including its bold and italic spans.
+    app.key(KeyCode::Down);
+    app.key(KeyCode::Home);
+    app.key_with(KeyCode::End, KeyModifiers::SHIFT);
+    app.ctrl('c');
+
+    // Paste at the end of the quote.
+    for _ in 0..4 {
+        app.key(KeyCode::Down);
+    }
+    app.key(KeyCode::End);
+    app.ctrl('v');
+
+    let svg = app.svg();
+    assert_eq!(
+        svg.matches(r#"font-weight="bold">essentials"#).count(),
+        2,
+        "the pasted copy of \"essentials\" must still be bold"
+    );
+    assert_eq!(
+        svg.matches(r#"font-style="italic">long"#).count(),
+        2,
+        "the pasted copy of \"long\" must still be italic"
+    );
+    assert_svg("paste_preserves_inline_styles", &mut app);
+}
+
+#[test]
+fn paste_rebuilds_cut_list_items() {
+    let mut app = sample_app();
+    // Select both list items and cut them.
+    app.key(KeyCode::Down);
+    app.key(KeyCode::Down);
+    app.key(KeyCode::Home);
+    app.key_with(KeyCode::Down, KeyModifiers::SHIFT);
+    app.key_with(KeyCode::End, KeyModifiers::SHIFT);
+    app.ctrl('x');
+    assert_svg("cut_removes_list_items", &mut app);
+
+    // Pasting them right back restores the bullet list.
+    app.ctrl('v');
+    assert_svg("paste_rebuilds_cut_list_items", &mut app);
 }

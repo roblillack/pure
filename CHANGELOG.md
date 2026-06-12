@@ -12,6 +12,16 @@ While pre-1.0, the minor version is bumped for breaking changes.
 
 ### Added
 
+- Clipboard support: Ctrl+X/Ctrl+C cut/copy the selection and Ctrl+V pastes,
+  all also available in the Edit and context menus. Ctrl+C therefore no
+  longer quits Pure; use Ctrl+Q for that. The internal clipboard keeps the selection
+  as document structure, so pasting within Pure restores inline styles,
+  paragraph types, and list structure. Copied text also reaches the system
+  clipboard — as plain text, with blank lines between paragraphs — through
+  the terminal with the OSC 52 escape sequence, and pasting from other
+  applications works through the terminal's own paste shortcut (bracketed
+  paste), arriving as a single undoable edit that turns blank lines back
+  into paragraph breaks.
 - A menu bar in the typical TUI style: File, Edit, Format, and View menus
   across the top of the screen, opened with F10 or an Alt+letter accelerator
   and driven with the keyboard. (#29)

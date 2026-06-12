@@ -150,6 +150,9 @@ Exits Pure. You will be prompted to save any unsaved changes.
 **Ctrl+S**
 Saves the current document.
 
+**Ctrl+X**, **Ctrl+C**, **Ctrl+V**
+Cut, copy, and paste. Cut and copied text also reaches the system clipboard through your terminal.
+
 **Esc** or **Ctrl+Space**
 Opens the context menu, which provides quick access to formatting options and paragraph types.
 
@@ -551,6 +554,44 @@ The context menu provides access to inline text formatting:
 #### Additional Information
 
 The context menu is Pure's primary interface for formatting. All formatting features can be accessed through the context menu, making it easy to discover and use features without memorizing complex keyboard shortcuts.
+
+---
+
+### Copy, Cut, and Paste
+
+**Purpose:** Move or duplicate text within a document, or exchange text with other applications through the system clipboard.
+
+**Keyboard Shortcuts:** Ctrl+X (cut), Ctrl+C (copy), Ctrl+V (paste)
+
+#### To copy or cut text:
+
+1. Select the text with the mouse or with Shift plus the cursor keys.
+
+2. Press **Ctrl+C** to copy, or **Ctrl+X** to cut.
+
+The text is stored in Pure's clipboard and is also offered to the system clipboard through your terminal (using the OSC 52 escape sequence, which most modern terminal emulators support; inside tmux, `set-clipboard` must be enabled).
+
+Cut, Copy, and Paste are also available in the Edit menu (F10) and in the context menu (Esc).
+
+#### To paste text:
+
+Press **Ctrl+V**.
+
+The most recently cut or copied text is inserted at the cursor. If text is selected, the pasted text replaces it.
+
+#### To paste text from another application:
+
+Use your **terminal's paste shortcut** — typically Ctrl+Shift+V on Linux and Windows, or Cmd+V on macOS.
+
+For security reasons, terminals do not let applications read the system clipboard, so Ctrl+V inside Pure only reaches text that was cut or copied in Pure itself. Your terminal's own paste shortcut inserts the system clipboard content directly (Pure enables bracketed paste, so multi-line clipboard content is inserted as a single, undoable edit).
+
+#### Additional Information
+
+Within Pure, the clipboard keeps the copied content as document structure, so pasting with **Ctrl+V** restores formatting: inline styles such as bold and italic, paragraph types such as headings, and list structure. The first pasted paragraph flows into the paragraph at the cursor, just like typed text; further paragraphs become paragraphs (or, inside a list, sibling entries) of their own.
+
+Other applications receive the selection as plain text, with paragraphs separated by blank lines. The same applies in the other direction: text pasted via the terminal arrives as plain text, where blank lines become paragraph breaks and single newlines become line breaks within a paragraph.
+
+With nothing selected, Ctrl+C is ignored and Ctrl+X only reports that there is nothing to cut. To exit Pure, use Ctrl+Q.
 
 ---
 
@@ -1111,7 +1152,7 @@ Pure uses FTML as its primary format because FTML preserves all formatting infor
 The menu bar stays hidden while you write. When activated, it appears at the top of the screen with these menus:
 
 - **File** - Save (Ctrl+S), Quit (Ctrl+Q)
-- **Edit** - Undo (Ctrl+Z), Redo (Ctrl+Y), Cut, Copy, Paste
+- **Edit** - Undo (Ctrl+Z), Redo (Ctrl+Y), Cut (Ctrl+X), Copy (Ctrl+C), Paste (Ctrl+V)
 - **Insert** - Line Break (Ctrl+J), Sibling Paragraph (Ctrl+P)
 - **Format** - Formatting Menu (Esc or Ctrl+Space)
 - **View** - Reveal Codes (F9)
@@ -1134,7 +1175,7 @@ Alternatively, press **Alt** plus a menu's highlighted letter (for example, **Al
 
 Each menu item shows its keyboard shortcut on the right, making the menu bar a convenient way to discover and learn Pure's shortcuts.
 
-Items that are not currently available (such as clipboard operations, which are still under development) appear dimmed.
+Items that are not currently available appear dimmed.
 
 The View menu shows a checkmark next to Reveal Codes while the mode is enabled.
 
@@ -1183,7 +1224,8 @@ Scrolling moves the viewport without changing the cursor position, allowing you 
 Once text is selected, you can:
 
 - Press **Esc** to open the context menu and apply formatting (bold, italic, etc.)
-- Type new text to replace the selection
+- Press **Ctrl+C** or **Ctrl+X** to copy or cut the selection to the clipboard
+- Type new text or press **Ctrl+V** to replace the selection
 - Press **Delete** or **Backspace** to remove the selected text
 - Use arrow keys to deselect and position the cursor
 

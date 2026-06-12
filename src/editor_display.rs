@@ -10,7 +10,7 @@ use crate::render::{
     render_document_direct,
 };
 use crate::theme::Theme;
-use tdoc::{Document, InlineStyle};
+use tdoc::{ChecklistItem, Document, InlineStyle, Paragraph, ParagraphType, Span};
 
 /// Maximum number of undo snapshots kept in memory.
 const MAX_UNDO_DEPTH: usize = 100;
@@ -1360,6 +1360,153 @@ impl EditorDisplay {
         result
     }
 
+    /// Insert plain text at the cursor as a single undoable edit. Blank
+    /// lines separate paragraphs (mirroring [`DocumentEditor::selection_text`]
+    /// and Markdown conventions); a single newline becomes a line break
+    /// within the paragraph. Control characters other than tab are dropped.
+    pub fn insert_text(&mut self, text: &str) -> bool {
+        let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
+        let undo = self.begin_edit(UndoEditKind::Other);
+        let mut inserted = false;
+        let mut pending_newlines = 0usize;
+        for ch in normalized.chars() {
+            if ch == '\n' {
+                pending_newlines += 1;
+                continue;
+            }
+            if self.insert_pending_break(pending_newlines) {
+                inserted = true;
+            }
+            pending_newlines = 0;
+            if ch.is_control() && ch != '\t' {
+                continue;
+            }
+            if self.editor.insert_char(ch) {
+                inserted = true;
+            }
+        }
+        if self.insert_pending_break(pending_newlines) {
+            inserted = true;
+        }
+
+        if inserted {
+            self.force_full_relayout();
+            self.clear_render_cache();
+            self.commit_edit(UndoEditKind::Other, undo);
+        }
+        inserted
+    }
+
+    /// Apply a run of newlines from [`EditorDisplay::insert_text`]: one is a
+    /// line break, two or more (a blank line) a paragraph break.
+    fn insert_pending_break(&mut self, newline_count: usize) -> bool {
+        match newline_count {
+            0 => false,
+            1 => self.editor.insert_char('\n'),
+            _ => self.editor.insert_paragraph_break(),
+        }
+    }
+
+    /// Insert a document fragment (as produced by
+    /// [`DocumentEditor::selection_fragment`]) at the cursor as a single
+    /// undoable edit, restoring its formatting: inline styles always, and
+    /// paragraph types where a pasted paragraph becomes a root-level
+    /// paragraph of its own. The first block merges into the paragraph at
+    /// the cursor (keeping that paragraph's type, unless it was empty), and
+    /// inside lists or checklists new blocks become sibling entries.
+    pub fn insert_fragment(&mut self, fragment: &[Paragraph]) -> bool {
+        let blocks = flatten_fragment(fragment);
+        if blocks.is_empty() {
+            return false;
+        }
+
+        let undo = self.begin_edit(UndoEditKind::Other);
+        let mut inserted = false;
+        // Block start positions that may need their paragraph type restored.
+        // The pointers stay valid during insertion because all later edits
+        // happen behind them.
+        let mut typed_blocks: Vec<(CursorPointer, ParagraphType)> = Vec::new();
+        // Style runs as global character offsets, which restyling and
+        // paragraph type changes below cannot invalidate.
+        let mut styled_runs: Vec<(usize, usize, Vec<InlineStyle>)> = Vec::new();
+
+        if self.editor.current_paragraph_is_empty() {
+            typed_blocks.push((self.editor.cursor_pointer(), blocks[0].paragraph_type));
+        }
+        for (index, block) in blocks.iter().enumerate() {
+            if index > 0 {
+                if !self.editor.insert_paragraph_break() {
+                    break;
+                }
+                inserted = true;
+                typed_blocks.push((self.editor.cursor_pointer(), block.paragraph_type));
+            }
+            for run in &block.runs {
+                let start = self.editor.cursor_global_char_offset();
+                for ch in run.text.chars() {
+                    if ch.is_control() && ch != '\t' && ch != '\n' {
+                        continue;
+                    }
+                    if self.editor.insert_char(ch) {
+                        inserted = true;
+                    }
+                }
+                let end = self.editor.cursor_global_char_offset();
+                if end > start && !run.styles.is_empty() {
+                    styled_runs.push((start, end, run.styles.clone()));
+                }
+            }
+        }
+        let final_offset = self.editor.cursor_global_char_offset();
+
+        // Restore paragraph types bottom-up: list and checklist conversions
+        // merge with adjacent paragraphs of the same type, which would
+        // invalidate the pointers of blocks below the converted one.
+        for (pointer, paragraph_type) in typed_blocks.iter().rev() {
+            if !self.editor.move_to_pointer(pointer) {
+                continue;
+            }
+            // Only re-type paragraphs that ended up at the root level; a
+            // block pasted into a list or checklist became a sibling entry
+            // and keeps the surrounding structure.
+            if self
+                .editor
+                .cursor_pointer()
+                .paragraph_path
+                .numeric_steps()
+                .len()
+                != 1
+            {
+                continue;
+            }
+            self.editor.set_paragraph_type(*paragraph_type);
+        }
+
+        for (start, end, styles) in &styled_runs {
+            for style in styles {
+                let (Some(run_start), Some(run_end)) = (
+                    self.editor.pointer_at_global_char_offset(*start),
+                    self.editor.pointer_at_global_char_offset(*end),
+                ) else {
+                    continue;
+                };
+                self.editor
+                    .apply_inline_style_to_selection(&(run_start, run_end), *style);
+            }
+        }
+
+        if let Some(pointer) = self.editor.pointer_at_global_char_offset_end(final_offset) {
+            self.editor.move_to_pointer(&pointer);
+        }
+
+        if inserted {
+            self.force_full_relayout();
+            self.clear_render_cache();
+            self.commit_edit(UndoEditKind::Other, undo);
+        }
+        inserted
+    }
+
     /// Delete character before cursor with incremental layout update
     pub fn delete_char(&mut self) -> bool {
         let undo = self.begin_edit(UndoEditKind::DeleteForward);
@@ -1819,6 +1966,107 @@ impl EditorDisplay {
                     | tdoc::ParagraphType::Header3
             )
         )
+    }
+}
+
+/// One paragraph-equivalent unit of a flattened clipboard fragment: list
+/// entries and checklist items become blocks of their own, typed after the
+/// structure they came from, so [`EditorDisplay::insert_fragment`] can
+/// rebuild them with paragraph breaks plus a type change (adjacent lists of
+/// the same type merge back together).
+struct PasteBlock {
+    paragraph_type: ParagraphType,
+    runs: Vec<PasteRun>,
+}
+
+/// A run of identically styled text within a block. `styles` holds the
+/// effective style stack of the originating (possibly nested) span.
+struct PasteRun {
+    text: String,
+    styles: Vec<InlineStyle>,
+}
+
+fn flatten_fragment(fragment: &[Paragraph]) -> Vec<PasteBlock> {
+    let mut blocks = Vec::new();
+    for paragraph in fragment {
+        flatten_paragraph(paragraph, None, &mut blocks);
+    }
+    blocks
+}
+
+fn flatten_paragraph(
+    paragraph: &Paragraph,
+    type_override: Option<ParagraphType>,
+    blocks: &mut Vec<PasteBlock>,
+) {
+    let paragraph_type = type_override.unwrap_or_else(|| paragraph.paragraph_type());
+    match paragraph {
+        Paragraph::Text { .. }
+        | Paragraph::Header1 { .. }
+        | Paragraph::Header2 { .. }
+        | Paragraph::Header3 { .. }
+        | Paragraph::CodeBlock { .. } => {
+            let mut runs = Vec::new();
+            flatten_spans(paragraph.content(), &[], &mut runs);
+            blocks.push(PasteBlock {
+                paragraph_type,
+                runs,
+            });
+        }
+        Paragraph::Quote { children } => {
+            for child in children {
+                flatten_paragraph(child, Some(ParagraphType::Quote), blocks);
+            }
+        }
+        Paragraph::OrderedList { entries } | Paragraph::UnorderedList { entries } => {
+            for entry in entries {
+                if entry.is_empty() {
+                    blocks.push(PasteBlock {
+                        paragraph_type,
+                        runs: Vec::new(),
+                    });
+                }
+                for entry_paragraph in entry {
+                    flatten_paragraph(entry_paragraph, Some(paragraph_type), blocks);
+                }
+            }
+        }
+        Paragraph::Checklist { items } => {
+            flatten_checklist_items(items, blocks);
+        }
+    }
+}
+
+fn flatten_checklist_items(items: &[ChecklistItem], blocks: &mut Vec<PasteBlock>) {
+    for item in items {
+        let mut runs = Vec::new();
+        flatten_spans(&item.content, &[], &mut runs);
+        blocks.push(PasteBlock {
+            paragraph_type: ParagraphType::Checklist,
+            runs,
+        });
+        flatten_checklist_items(&item.children, blocks);
+    }
+}
+
+fn flatten_spans(spans: &[Span], inherited: &[InlineStyle], runs: &mut Vec<PasteRun>) {
+    for span in spans {
+        let mut styles = inherited.to_vec();
+        // Links are skipped: re-applying the style could not carry the link
+        // target over, so linked text is pasted with its remaining styles.
+        if span.style != InlineStyle::None
+            && span.style != InlineStyle::Link
+            && !styles.contains(&span.style)
+        {
+            styles.push(span.style);
+        }
+        if !span.text.is_empty() {
+            runs.push(PasteRun {
+                text: span.text.clone(),
+                styles: styles.clone(),
+            });
+        }
+        flatten_spans(&span.children, &styles, runs);
     }
 }
 
@@ -2351,16 +2599,6 @@ mod tests {
     }
 
     impl EditorDisplay {
-        fn insert_text(&mut self, txt: &str) -> bool {
-            for i in txt.chars() {
-                if !self.insert_char(i) {
-                    return false;
-                }
-            }
-
-            true
-        }
-
         fn get_pos(&mut self) -> Option<(usize, u16)> {
             self.render_document_with_positions(80, 0, None);
 
@@ -3796,5 +4034,130 @@ mod tests {
         // The fix ensures that pointer_from_mouse now uses visual columns (including prefixes)
         // rather than content_columns. This test verifies the positions are correctly set up.
         // Manual testing with test_nested_checklist_cursor.ftml will verify mouse clicks work correctly.
+    }
+
+    /// Collect (text, style) pairs of all non-empty spans in a paragraph,
+    /// in document order, for asserting on pasted formatting.
+    fn styled_texts(paragraph: &Paragraph) -> Vec<(String, InlineStyle)> {
+        fn walk(spans: &[Span], out: &mut Vec<(String, InlineStyle)>) {
+            for span in spans {
+                if !span.text.is_empty() {
+                    out.push((span.text.clone(), span.style));
+                }
+                walk(&span.children, out);
+            }
+        }
+        let mut out = Vec::new();
+        walk(paragraph.content(), &mut out);
+        out
+    }
+
+    #[test]
+    fn insert_fragment_inline_preserves_styles() {
+        let doc = ftml! { p { "Hello world" } };
+        let mut display = EditorDisplay::new(DocumentEditor::new(doc));
+        display.render_document_with_positions(80, 0, None);
+
+        // Place the cursor between "Hello " and "world".
+        let pointer = pointer_for_path(ParagraphPath::new_root(0), 6);
+        assert!(display.move_to_pointer(&pointer));
+
+        let mut bold = Span::new_text("bold");
+        bold.style = InlineStyle::Bold;
+        let fragment = vec![Paragraph::new_text().with_content(vec![
+            Span::new_text("very "),
+            bold,
+            Span::new_text(" "),
+        ])];
+        assert!(display.insert_fragment(&fragment));
+
+        let document = display.document();
+        assert_eq!(document.paragraphs.len(), 1);
+        let spans = styled_texts(&document.paragraphs[0]);
+        let text: String = spans.iter().map(|(text, _)| text.as_str()).collect();
+        assert_eq!(text, "Hello very bold world");
+        assert!(
+            spans
+                .iter()
+                .any(|(text, style)| text == "bold" && *style == InlineStyle::Bold),
+            "the pasted bold span must keep its style, got {spans:?}"
+        );
+
+        // The cursor ends right behind the pasted content.
+        assert_eq!(
+            display.editor.cursor_global_char_offset(),
+            "Hello very bold ".chars().count()
+        );
+
+        // The whole paste is one undo step.
+        assert!(display.undo());
+        let spans = styled_texts(&display.document().paragraphs[0]);
+        let text: String = spans.iter().map(|(text, _)| text.as_str()).collect();
+        assert_eq!(text, "Hello world");
+    }
+
+    #[test]
+    fn insert_fragment_restores_paragraph_types_and_lists() {
+        let doc = ftml! { p {} };
+        let mut display = EditorDisplay::new(DocumentEditor::new(doc));
+        display.render_document_with_positions(80, 0, None);
+
+        let fragment = vec![
+            Paragraph::new_header1().with_content(vec![Span::new_text("Title")]),
+            Paragraph::new_unordered_list().with_entries(vec![
+                vec![Paragraph::new_text().with_content(vec![Span::new_text("Passport")])],
+                vec![Paragraph::new_text().with_content(vec![Span::new_text("Tickets")])],
+            ]),
+        ];
+        assert!(display.insert_fragment(&fragment));
+
+        let document = display.document();
+        assert_eq!(document.paragraphs.len(), 2, "{:?}", document.paragraphs);
+        assert_eq!(
+            document.paragraphs[0].paragraph_type(),
+            tdoc::ParagraphType::Header1
+        );
+        assert_eq!(styled_texts(&document.paragraphs[0])[0].0, "Title");
+        assert_eq!(
+            document.paragraphs[1].paragraph_type(),
+            tdoc::ParagraphType::UnorderedList
+        );
+        let entries = document.paragraphs[1].entries();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(styled_texts(&entries[0][0])[0].0, "Passport");
+        assert_eq!(styled_texts(&entries[1][0])[0].0, "Tickets");
+    }
+
+    #[test]
+    fn insert_fragment_into_list_creates_sibling_entries() {
+        let doc = ftml! {
+            ul {
+                li { p { "First" } }
+                li { p { "Last" } }
+            }
+        };
+        let mut display = EditorDisplay::new(DocumentEditor::new(doc));
+        display.render_document_with_positions(80, 0, None);
+
+        // Cursor to the end of "First".
+        let mut path = ParagraphPath::new_root(0);
+        path.push_entry(0, 0);
+        assert!(display.move_to_pointer(&pointer_for_path(path, 5)));
+
+        let fragment = vec![
+            Paragraph::new_text().with_content(vec![Span::new_text("Second")]),
+            Paragraph::new_text().with_content(vec![Span::new_text("Third")]),
+        ];
+        assert!(display.insert_fragment(&fragment));
+
+        let document = display.document();
+        assert_eq!(document.paragraphs.len(), 1, "{:?}", document.paragraphs);
+        let entries = document.paragraphs[0].entries();
+        // The first pasted paragraph merges into the entry at the cursor,
+        // the second becomes a sibling entry.
+        assert_eq!(entries.len(), 3, "{:?}", document.paragraphs);
+        assert_eq!(styled_texts(&entries[0][0])[0].0, "FirstSecond");
+        assert_eq!(styled_texts(&entries[1][0])[0].0, "Third");
+        assert_eq!(styled_texts(&entries[2][0])[0].0, "Last");
     }
 }

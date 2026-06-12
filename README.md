@@ -56,6 +56,7 @@ Pure provides an intuitive editing experience:
 
 - **Word Wrapping**: Automatic text flow without manual line breaks
 - **Mouse Support**: Click to position cursor, drag to select, double-click to select words, triple-click for paragraphs
+- **Clipboard**: Cut, copy, and paste — within Pure with formatting preserved; copying reaches the system clipboard through the terminal (OSC 52), pasting from other applications works via the terminal's paste shortcut (bracketed paste)
 - **Reveal Codes**: Press F9 to see the underlying formatting structure (inspired by WordPerfect)
 - **Menu Bar**: Press F10 (or an Alt accelerator like Alt+F) for a TurboVision-style menu bar
 - **Context Menu**: Press Esc to access all formatting options
@@ -74,6 +75,7 @@ Pure is designed for efficiency with comprehensive keyboard shortcuts:
 - **Ctrl+S** - Save document
 - **Ctrl+Q** - Quit (with save prompt)
 - **Ctrl+Z / Ctrl+Y** - Undo / redo
+- **Ctrl+X / Ctrl+C / Ctrl+V** - Cut / copy / paste
 - **Esc** - Open context menu
 - **F10** - Open the menu bar (Alt+F, Alt+E, ... open a menu directly)
 - **F9** - Toggle reveal codes
@@ -142,6 +144,9 @@ pure webpage.html
 - Ctrl+W - Delete word backward
 - Ctrl+Z - Undo
 - Ctrl+Y - Redo
+- Ctrl+X - Cut selection
+- Ctrl+C - Copy selection
+- Ctrl+V - Paste
 
 **Formatting:**
 
