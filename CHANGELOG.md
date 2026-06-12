@@ -26,7 +26,8 @@ While pre-1.0, the minor version is bumped for breaking changes.
   scripts a Pure session as a series of simulated key presses, renders every
   frame through the SVG snapshot harness, and assembles the result into
   `demo.gif` — so the demo can be re-recorded with one command whenever the
-  interface changes.
+  interface changes. Without the `recorder` feature, `cargo run --example
+  demo` plays the same script live in the terminal instead.
 
 ### Fixed
 

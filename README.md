@@ -260,7 +260,10 @@ cargo test
 # Run benchmarks
 cargo bench
 
-# Re-record the demo GIF above (scripted in examples/demo)
+# Watch the scripted demo play out live in your terminal
+cargo run --example demo
+
+# Re-record the demo GIF above from the same script
 cargo run --release --example demo --features recorder
 
 # The binary will be in target/release/pure

@@ -1,11 +1,10 @@
-//! The demo "camera": drives the real app through the headless test harness
-//! and records every keypress as one GIF frame.
+//! Recording backend: the demo "camera". Drives the real app through the
+//! headless test harness and records every keypress as one GIF frame.
 //!
 //! Each simulated key goes through [`TestApp::key_with`] (real event
 //! handling, real rendering), the resulting terminal buffer is rendered to
 //! SVG by the snapshot harness, rasterized with resvg, and appended to the
-//! GIF with a delay that matches the kind of interaction: quick between
-//! typed characters, a long beat while a menu is open. Identical consecutive
+//! GIF with the delay the script vocabulary assigns. Identical consecutive
 //! frames are merged, and every frame after the first only encodes the
 //! rectangle of pixels that actually changed, so the GIF stays small.
 //!
@@ -20,7 +19,6 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use crossterm::event::{KeyCode, KeyModifiers};
 use gif::{DisposalMethod, Encoder, Frame, Repeat};
-use pure_tui::menu_bar::{MENU_BAR, MenuBarEntry, menu_with_accel};
 use pure_tui::test_harness::{CellMetrics, TestApp};
 use resvg::{tiny_skia, usvg};
 use tdoc::Document;
@@ -34,38 +32,13 @@ const METRICS: CellMetrics = CellMetrics {
     baseline: 14,
 };
 
-/// How long a frame stays on screen, by the interaction that produced it,
-/// in GIF time units (10ms).
-mod pace {
-    /// Between typed characters.
-    pub const TYPE: u32 = 7;
-    /// After a typed space — typists pause between words.
-    pub const SPACE: u32 = 12;
-    /// After typed punctuation.
-    pub const PUNCTUATION: u32 = 30;
-    /// Plain cursor movement.
-    pub const MOVE: u32 = 25;
-    /// Watching a selection grow.
-    pub const SELECT: u32 = 50;
-    /// Reading a freshly opened menu.
-    pub const MENU: u32 = 120;
-    /// Stepping through menu items.
-    pub const STEP: u32 = 50;
-    /// Letting an action's effect sink in.
-    pub const ACTION: u32 = 90;
-    /// The opening frame: an empty editor.
-    pub const FIRST: u32 = 100;
-    /// The closing frame before the GIF loops.
-    pub const LAST: u32 = 500;
-}
-
 struct RecordedFrame {
     rgba: Vec<u8>,
     delay: u32,
 }
 
 /// Records a scripted Pure session into an animated GIF.
-pub struct Recorder {
+pub struct Backend {
     app: TestApp,
     options: usvg::Options<'static>,
     frames: Vec<RecordedFrame>,
@@ -74,13 +47,11 @@ pub struct Recorder {
     dump_dir: Option<PathBuf>,
 }
 
-// The interaction verbs form the script vocabulary; not every demo uses all
-// of them.
-#[allow(dead_code)]
-impl Recorder {
-    /// Start a session with an empty document in a `columns`×`rows` terminal.
+impl Backend {
+    /// Start a session with an empty document in a `columns`×`rows`
+    /// terminal and capture the first frame.
     pub fn start(columns: u16, rows: u16) -> Self {
-        let app = TestApp::with_path(columns, rows, Document::new(), PathBuf::from("demo.ftml"));
+        let app = TestApp::with_path(columns, rows, Document::new(), PathBuf::from("demo.md"));
 
         let mut options = usvg::Options::default();
         let fontdb = options.fontdb_mut();
@@ -103,7 +74,7 @@ impl Recorder {
             fs::create_dir_all(dir).expect("create frame dump directory");
         }
 
-        let mut recorder = Self {
+        let mut backend = Self {
             app,
             options,
             frames: Vec::new(),
@@ -111,124 +82,27 @@ impl Recorder {
             height: 0,
             dump_dir,
         };
-        recorder.capture(pace::FIRST);
-        recorder
+        backend.capture(0);
+        backend
     }
 
-    /// Type text character by character, pacing word and sentence breaks
-    /// like a human typist.
-    pub fn write(&mut self, text: &str) {
-        for ch in text.chars() {
-            let delay = match ch {
-                ' ' => pace::SPACE,
-                '.' | ',' | ';' | ':' | '!' | '?' => pace::PUNCTUATION,
-                _ => pace::TYPE,
-            };
-            self.press(KeyCode::Char(ch), KeyModifiers::NONE, delay);
-        }
+    /// Feed one key press through the real event handling and capture the
+    /// resulting frame.
+    pub fn press(&mut self, code: KeyCode, modifiers: KeyModifiers, delay: u32) {
+        self.app.key_with(code, modifiers);
+        self.capture(delay);
     }
 
-    /// Open the context menu and trigger the entry with this shortcut
-    /// character (e.g. `'1'` for "Heading 1", `'i'` for "Italic").
-    pub fn context_menu(&mut self, shortcut: char) {
-        self.press(KeyCode::Esc, KeyModifiers::NONE, pace::MENU);
-        let modifiers = if shortcut.is_ascii_uppercase() {
-            KeyModifiers::SHIFT
-        } else {
-            KeyModifiers::NONE
-        };
-        self.press(KeyCode::Char(shortcut), modifiers, pace::ACTION);
-    }
-
-    /// Open a menu by its Alt accelerator and activate the entry with this
-    /// label, stepping down to it like a user would.
-    pub fn menu(&mut self, accel: char, label: &str) {
-        let menu =
-            menu_with_accel(accel).unwrap_or_else(|| panic!("no menu with accelerator '{accel}'"));
-        let entries = MENU_BAR[menu].entries;
-        let is_item = |entry: &&MenuBarEntry| matches!(entry, MenuBarEntry::Item(_));
-        let first = entries
-            .iter()
-            .position(|e| matches!(e, MenuBarEntry::Item(item) if item.action.is_some()))
-            .expect("menu has an enabled item");
-        let target = entries
-            .iter()
-            .position(|e| matches!(e, MenuBarEntry::Item(item) if item.label == label))
-            .unwrap_or_else(|| panic!("menu has no item labelled '{label}'"));
-        assert!(
-            target >= first,
-            "'{label}' sits above the initially selected item"
-        );
-
-        self.press(KeyCode::Char(accel), KeyModifiers::ALT, pace::MENU);
-        let steps = entries[first..=target].iter().filter(is_item).count() - 1;
-        for _ in 0..steps {
-            self.press(KeyCode::Down, KeyModifiers::NONE, pace::STEP);
-        }
-        self.press(KeyCode::Enter, KeyModifiers::NONE, pace::ACTION);
-    }
-
-    pub fn paragraph_break(&mut self) {
-        self.press(KeyCode::Enter, KeyModifiers::NONE, pace::ACTION);
-    }
-
-    pub fn cursor_left(&mut self) {
-        self.press(KeyCode::Left, KeyModifiers::NONE, pace::MOVE);
-    }
-
-    pub fn cursor_right(&mut self) {
-        self.press(KeyCode::Right, KeyModifiers::NONE, pace::MOVE);
-    }
-
-    pub fn cursor_up(&mut self) {
-        self.press(KeyCode::Up, KeyModifiers::NONE, pace::MOVE);
-    }
-
-    pub fn cursor_down(&mut self) {
-        self.press(KeyCode::Down, KeyModifiers::NONE, pace::MOVE);
-    }
-
-    pub fn home(&mut self) {
-        self.press(KeyCode::Home, KeyModifiers::NONE, pace::MOVE);
-    }
-
-    pub fn end(&mut self) {
-        self.press(KeyCode::End, KeyModifiers::NONE, pace::MOVE);
-    }
-
-    /// Extend the selection by one word to the left.
-    pub fn shift_word_left(&mut self) {
-        self.press(
-            KeyCode::Left,
-            KeyModifiers::SHIFT | KeyModifiers::CONTROL,
-            pace::SELECT,
-        );
-    }
-
-    /// Extend the selection by one word to the right.
-    pub fn shift_word_right(&mut self) {
-        self.press(
-            KeyCode::Right,
-            KeyModifiers::SHIFT | KeyModifiers::CONTROL,
-            pace::SELECT,
-        );
-    }
-
-    pub fn ctrl(&mut self, ch: char) {
-        self.press(KeyCode::Char(ch), KeyModifiers::CONTROL, pace::ACTION);
-    }
-
-    /// Hold the current frame for an extra `ms` milliseconds.
-    pub fn pause(&mut self, ms: u32) {
+    /// Extend the time the current frame stays on screen by `cs` (10ms
+    /// units).
+    pub fn hold(&mut self, cs: u32) {
         if let Some(last) = self.frames.last_mut() {
-            last.delay += ms / 10;
+            last.delay += cs;
         }
     }
 
-    /// Hold the final frame, then encode all frames into a GIF at `path`.
-    pub fn stop(mut self, path: impl AsRef<Path>) -> Result<()> {
-        self.pause(pace::LAST * 10);
-        let path = path.as_ref();
+    /// Encode all captured frames into a GIF at `path`.
+    pub fn finish(self, path: &Path) -> Result<()> {
         encode_gif(path, &self.frames, self.width, self.height)
             .with_context(|| format!("failed to write {}", path.display()))?;
 
@@ -241,11 +115,6 @@ impl Recorder {
             bytes.div_ceil(1024),
         );
         Ok(())
-    }
-
-    fn press(&mut self, code: KeyCode, modifiers: KeyModifiers, delay: u32) {
-        self.app.key_with(code, modifiers);
-        self.capture(delay);
     }
 
     /// Rasterize the current frame and append it, or — when nothing visible

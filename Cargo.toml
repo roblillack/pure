@@ -23,8 +23,9 @@ pre-release-replacements = [
 ]
 
 [features]
-# Compiles the headless test harness into the library so examples can drive
-# the app without a terminal. Used by `examples/demo` to record `demo.gif`.
+# Compiles the headless test harness into the library so `examples/demo`
+# can drive the app without a terminal and record `demo.gif`. Without this
+# feature, the example plays the same demo live in the terminal instead.
 recorder = []
 
 [dependencies]
@@ -38,11 +39,6 @@ unicode-width = "0.2.0"
 gif = "0.14"
 insta = "1.43"
 resvg = "0.47"
-
-[[example]]
-name = "demo"
-path = "examples/demo/main.rs"
-required-features = ["recorder"]
 
 [[bench]]
 name = "performance"
