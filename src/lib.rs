@@ -8,5 +8,5 @@ pub mod menu_bar;
 pub mod render;
 pub mod theme;
 
-#[cfg(test)]
-mod test_harness;
+#[cfg(any(test, feature = "recorder"))]
+pub mod test_harness;
