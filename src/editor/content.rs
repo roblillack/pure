@@ -276,6 +276,46 @@ pub(crate) fn apply_style_to_content_range(
     true
 }
 
+/// Replaces the character range delimited by two leaf positions of the same
+/// content root with a single span. With a `target` the new span is a
+/// [`InlineStyle::Link`] carrying that URL; without one it is plain text,
+/// which is how clearing a link's target unlinks it. An empty range (the two
+/// positions coincide) inserts the span without removing anything.
+pub(crate) fn replace_range_with_link(
+    spans: &mut Vec<Span>,
+    start_path: &[usize],
+    start: usize,
+    end_path: &[usize],
+    end: usize,
+    text: &str,
+    target: Option<&str>,
+) -> bool {
+    if start_path.is_empty() || end_path.is_empty() {
+        return false;
+    }
+
+    // Carve the selected range out of the span tree. Splitting at the end
+    // first keeps the start path valid for the second split. The carved-out
+    // middle is discarded: the dialog supplies the replacement text in full.
+    let tail = split_spans(spans, end_path, end);
+    let _removed = split_spans(spans, start_path, start);
+
+    let new_span = match target {
+        Some(target) => {
+            let mut span = Span::new_styled(InlineStyle::Link);
+            span.text = text.to_string();
+            span.link_target = Some(target.to_string());
+            span
+        }
+        None => Span::new_text(text.to_string()),
+    };
+    if !new_span.is_content_empty() {
+        spans.push(new_span);
+    }
+    spans.extend(tail);
+    true
+}
+
 /// Applies `style` to part of a single leaf span. Plain leaves split into
 /// styled siblings as before; styled leaves keep their own style and gain a
 /// nested child span, so the styles stack.

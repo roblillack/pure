@@ -142,7 +142,7 @@ Within paragraphs, you can apply **inline styles** to text:
 - **Strikethrough** - Deleted or deprecated text
 - **Highlight** - Highlighted text
 - **Code** - Inline code or monospaced text
-- **Hyperlink** - Clickable links
+- **Hyperlink** - Text linked to a URL
 
 ### Keys to Know
 
@@ -166,6 +166,9 @@ Saves the current document. An untitled document asks for a name through the Sav
 
 **Ctrl+X**, **Ctrl+C**, **Ctrl+V**
 Cut, copy, and paste. Cut and copied text also reaches the system clipboard through your terminal.
+
+**Ctrl+K**
+Opens the Edit Link dialog. With the cursor inside a link it edits that link; with text selected it turns the selection into a link; otherwise it inserts a new one. Also available as "Edit Link..." in the context menu.
 
 **Esc** or **Ctrl+Space**
 Opens the context menu, which provides quick access to formatting options and paragraph types.
@@ -398,7 +401,7 @@ When you delete at the beginning of a paragraph, the current paragraph merges wi
 - **Strikethrough** - Deleted or crossed-out text
 - **Highlight** - Highlighted or marked text
 - **Code** - Inline code or monospaced text
-- **Hyperlink** - Web links (coming soon)
+- **Hyperlink** - Text linked to a URL (see [Links](#links))
 
 #### To apply an inline style to new text:
 
@@ -427,6 +430,57 @@ The formatting is applied to the selected text.
 #### To remove inline formatting:
 
 Use the context menu to toggle off styles, or use the "Clear formatting" option to remove all formatting from selected text. (Coming soon)
+
+### Links
+
+**Purpose:** Attach a target URL to text so it reads as a hyperlink.
+
+**Keyboard Shortcut:** Ctrl+K (also "Edit Link..." in the context menu)
+
+Links are shown in the editor with the link color and an underline, but they
+are deliberately **not** clickable: clicking only places the cursor, so you can
+edit text inside a link without accidentally following it. Opening a link is an
+explicit choice in the Edit Link dialog.
+
+The Edit Link dialog has two fields — the visible **Text** and the target
+**URL** — and three buttons: **Open**, **Cancel**, and **Save**. Tab and
+Shift+Tab (or the Up/Down arrows) move between the fields and the buttons, and
+Space activates the focused button. **Enter** always saves your changes and
+**Esc** always cancels, whichever element has focus.
+
+#### To create a link:
+
+1. Optionally select the text you want to link.
+
+2. Press **Ctrl+K**. If text was selected, it pre-fills the Text field.
+
+3. Type the target into the **URL** field (Tab moves there from the Text field).
+
+4. Press **Enter** to save (or Tab to the **Save** button and press Space). The
+   text now appears as a link.
+
+If no text is selected and the Text field is left empty, the URL itself becomes
+the visible text.
+
+#### To edit a link:
+
+1. Place the cursor anywhere inside the link.
+
+2. Press **Ctrl+K**. The dialog opens with the current text and URL filled in.
+
+3. Change either field and press **Enter**.
+
+#### To remove a link:
+
+Open the link with **Ctrl+K** and clear the **URL** field, then press
+**Enter**. The text stays, but it is no longer a link.
+
+#### To open a link:
+
+In the Edit Link dialog, Tab to the **Open** button and press **Space**. Pure
+launches the URL in your system's default browser (using `xdg-open` on Linux,
+`open` on macOS, or `start` on Windows). The dialog stays open so you can keep
+editing or save afterwards.
 
 #### Additional Information
 

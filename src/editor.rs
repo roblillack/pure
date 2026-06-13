@@ -8,9 +8,11 @@ use content::{insert_char_at, prune_and_merge_spans, remove_char_at};
 pub mod content;
 pub mod cursor;
 pub mod inspect;
+mod links;
 mod structure;
 mod styles;
 
+pub use links::LinkAtCursor;
 pub(crate) use styles::inline_style_label;
 
 use inspect::{checklist_item_ref, paragraph_ref, span_ref, span_ref_from_item};
@@ -2945,3 +2947,7 @@ mod content_tests;
 #[cfg(test)]
 #[path = "editor/style_tests.rs"]
 mod style_tests;
+
+#[cfg(test)]
+#[path = "editor/link_tests.rs"]
+mod link_tests;

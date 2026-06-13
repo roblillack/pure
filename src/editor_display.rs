@@ -1970,6 +1970,26 @@ impl EditorDisplay {
         result
     }
 
+    /// Create, retarget, or remove a hyperlink over `range`.
+    ///
+    /// Shadows the `Deref` access to [`DocumentEditor::set_link`] so the edit
+    /// is recorded for undo and the layout is invalidated.
+    pub fn set_link(
+        &mut self,
+        range: &(CursorPointer, CursorPointer),
+        text: &str,
+        target: Option<&str>,
+    ) -> bool {
+        let undo = self.begin_edit(UndoEditKind::Other);
+        let result = self.editor.set_link(range, text, target);
+        if result {
+            self.force_full_relayout();
+            self.clear_render_cache();
+            self.commit_edit(UndoEditKind::Other, undo);
+        }
+        result
+    }
+
     fn paragraph_requires_margin_layout(paragraph_type: Option<tdoc::ParagraphType>) -> bool {
         matches!(
             paragraph_type,

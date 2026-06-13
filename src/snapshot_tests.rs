@@ -632,3 +632,128 @@ fn unindent_split_renders_fully_with_cursor_in_place() {
     app.key(KeyCode::Up);
     assert_eq!(app.cursor_position(), Some(cursor));
 }
+
+fn link_document() -> Document {
+    ftml! {
+        p { "Read the " link { "https://example.test" "manual" } " carefully." }
+    }
+}
+
+#[test]
+fn ctrl_k_opens_edit_dialog_on_existing_link() {
+    let mut app = TestApp::new(WIDTH, HEIGHT, link_document());
+    // Move the cursor into the link text ("Read the " is nine characters).
+    for _ in 0..11 {
+        app.key(KeyCode::Right);
+    }
+    app.ctrl('k');
+    assert_svg("link_dialog_edit_existing", &mut app);
+}
+
+#[test]
+fn link_dialog_creates_link_from_selection() {
+    let mut app = sample_app();
+    // Select "Packing" in the heading.
+    for _ in 0..7 {
+        app.key_with(KeyCode::Right, KeyModifiers::SHIFT);
+    }
+    app.ctrl('k');
+    assert_svg("link_dialog_new_from_selection", &mut app);
+
+    // Fill in the URL and apply; "Packing" becomes a rendered link.
+    app.key(KeyCode::Tab);
+    app.type_text("https://example.test");
+    app.key(KeyCode::Enter);
+    assert_svg("link_created_from_selection", &mut app);
+}
+
+#[test]
+fn link_dialog_focuses_open_button() {
+    let mut app = TestApp::new(WIDTH, HEIGHT, link_document());
+    for _ in 0..11 {
+        app.key(KeyCode::Right);
+    }
+    app.ctrl('k');
+    // Tab past the Text and URL fields onto the Open button.
+    app.key(KeyCode::Tab);
+    app.key(KeyCode::Tab);
+    assert_svg("link_dialog_open_focused", &mut app);
+}
+
+#[test]
+fn clearing_link_target_removes_the_link() {
+    let mut app = TestApp::new(WIDTH, HEIGHT, link_document());
+    for _ in 0..11 {
+        app.key(KeyCode::Right);
+    }
+    app.ctrl('k');
+    // Focus the URL field, jump to its end, and erase it.
+    app.key(KeyCode::Tab);
+    app.ctrl('e');
+    for _ in 0..30 {
+        app.key(KeyCode::Backspace);
+    }
+    app.key(KeyCode::Enter);
+    assert_svg("link_unlinked", &mut app);
+}
+
+#[test]
+fn link_dialog_focuses_save_button() {
+    let mut app = TestApp::new(WIDTH, HEIGHT, link_document());
+    for _ in 0..11 {
+        app.key(KeyCode::Right);
+    }
+    app.ctrl('k');
+    // Tab to the Save button: Text -> URL -> Open -> Cancel -> Save.
+    for _ in 0..4 {
+        app.key(KeyCode::Tab);
+    }
+    assert_svg("link_dialog_save_focused", &mut app);
+}
+
+#[test]
+fn space_activates_the_cancel_button() {
+    let mut app = TestApp::new(WIDTH, HEIGHT, link_document());
+    for _ in 0..11 {
+        app.key(KeyCode::Right);
+    }
+    app.ctrl('k');
+    assert!(
+        app.buffer_lines()
+            .iter()
+            .any(|line| line.contains("Edit Link"))
+    );
+    // Tab to Cancel: Text -> URL -> Open -> Cancel, then activate with Space.
+    for _ in 0..3 {
+        app.key(KeyCode::Tab);
+    }
+    app.key(KeyCode::Char(' '));
+    assert!(
+        !app.buffer_lines()
+            .iter()
+            .any(|line| line.contains("Edit Link")),
+        "Space on Cancel should dismiss the dialog"
+    );
+}
+
+#[test]
+fn space_on_open_button_keeps_dialog_and_reports_opening() {
+    let mut app = TestApp::new(WIDTH, HEIGHT, link_document());
+    for _ in 0..11 {
+        app.key(KeyCode::Right);
+    }
+    app.ctrl('k');
+    // Tab to Open: Text -> URL -> Open, then activate with Space.
+    app.key(KeyCode::Tab);
+    app.key(KeyCode::Tab);
+    app.key(KeyCode::Char(' '));
+    let lines = app.buffer_lines();
+    assert!(
+        lines.iter().any(|line| line.contains("Edit Link")),
+        "Open keeps the dialog open"
+    );
+    assert!(
+        lines.iter().any(|line| line.contains("Opening")),
+        "Open reports progress in the status line"
+    );
+}

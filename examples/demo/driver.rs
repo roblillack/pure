@@ -190,6 +190,11 @@ impl Demo {
         self.press(KeyCode::Char(ch), KeyModifiers::CONTROL, pace::ACTION);
     }
 
+    /// Press Tab, e.g. to move between dialog fields.
+    pub fn tab(&mut self) {
+        self.press(KeyCode::Tab, KeyModifiers::NONE, pace::STEP);
+    }
+
     /// Linger on the current state for an extra `ms` milliseconds.
     pub fn pause(&mut self, ms: u32) {
         self.backend.hold(ms / 10);

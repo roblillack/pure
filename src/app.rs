@@ -33,6 +33,7 @@ use tdoc::{Document, InlineStyle, ParagraphType, markdown, parse, writer::Writer
 use crate::editor::{CursorPointer, DocumentEditor};
 use crate::editor_display::{CursorDisplay, EditorDisplay};
 use crate::file_dialog::{FileDialogKind, FileDialogResult, FileDialogState};
+use crate::link_dialog::{LinkDialogState, LinkField};
 use crate::menu_bar::{
     AppAction, MENU_BAR, MenuBarEntry, MenuBarState, menu_title_offset, menu_with_accel,
 };
@@ -111,6 +112,7 @@ enum MenuAction {
     SetParagraphType(ParagraphType),
     SetChecklistItemChecked(bool),
     ApplyInlineStyle(InlineStyle),
+    EditLink,
     IndentMore,
     IndentLess,
     Cut,
@@ -467,8 +469,9 @@ fn default_context_menu_entries(
         } else {
             MenuItem::disabled_with_shortcut("Strikethrough", MenuShortcut::with_shift('X'))
         }),
-        MenuEntry::Item(MenuItem::disabled_with_shortcut(
+        MenuEntry::Item(MenuItem::enabled_with_shortcut(
             "Edit Link...",
+            MenuAction::EditLink,
             MenuShortcut::new('k'),
         )),
         MenuEntry::Item(if has_selection {
@@ -506,6 +509,36 @@ fn is_context_menu_shortcut(code: KeyCode, modifiers: KeyModifiers) -> bool {
         KeyCode::Char(' ') => modifiers.contains(KeyModifiers::CONTROL),
         _ => false,
     }
+}
+
+/// Launch the platform's default browser (or handler) for `url`, detached so
+/// it does not block the editor: `open` on macOS, `start` via `cmd` on
+/// Windows, `xdg-open` elsewhere.
+fn open_in_browser(url: &str) -> io::Result<()> {
+    use std::process::{Command, Stdio};
+
+    let mut command = if cfg!(target_os = "macos") {
+        let mut command = Command::new("open");
+        command.arg(url);
+        command
+    } else if cfg!(target_os = "windows") {
+        let mut command = Command::new("cmd");
+        // `start` treats a leading quoted argument as the window title, so an
+        // empty title keeps the URL from being mistaken for one.
+        command.args(["/C", "start", "", url]);
+        command
+    } else {
+        let mut command = Command::new("xdg-open");
+        command.arg(url);
+        command
+    };
+
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map(|_child| ())
 }
 
 /// What a cut or copy leaves on the internal clipboard.
@@ -554,6 +587,11 @@ pub struct App {
     context_menu: Option<ContextMenuState>,
     menu_bar: Option<MenuBarState>,
     file_dialog: Option<FileDialogState>,
+    link_dialog: Option<LinkDialogState>,
+    /// The document range an open link dialog will write back to: the existing
+    /// link being edited, the selection a new link is created from, or the
+    /// (empty) cursor position a new link is inserted at.
+    link_edit_range: Option<(CursorPointer, CursorPointer)>,
     /// Whether the next New command may discard unsaved changes: the first
     /// one only warns. Cleared again by any edit.
     confirm_new: bool,
@@ -598,6 +636,8 @@ impl App {
             context_menu: None,
             menu_bar: None,
             file_dialog: None,
+            link_dialog: None,
+            link_edit_range: None,
             confirm_new: false,
             last_click_instant: None,
             last_click_position: None,
@@ -1008,6 +1048,10 @@ impl App {
 
         if self.file_dialog.is_some() {
             self.render_file_dialog(frame, area);
+        }
+
+        if self.link_dialog.is_some() {
+            self.render_link_dialog(frame, area);
         }
     }
 
@@ -1572,6 +1616,10 @@ impl App {
             }
             MenuAction::ApplyInlineStyle(style) => {
                 self.apply_inline_style_action(style);
+                true
+            }
+            MenuAction::EditLink => {
+                self.open_link_dialog();
                 true
             }
             MenuAction::IndentMore => {
@@ -2142,6 +2190,10 @@ impl App {
         }
     }
 
+    // Clicking only ever positions the cursor (or extends a selection).
+    // Links are deliberately not activated on click so the mouse can place the
+    // caret inside a link to edit it; opening a link is an explicit action in
+    // the Edit Link dialog instead.
     fn handle_single_click(&mut self, display: CursorDisplay, modifiers: KeyModifiers) {
         if modifiers.contains(KeyModifiers::SHIFT) {
             if self.selection_anchor.is_none() {
@@ -2222,6 +2274,10 @@ impl App {
                     return Ok(());
                 }
 
+                if self.handle_link_dialog_key(code, modifiers) {
+                    return Ok(());
+                }
+
                 if self.handle_menu_bar_key(code, modifiers)? {
                     return Ok(());
                 }
@@ -2254,6 +2310,9 @@ impl App {
                     }
                     (KeyCode::Char('o'), m) if m.contains(KeyModifiers::CONTROL) => {
                         self.open_file_dialog(FileDialogKind::Open);
+                    }
+                    (KeyCode::Char('k'), m) if m.contains(KeyModifiers::CONTROL) => {
+                        self.open_link_dialog();
                     }
                     (KeyCode::Char('n'), m) if m.contains(KeyModifiers::CONTROL) => {
                         self.new_document();
@@ -2472,13 +2531,15 @@ impl App {
                 }
             }
             Event::Mouse(mouse_event) => {
-                if self.file_dialog.is_some() {
+                if self.file_dialog.is_some() || self.link_dialog.is_some() {
                     return Ok(());
                 }
                 self.handle_mouse_event(mouse_event);
             }
             Event::Paste(text) if self.context_menu.is_none() && self.menu_bar.is_none() => {
                 if let Some(dialog) = self.file_dialog.as_mut() {
+                    dialog.insert_str(&text);
+                } else if let Some(dialog) = self.link_dialog.as_mut() {
                     dialog.insert_str(&text);
                 } else {
                     self.paste_text(&text);
@@ -2635,6 +2696,326 @@ impl App {
             FileDialogKind::Open => self.open_file(path),
             FileDialogKind::SaveAs => self.save_as(path),
         }
+    }
+
+    /// Open the link dialog, seeded from the cursor context: an existing link
+    /// under the cursor is loaded for editing; a single-paragraph selection
+    /// becomes the text of a new link; otherwise a new link is inserted at the
+    /// cursor.
+    fn open_link_dialog(&mut self) {
+        if let Some(link) = self.display.link_at_cursor() {
+            self.link_edit_range = Some(link.range);
+            self.link_dialog = Some(LinkDialogState::new(
+                link.text,
+                link.target.unwrap_or_default(),
+                true,
+            ));
+            return;
+        }
+
+        if let Some(selection) = self.current_selection()
+            && selection.0.paragraph_path == selection.1.paragraph_path
+        {
+            let text = self.display.selection_text(&selection).unwrap_or_default();
+            self.link_edit_range = Some(selection);
+            self.link_dialog = Some(LinkDialogState::new(text, String::new(), false));
+            return;
+        }
+
+        let cursor = self.display.cursor_pointer();
+        self.link_edit_range = Some((cursor.clone(), cursor));
+        self.link_dialog = Some(LinkDialogState::new(String::new(), String::new(), false));
+    }
+
+    /// Handle a key press while the link dialog is open. The dialog is modal:
+    /// every key is consumed. Enter always saves and Esc always cancels,
+    /// whatever has focus; Space activates a focused button.
+    fn handle_link_dialog_key(&mut self, code: KeyCode, modifiers: KeyModifiers) -> bool {
+        if self.link_dialog.is_none() {
+            return false;
+        }
+
+        let focus = self.link_dialog.as_ref().map(|dialog| dialog.focus());
+        match (code, modifiers) {
+            (KeyCode::Esc, _) => self.cancel_link_dialog(),
+            (KeyCode::Enter, _) => self.accept_link_dialog(),
+            (KeyCode::Tab, _) | (KeyCode::Down, _) => {
+                if let Some(dialog) = self.link_dialog.as_mut() {
+                    dialog.focus_next();
+                }
+            }
+            (KeyCode::BackTab, _) | (KeyCode::Up, _) => {
+                if let Some(dialog) = self.link_dialog.as_mut() {
+                    dialog.focus_prev();
+                }
+            }
+            // Space activates a focused button; in a text field it types.
+            (KeyCode::Char(' '), m)
+                if !m.contains(KeyModifiers::CONTROL)
+                    && !m.contains(KeyModifiers::ALT)
+                    && focus.is_some_and(LinkField::is_button) =>
+            {
+                self.activate_link_button();
+            }
+            _ => {
+                let Some(dialog) = self.link_dialog.as_mut() else {
+                    return true;
+                };
+                match (code, modifiers) {
+                    (KeyCode::Left, _) => dialog.move_cursor_left(),
+                    (KeyCode::Right, _) => dialog.move_cursor_right(),
+                    (KeyCode::Home, _) => dialog.move_cursor_start(),
+                    (KeyCode::End, _) => dialog.move_cursor_end(),
+                    (KeyCode::Char('a'), m) if m.contains(KeyModifiers::CONTROL) => {
+                        dialog.move_cursor_start()
+                    }
+                    (KeyCode::Char('e'), m) if m.contains(KeyModifiers::CONTROL) => {
+                        dialog.move_cursor_end()
+                    }
+                    (KeyCode::Char('w'), m) if m.contains(KeyModifiers::CONTROL) => {
+                        dialog.delete_word_backward()
+                    }
+                    (KeyCode::Backspace, m)
+                        if m.contains(KeyModifiers::CONTROL) || m.contains(KeyModifiers::ALT) =>
+                    {
+                        dialog.delete_word_backward()
+                    }
+                    (KeyCode::Backspace, _) => dialog.backspace(),
+                    (KeyCode::Delete, _) => dialog.delete(),
+                    (KeyCode::Char(ch), m)
+                        if !m.contains(KeyModifiers::CONTROL) && !m.contains(KeyModifiers::ALT) =>
+                    {
+                        dialog.insert_char(ch)
+                    }
+                    _ => {}
+                }
+            }
+        }
+        true
+    }
+
+    /// Activate the focused button (Space). Open launches the browser; Cancel
+    /// and Save mirror the Esc/Enter accelerators.
+    fn activate_link_button(&mut self) {
+        match self.link_dialog.as_ref().map(|dialog| dialog.focus()) {
+            Some(LinkField::Open) => self.open_link_in_browser(),
+            Some(LinkField::Cancel) => self.cancel_link_dialog(),
+            Some(LinkField::Save) => self.accept_link_dialog(),
+            _ => {}
+        }
+    }
+
+    /// Dismiss the link dialog without changing the document.
+    fn cancel_link_dialog(&mut self) {
+        self.link_dialog = None;
+        self.link_edit_range = None;
+    }
+
+    /// Apply the link dialog: write the text and target back onto the
+    /// document. An empty target unlinks (keeping the text as plain text); an
+    /// empty text falls back to showing the URL itself.
+    fn accept_link_dialog(&mut self) {
+        let Some(dialog) = self.link_dialog.take() else {
+            return;
+        };
+        let range = self.link_edit_range.take();
+        let target = dialog.target().trim().to_string();
+        let text = dialog.text().to_string();
+        let display_text = if text.is_empty() {
+            target.clone()
+        } else {
+            text
+        };
+        let target_opt = if target.is_empty() {
+            None
+        } else {
+            Some(target.as_str())
+        };
+
+        if display_text.is_empty() && target_opt.is_none() {
+            return;
+        }
+
+        if let Some(range) = range
+            && self.display.set_link(&range, &display_text, target_opt)
+        {
+            self.mark_dirty();
+            self.selection_anchor = None;
+            self.display.set_preferred_column(None);
+            self.needs_position_rebuild = true;
+        }
+    }
+
+    /// Open the link's target in the user's default browser by handing the URL
+    /// to the platform opener (`xdg-open`, `open`, or `start`). The dialog
+    /// stays open so the field values are not lost.
+    fn open_link_in_browser(&mut self) {
+        let Some(dialog) = self.link_dialog.as_ref() else {
+            return;
+        };
+        let target = dialog.target().trim().to_string();
+        if target.is_empty() {
+            self.status_message = Some(("No link target to open".to_string(), Instant::now()));
+            return;
+        }
+        if self.interactive {
+            match open_in_browser(&target) {
+                Ok(()) => {
+                    self.status_message = Some((format!("Opening {target}"), Instant::now()));
+                }
+                Err(err) => {
+                    self.status_message =
+                        Some((format!("Could not open link: {err}"), Instant::now()));
+                }
+            }
+        } else {
+            self.status_message = Some((format!("Opening {target}"), Instant::now()));
+        }
+    }
+
+    fn render_link_dialog(&self, frame: &mut Frame, area: Rect) {
+        let Some(dialog) = &self.link_dialog else {
+            return;
+        };
+        if area.width < 24 || area.height < 9 {
+            return;
+        }
+
+        let theme = self.display.theme();
+        let popup_style = theme.menu_style();
+
+        // Two input rows, a separator, the Open button, and a footer, plus the
+        // border.
+        let width = 60.min(area.width.saturating_sub(4));
+        let height = 7u16.min(area.height.saturating_sub(2));
+        let popup_area = Rect::new(
+            area.x + (area.width.saturating_sub(width)) / 2,
+            area.y + (area.height.saturating_sub(height)) / 2,
+            width,
+            height,
+        );
+
+        frame.render_widget(Clear, popup_area);
+
+        let title = if dialog.editing() {
+            "Edit Link"
+        } else {
+            "Insert Link"
+        };
+        let block = Block::default()
+            .title(title)
+            .borders(Borders::ALL)
+            .style(popup_style)
+            .border_style(Style::default().fg(Color::Gray));
+        let inner = block.inner(popup_area);
+        frame.render_widget(block, popup_area);
+        if inner.width < 10 || inner.height < 5 {
+            return;
+        }
+
+        const LABEL_WIDTH: u16 = 6;
+        let field_x = inner.x + LABEL_WIDTH;
+        let field_width = inner.width.saturating_sub(LABEL_WIDTH).max(1);
+
+        // The text and URL input rows, each prefixed with its label.
+        let fields = [
+            (LinkField::Text, "Text:", dialog.text(), inner.y),
+            (LinkField::Target, "URL:", dialog.target(), inner.y + 1),
+        ];
+        for (field, label, value, y) in fields {
+            frame.render_widget(
+                Paragraph::new(Line::from(Span::styled(label, theme.menu_disabled_style())))
+                    .style(popup_style),
+                Rect::new(inner.x, y, LABEL_WIDTH, 1),
+            );
+            let focused = dialog.focus() == field;
+            let caret = if focused {
+                dialog.active_cursor().unwrap_or(0)
+            } else {
+                0
+            };
+            let visible = field_width as usize;
+            let skip = if focused {
+                (caret + 1).saturating_sub(visible)
+            } else {
+                0
+            };
+            let shown: String = value.chars().skip(skip).take(visible).collect();
+            frame.render_widget(
+                Paragraph::new(shown).style(popup_style),
+                Rect::new(field_x, y, field_width, 1),
+            );
+            if focused {
+                frame.set_cursor_position(Position::new(field_x + (caret - skip) as u16, y));
+            }
+        }
+
+        // Separator below the inputs.
+        let separator = "─".repeat(inner.width as usize);
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                separator,
+                Style::default().fg(Color::DarkGray),
+            )))
+            .style(popup_style),
+            Rect::new(inner.x, inner.y + 2, inner.width, 1),
+        );
+
+        // Button row: Open on the left, Cancel and Save flush right.
+        let button_row = inner.y + 3;
+        let has_target = !dialog.target().trim().is_empty();
+        let button_style = |field: LinkField, enabled: bool| -> Style {
+            if dialog.focus() == field {
+                theme.menu_selected_style()
+            } else if enabled {
+                popup_style
+            } else {
+                popup_style.patch(theme.menu_disabled_style())
+            }
+        };
+
+        let open = "[ Open ]";
+        let cancel = "[ Cancel ]";
+        let save = "[ Save ]";
+        let open_w = open.chars().count() as u16;
+        let cancel_w = cancel.chars().count() as u16;
+        let save_w = save.chars().count() as u16;
+        let open_x = inner.x;
+        let save_x = inner.x + inner.width.saturating_sub(save_w);
+        let cancel_x = save_x.saturating_sub(cancel_w + 1);
+
+        let buttons = [
+            (LinkField::Open, open, open_x, open_w, has_target),
+            (LinkField::Cancel, cancel, cancel_x, cancel_w, true),
+            (LinkField::Save, save, save_x, save_w, true),
+        ];
+        for (field, label, x, w, enabled) in buttons {
+            frame.render_widget(
+                Paragraph::new(Line::from(Span::styled(
+                    label,
+                    button_style(field, enabled),
+                )))
+                .style(popup_style),
+                Rect::new(x, button_row, w, 1),
+            );
+            // Park the caret on the focused button so it does not show through
+            // the popup at the document cursor's position.
+            if dialog.focus() == field {
+                frame.set_cursor_position(Position::new(x, button_row));
+            }
+        }
+
+        // Footer hints.
+        let hint = if dialog.focus().is_button() {
+            "Space: activate   Enter: save   Esc: cancel"
+        } else {
+            "Enter: save   Esc: cancel   Tab: next"
+        };
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(hint, theme.menu_disabled_style())))
+                .style(popup_style),
+            Rect::new(inner.x, inner.y + 4, inner.width, 1),
+        );
     }
 
     /// Swap in `document` as the current document and reset all
