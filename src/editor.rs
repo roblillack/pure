@@ -15,20 +15,20 @@ pub(crate) use styles::inline_style_label;
 
 use inspect::{checklist_item_ref, paragraph_ref, span_ref, span_ref_from_item};
 use structure::{
-    IndentTargetKind, ParentRelation, append_paragraph_as_checklist_child,
-    append_paragraph_to_entry, append_paragraph_to_list, append_paragraph_to_quote,
-    break_list_entry_for_non_list_target, checklist_item_mut, convert_paragraph_into_list,
-    determine_parent_scope, ensure_checklist_item_has_content, ensure_document_initialized,
-    ensure_list_entry_has_paragraph, entry_has_multiple_paragraphs, extract_checklist_item_context,
-    extract_entry_context, find_container_indent_target, find_indent_target,
-    find_list_ancestor_path, indent_checklist_item_into_item, indent_list_entry_into_entry,
-    indent_list_entry_into_foreign_list, indent_paragraph_within_entry,
-    insert_paragraph_after_parent, is_list_type, is_single_paragraph_entry,
-    list_entry_append_target, merge_adjacent_lists, paragraph_is_empty, paragraph_mut,
-    parent_paragraph_path, promote_list_entry_to_parent, promote_single_child_into_parent,
-    remove_paragraph_by_path, span_mut, span_mut_from_item, split_paragraph_break,
-    take_checklist_item_at, take_list_entry, take_paragraph_at, unindent_checklist_item,
-    update_existing_list_type, update_paragraph_type,
+    EntryContext, IndentTarget, IndentTargetKind, ParentRelation,
+    append_paragraph_as_checklist_child, append_paragraph_to_entry, append_paragraph_to_list,
+    append_paragraph_to_quote, break_list_entry_for_non_list_target, checklist_item_mut,
+    convert_paragraph_into_list, determine_parent_scope, ensure_checklist_item_has_content,
+    ensure_document_initialized, ensure_list_entry_has_paragraph, entry_has_multiple_paragraphs,
+    extract_checklist_item_context, extract_entry_context, find_container_indent_target,
+    find_indent_target, find_list_ancestor_path, indent_checklist_item_into_item,
+    indent_list_entry_into_entry, indent_list_entry_into_foreign_list,
+    indent_paragraph_within_entry, insert_paragraph_after_parent, is_list_type,
+    is_single_paragraph_entry, list_entry_append_target, merge_adjacent_lists, paragraph_is_empty,
+    paragraph_mut, parent_paragraph_path, promote_list_entry_to_parent,
+    promote_single_child_into_parent, remove_paragraph_by_path, span_mut, span_mut_from_item,
+    split_list_entries_after, split_paragraph_break, take_checklist_item_at, take_list_entry,
+    take_paragraph_at, unindent_checklist_item, update_existing_list_type, update_paragraph_type,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
@@ -939,13 +939,50 @@ impl DocumentEditor {
     }
 
     pub fn can_indent_more(&self) -> bool {
-        if find_indent_target(&self.document, &self.cursor.paragraph_path).is_some() {
-            return true;
+        self.indent_target_for_cursor().is_some()
+    }
+
+    /// Resolves the target an indent of the current paragraph would use, or
+    /// `None` when `indent_current_paragraph` would refuse. Shared by
+    /// `can_indent_more` and `indent_current_paragraph` so the advertised
+    /// state stays exact.
+    fn indent_target_for_cursor(&self) -> Option<IndentTarget> {
+        let path = &self.cursor.paragraph_path;
+        let mut target = find_indent_target(&self.document, path);
+        if target.is_none()
+            && let Some(ctx) = extract_entry_context(path)
+        {
+            target = Self::usable_container_indent_target(&self.document, &ctx);
         }
-        if let Some(ctx) = extract_entry_context(&self.cursor.paragraph_path) {
-            return find_container_indent_target(&self.document, &ctx.list_path).is_some();
+        let target = target?;
+
+        let pointer_is_checklist_item =
+            matches!(path.steps().last(), Some(PathStep::ChecklistItem { .. }));
+        match target.kind {
+            // Checklist items can only be nested under an item of the same
+            // checklist.
+            IndentTargetKind::ChecklistItem if pointer_is_checklist_item => {
+                let source = extract_checklist_item_context(path)?;
+                let target_ctx = extract_checklist_item_context(&target.path)?;
+                (source.checklist_path == target_ctx.checklist_path).then_some(target)
+            }
+            // These moves lift the paragraph out via `take_paragraph_at`,
+            // which cannot extract checklist items.
+            IndentTargetKind::Quote | IndentTargetKind::List if pointer_is_checklist_item => None,
+            _ => Some(target),
         }
-        false
+    }
+
+    /// Indent target for an entry that has no previous sibling, found by
+    /// walking up the ancestor chain. A `ListEntry` target found this way is
+    /// an ancestor entry that already contains the cursor — indenting into
+    /// it would tear the paragraph out of its nested list, so it is rejected.
+    fn usable_container_indent_target(
+        document: &Document,
+        ctx: &EntryContext,
+    ) -> Option<IndentTarget> {
+        find_container_indent_target(document, &ctx.list_path)
+            .filter(|target| !matches!(target.kind, IndentTargetKind::ListEntry { .. }))
     }
 
     pub fn can_indent_less(&self) -> bool {
@@ -963,13 +1000,7 @@ impl DocumentEditor {
     }
 
     pub fn indent_current_paragraph(&mut self) -> bool {
-        let mut target = find_indent_target(&self.document, &self.cursor.paragraph_path);
-        if target.is_none()
-            && let Some(ctx) = extract_entry_context(&self.cursor.paragraph_path)
-        {
-            target = find_container_indent_target(&self.document, &ctx.list_path);
-        }
-        let Some(target) = target else {
+        let Some(target) = self.indent_target_for_cursor() else {
             return false;
         };
         let pointer = self.cursor_stable_pointer();
@@ -983,15 +1014,19 @@ impl DocumentEditor {
                 indent_list_entry_into_entry(&mut self.document, &pointer, &ctx, entry_index)
             };
 
-            if let Some(new_pointer) = handled {
-                self.rebuild_segments();
-                if !self.move_to_pointer(&new_pointer)
-                    && !self.fallback_move_to_text(&new_pointer, false)
-                {
-                    self.ensure_cursor_selectable();
-                }
-                return true;
+            let Some(new_pointer) = handled else {
+                // The entry could not absorb the indent; the generic move
+                // below would tear the paragraph out of its entry and leave
+                // the list corrupted, so refuse instead.
+                return false;
+            };
+            self.rebuild_segments();
+            if !self.move_to_pointer(&new_pointer)
+                && !self.fallback_move_to_text(&new_pointer, false)
+            {
+                self.ensure_cursor_selectable();
             }
+            return true;
         }
 
         if matches!(target.kind, IndentTargetKind::ChecklistItem) {
@@ -1118,11 +1153,20 @@ impl DocumentEditor {
         let Some(paragraph) = take_paragraph_at(&mut self.document, &pointer.paragraph_path) else {
             return false;
         };
-        let Some(paragraph_path) =
+        let Some(mut paragraph_path) =
             insert_paragraph_after_parent(&mut self.document, &parent_path, paragraph)
         else {
             return false;
         };
+        // If the unindented paragraph was the parent quote's only child, the
+        // quote is now empty: remove it. The paragraph was inserted right
+        // after the parent, so it slides into the parent's old position.
+        if paragraph_ref(&self.document, &parent_path)
+            .is_some_and(|p| matches!(p, Paragraph::Quote { children } if children.is_empty()))
+        {
+            remove_paragraph_by_path(&mut self.document, &parent_path);
+            paragraph_path = parent_path;
+        }
         let mut new_pointer = pointer;
         new_pointer.paragraph_path = paragraph_path;
         self.rebuild_segments();
@@ -1142,7 +1186,7 @@ impl DocumentEditor {
             None => return false,
         };
         let PathStep::Entry {
-            entry_index: _,
+            entry_index,
             paragraph_index,
         } = *last_step
         else {
@@ -1155,6 +1199,15 @@ impl DocumentEditor {
             else {
                 return false;
             };
+            // Entries below the cursor's entry continue in a new list after
+            // the unindented paragraph, so the paragraph stays in place
+            // instead of jumping below the whole list. The tail list is
+            // inserted first; the paragraph then lands between the halves.
+            if let Some(tail_list) =
+                split_list_entries_after(&mut self.document, &list_path, entry_index)
+            {
+                insert_paragraph_after_parent(&mut self.document, &list_path, tail_list);
+            }
             let Some(paragraph_path) =
                 insert_paragraph_after_parent(&mut self.document, &list_path, paragraph)
             else {
@@ -1258,6 +1311,10 @@ impl DocumentEditor {
 
         if !is_list_type(target)
             && treat_as_singular_entry
+            // Type conversion only breaks an entry out when it has no other
+            // paragraphs; unlike unindent, it must not drag continuation
+            // paragraphs along (update_paragraph_type handles those in place).
+            && is_single_paragraph_entry(&self.document, &operation_path)
             && let Some(pointer) =
                 break_list_entry_for_non_list_target(&mut self.document, &operation_path, target)
         {

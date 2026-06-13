@@ -581,3 +581,54 @@ fn paste_rebuilds_cut_list_items() {
     app.ctrl('v');
     assert_svg("paste_rebuilds_cut_list_items", &mut app);
 }
+
+/// Unindenting a continuation paragraph out of the middle of a list splits
+/// the list, which changes the number of root paragraphs. The cached layout
+/// must be fully rebuilt: previously the incremental update left the screen
+/// truncated and the cursor misplaced until the cursor was moved away and
+/// back.
+#[test]
+fn unindent_split_renders_fully_with_cursor_in_place() {
+    let document = ftml! {
+        ul {
+            li { p { "Alpha" } }
+            li { p { "" } }
+            li { p { "Beta" } }
+        }
+        p { "Tail" }
+    };
+    let mut app = TestApp::new(40, 14, document);
+    app.key(KeyCode::Down); // onto the empty item
+    app.ctrl('p'); // continuation paragraph within the item
+    app.ctrl('['); // unindent: splits the list at the new paragraph
+
+    // The whole document must be on screen right away.
+    let lines = app.buffer_lines();
+    let row_of = |needle: &str| {
+        lines
+            .iter()
+            .position(|line| line.contains(needle))
+            .unwrap_or_else(|| panic!("{needle:?} not on screen: {lines:#?}"))
+    };
+    let empty_bullet_row = lines
+        .iter()
+        .position(|line| line.trim_end() == "•")
+        .expect("empty list item visible");
+    let beta_row = row_of("• Beta");
+    row_of("• Alpha");
+    row_of("Tail");
+
+    // The cursor sits on the new empty paragraph between the list halves...
+    let cursor = app.cursor_position().expect("cursor shown");
+    assert_eq!(cursor.x, 0, "cursor at start of the empty paragraph");
+    assert!(
+        (usize::from(cursor.y)) > empty_bullet_row && (usize::from(cursor.y)) < beta_row,
+        "cursor row {} not between empty item (row {empty_bullet_row}) and Beta (row {beta_row})",
+        cursor.y
+    );
+
+    // ... and moving away and back lands on exactly the same spot.
+    app.key(KeyCode::Down);
+    app.key(KeyCode::Up);
+    assert_eq!(app.cursor_position(), Some(cursor));
+}

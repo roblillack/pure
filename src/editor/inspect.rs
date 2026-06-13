@@ -200,6 +200,162 @@ fn text_effective_relation(
     }
 }
 
+/// Renders the document tree as an indented debug string. Structural
+/// anomalies (lists without entries, entries without paragraphs, paragraphs
+/// without spans) are flagged so they stand out when hunting tree corruption.
+/// When a cursor pointer is given, the paragraph it sits in is marked.
+pub fn dump_tree(document: &Document, cursor: Option<&CursorPointer>) -> String {
+    let mut out = String::new();
+    out.push_str(&format!(
+        "Document ({} paragraphs)\n",
+        document.paragraphs.len()
+    ));
+    for (idx, paragraph) in document.paragraphs.iter().enumerate() {
+        let mut path = ParagraphPath::new_root(idx);
+        dump_paragraph(paragraph, &mut path, 1, cursor, &mut out);
+    }
+    if let Some(pointer) = cursor {
+        out.push_str(&format!(
+            "cursor: {:?} span_path={:?} offset={}\n",
+            pointer.paragraph_path,
+            pointer.span_path.indices(),
+            pointer.offset
+        ));
+    }
+    out
+}
+
+fn dump_paragraph(
+    paragraph: &Paragraph,
+    path: &mut ParagraphPath,
+    depth: usize,
+    cursor: Option<&CursorPointer>,
+    out: &mut String,
+) {
+    let indent = "  ".repeat(depth);
+    let marker = cursor_marker(path, cursor);
+    match paragraph {
+        Paragraph::Text { content }
+        | Paragraph::Header1 { content }
+        | Paragraph::Header2 { content }
+        | Paragraph::Header3 { content }
+        | Paragraph::CodeBlock { content } => {
+            out.push_str(&format!(
+                "{indent}{}: {}{marker}\n",
+                paragraph.paragraph_type(),
+                dump_spans(content)
+            ));
+        }
+        Paragraph::Quote { children } => {
+            let warn = if children.is_empty() {
+                "  !! NO CHILDREN"
+            } else {
+                ""
+            };
+            out.push_str(&format!(
+                "{indent}Quote ({} children){warn}{marker}\n",
+                children.len()
+            ));
+            for (child_index, child) in children.iter().enumerate() {
+                path.push_child(child_index);
+                dump_paragraph(child, path, depth + 1, cursor, out);
+                path.pop();
+            }
+        }
+        Paragraph::OrderedList { entries } | Paragraph::UnorderedList { entries } => {
+            let warn = if entries.is_empty() {
+                "  !! NO ENTRIES"
+            } else {
+                ""
+            };
+            out.push_str(&format!(
+                "{indent}{} ({} entries){warn}{marker}\n",
+                paragraph.paragraph_type(),
+                entries.len()
+            ));
+            for (entry_index, entry) in entries.iter().enumerate() {
+                if entry.is_empty() {
+                    out.push_str(&format!("{indent}  entry {entry_index}  !! EMPTY ENTRY\n"));
+                    continue;
+                }
+                out.push_str(&format!(
+                    "{indent}  entry {entry_index} ({} paragraphs)\n",
+                    entry.len()
+                ));
+                for (paragraph_index, child) in entry.iter().enumerate() {
+                    path.push_entry(entry_index, paragraph_index);
+                    dump_paragraph(child, path, depth + 2, cursor, out);
+                    path.pop();
+                }
+            }
+        }
+        Paragraph::Checklist { items } => {
+            let warn = if items.is_empty() {
+                "  !! NO ITEMS"
+            } else {
+                ""
+            };
+            out.push_str(&format!(
+                "{indent}Checklist ({} items){warn}{marker}\n",
+                items.len()
+            ));
+            for (item_index, item) in items.iter().enumerate() {
+                dump_checklist_item(item, path, &[item_index], depth + 1, cursor, out);
+            }
+        }
+    }
+}
+
+fn dump_checklist_item(
+    item: &ChecklistItem,
+    path: &mut ParagraphPath,
+    indices: &[usize],
+    depth: usize,
+    cursor: Option<&CursorPointer>,
+    out: &mut String,
+) {
+    let indent = "  ".repeat(depth);
+    path.push_checklist_item(indices.to_vec());
+    let marker = cursor_marker(path, cursor);
+    path.pop();
+    let checkbox = if item.checked { "[x]" } else { "[ ]" };
+    out.push_str(&format!(
+        "{indent}item {indices:?} {checkbox} {}{marker}\n",
+        dump_spans(&item.content)
+    ));
+    for (child_index, child) in item.children.iter().enumerate() {
+        let mut child_indices = indices.to_vec();
+        child_indices.push(child_index);
+        dump_checklist_item(child, path, &child_indices, depth + 1, cursor, out);
+    }
+}
+
+fn dump_spans(spans: &[Span]) -> String {
+    if spans.is_empty() {
+        return "!! NO SPANS".to_string();
+    }
+    let mut parts = Vec::new();
+    for span in spans {
+        let mut part = String::new();
+        if span.style != InlineStyle::None {
+            part.push_str(&format!("{:?}", span.style));
+        }
+        part.push_str(&format!("{:?}", span.text));
+        if !span.children.is_empty() {
+            part.push_str(&format!("({})", dump_spans(&span.children)));
+        }
+        parts.push(part);
+    }
+    parts.join(" + ")
+}
+
+fn cursor_marker(path: &ParagraphPath, cursor: Option<&CursorPointer>) -> &'static str {
+    match cursor {
+        Some(pointer) if pointer.paragraph_path == *path => "    <== CURSOR",
+        _ => "",
+    }
+}
+
 pub fn paragraph_path_is_prefix(prefix: &ParagraphPath, target: &ParagraphPath) -> bool {
     let prefix_steps = prefix.steps();
     let target_steps = target.steps();

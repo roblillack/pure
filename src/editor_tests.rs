@@ -3530,3 +3530,528 @@ fn selection_fragment_does_not_modify_the_document() {
     assert_eq!(editor.document().paragraphs[0].content()[0].text, "Alpha");
     assert_eq!(editor.document().paragraphs[1].content()[0].text, "Beta");
 }
+
+// ---------------------------------------------------------------------------
+// Structural integrity of indent/unindent operations
+//
+// Regression hunting for "changing the indent level near nested lists
+// corrupts the tree" bugs: empty list entries appearing, lists left behind
+// without entries, or text being lost. The sweep test below drives every
+// indent/unindent sequence (up to length 3) from every text position of a
+// set of seed documents and asserts tree invariants after every step.
+// ---------------------------------------------------------------------------
+
+/// Walks the document and reports violations of the structural invariants
+/// the editor relies on: lists must have entries, entries must have
+/// paragraphs, quotes must have children, checklists must have items.
+fn structural_problems(document: &Document) -> Vec<String> {
+    fn walk(paragraph: &Paragraph, location: &str, problems: &mut Vec<String>) {
+        match paragraph {
+            Paragraph::Quote { children } => {
+                if children.is_empty() {
+                    problems.push(format!("{location}: quote without children"));
+                }
+                for (idx, child) in children.iter().enumerate() {
+                    walk(child, &format!("{location}>child{idx}"), problems);
+                }
+            }
+            Paragraph::OrderedList { entries } | Paragraph::UnorderedList { entries } => {
+                if entries.is_empty() {
+                    problems.push(format!("{location}: list without entries"));
+                }
+                for (idx, entry) in entries.iter().enumerate() {
+                    if entry.is_empty() {
+                        problems.push(format!("{location}>entry{idx}: empty list entry"));
+                    }
+                    for (pidx, child) in entry.iter().enumerate() {
+                        walk(child, &format!("{location}>entry{idx}.{pidx}"), problems);
+                    }
+                }
+            }
+            Paragraph::Checklist { items } if items.is_empty() => {
+                problems.push(format!("{location}: checklist without items"));
+            }
+            _ => {}
+        }
+    }
+
+    let mut problems = Vec::new();
+    for (idx, paragraph) in document.paragraphs.iter().enumerate() {
+        walk(paragraph, &format!("p{idx}"), &mut problems);
+    }
+    problems
+}
+
+/// Collects every span text in the document as a sorted multiset. Indent and
+/// unindent are pure structure operations: they must never create, delete,
+/// or alter text (the appearance of a new "" is exactly the empty-list-item
+/// bug we are hunting).
+fn document_texts(document: &Document) -> Vec<String> {
+    fn spans(list: &[Span], out: &mut Vec<String>) {
+        for span in list {
+            out.push(span.text.clone());
+            spans(&span.children, out);
+        }
+    }
+    fn items(list: &[ChecklistItem], out: &mut Vec<String>) {
+        for item in list {
+            spans(&item.content, out);
+            items(&item.children, out);
+        }
+    }
+    fn walk(paragraph: &Paragraph, out: &mut Vec<String>) {
+        spans(paragraph.content(), out);
+        for child in paragraph.children() {
+            walk(child, out);
+        }
+        for entry in paragraph.entries() {
+            for child in entry {
+                walk(child, out);
+            }
+        }
+        items(paragraph.checklist_items(), out);
+    }
+
+    let mut out = Vec::new();
+    for paragraph in &document.paragraphs {
+        walk(paragraph, &mut out);
+    }
+    out.sort();
+    out
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum IndentOp {
+    More,
+    Less,
+}
+
+fn indent_op_sequences(max_len: usize) -> Vec<Vec<IndentOp>> {
+    let mut all = Vec::new();
+    for len in 1..=max_len {
+        for bits in 0..(1usize << len) {
+            let seq = (0..len)
+                .map(|bit| {
+                    if bits & (1 << bit) != 0 {
+                        IndentOp::More
+                    } else {
+                        IndentOp::Less
+                    }
+                })
+                .collect::<Vec<_>>();
+            all.push(seq);
+        }
+    }
+    all
+}
+
+fn indent_sweep_seeds() -> Vec<(&'static str, Document)> {
+    let nested_checklist = {
+        let child = ChecklistItem::new(false).with_content(vec![Span::new_text("C1")]);
+        let first = ChecklistItem::new(false)
+            .with_content(vec![Span::new_text("T1")])
+            .with_children(vec![child]);
+        let second = ChecklistItem::new(false).with_content(vec![Span::new_text("T2")]);
+        Document::new().with_paragraphs(vec![
+            Paragraph::new_checklist().with_checklist_items(vec![first, second]),
+            text_paragraph("After"),
+        ])
+    };
+    let list_only_entry = Document::new().with_paragraphs(vec![
+        Paragraph::new_unordered_list().with_entries(vec![
+            vec![text_paragraph("A")],
+            // Degenerate but reachable: an entry holding only a nested list.
+            vec![Paragraph::new_unordered_list().with_entries(vec![vec![text_paragraph("B")]])],
+        ]),
+        text_paragraph("Tail"),
+    ]);
+
+    vec![
+        ("nested checklist then paragraph", nested_checklist),
+        ("entry holding only a nested list", list_only_entry),
+        (
+            "foreign type below mismatched nested list",
+            ftml! {
+                ul {
+                    li {
+                        p { "X" }
+                        ol { li { p { "Y" } } }
+                    }
+                }
+                ul { li { p { "Z" } } }
+            },
+        ),
+        (
+            "paragraph after list with nested item",
+            ftml! {
+                ul {
+                    li {
+                        p { "One" }
+                        ul { li { p { "Two" } } }
+                    }
+                }
+                p { "Para" }
+            },
+        ),
+        (
+            "paragraph between nested lists",
+            ftml! {
+                ul {
+                    li {
+                        p { "Alpha" }
+                        ul { li { p { "Beta" } } }
+                    }
+                    li { p { "Gamma" } }
+                }
+                p { "Middle" }
+                ul { li { p { "Delta" } } }
+            },
+        ),
+        (
+            "entry with multiple paragraphs next to nested list",
+            ftml! {
+                ul {
+                    li {
+                        p { "First" }
+                        ul { li { p { "Sub" } } }
+                        p { "Second" }
+                    }
+                    li { p { "Third" } }
+                }
+            },
+        ),
+        (
+            "deep nesting",
+            ftml! {
+                ul {
+                    li {
+                        p { "A" }
+                        ul {
+                            li {
+                                p { "B" }
+                                ul { li { p { "C" } } }
+                            }
+                        }
+                    }
+                }
+                p { "After" }
+            },
+        ),
+        (
+            "quote followed by list",
+            ftml! {
+                quote { p { "Quoted" } }
+                ul {
+                    li { p { "Item" } }
+                    li { p { "Item2" } }
+                }
+            },
+        ),
+        (
+            "quote followed by single item list",
+            ftml! {
+                quote { p { "Quoted" } }
+                ul { li { p { "Only" } } }
+            },
+        ),
+        (
+            "ordered list after unordered with nesting",
+            ftml! {
+                ul {
+                    li {
+                        p { "Bullet" }
+                        ol { li { p { "Numbered" } } }
+                    }
+                }
+                ol { li { p { "Top" } } }
+            },
+        ),
+    ]
+}
+
+/// Drives every indent/unindent sequence up to length 3 from every text
+/// position of every seed document, asserting after each single operation:
+/// 1. the tree stays structurally sound (no empty entries/lists),
+/// 2. no text is created or destroyed,
+/// 3. an operation that reports `false` did not modify the document.
+#[test]
+fn indent_unindent_sequences_keep_tree_sound() {
+    for (seed_name, seed) in indent_sweep_seeds() {
+        let seed_texts = document_texts(&seed);
+        let start_problems = structural_problems(&seed);
+        assert!(
+            start_problems.is_empty(),
+            "seed '{seed_name}' is already unsound: {start_problems:?}"
+        );
+
+        let segments = inspect::collect_segments(&seed, false);
+        for segment in &segments {
+            for ops in indent_op_sequences(4) {
+                let mut editor = DocumentEditor::new(seed.clone());
+                let pointer = CursorPointer {
+                    paragraph_path: segment.paragraph_path.clone(),
+                    span_path: segment.span_path.clone(),
+                    offset: 0,
+                    segment_kind: SegmentKind::Text,
+                };
+                if !editor.move_to_pointer(&pointer) {
+                    continue;
+                }
+
+                let mut applied: Vec<(IndentOp, bool)> = Vec::new();
+                for op in &ops {
+                    let before = editor.document().clone();
+                    let advertised = match op {
+                        IndentOp::More => editor.can_indent_more(),
+                        IndentOp::Less => editor.can_indent_less(),
+                    };
+                    let changed = match op {
+                        IndentOp::More => editor.indent_current_paragraph(),
+                        IndentOp::Less => editor.unindent_current_paragraph(),
+                    };
+                    applied.push((*op, changed));
+
+                    let context = || {
+                        format!(
+                            "seed: {seed_name}\nstart position: {:?}\nops applied: {applied:?}\ntree:\n{}",
+                            segment.paragraph_path,
+                            inspect::dump_tree(editor.document(), Some(&editor.cursor_pointer()))
+                        )
+                    };
+
+                    assert_eq!(
+                        changed,
+                        advertised,
+                        "can_indent_more/less disagrees with the operation outcome\n{}",
+                        context()
+                    );
+
+                    if !changed {
+                        assert_eq!(
+                            editor.document(),
+                            &before,
+                            "operation returned false but modified the document\n{}",
+                            context()
+                        );
+                    }
+
+                    let problems = structural_problems(editor.document());
+                    assert!(
+                        problems.is_empty(),
+                        "structural problems: {problems:?}\n{}",
+                        context()
+                    );
+
+                    let texts = document_texts(editor.document());
+                    assert_eq!(
+                        texts,
+                        seed_texts,
+                        "indent/unindent changed document text content\n{}",
+                        context()
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// Indenting the first item of a nested list has nothing to indent into:
+/// it must be a clean no-op. (Previously it tore the item out of the nested
+/// list, leaving behind an empty list item that could not be removed.)
+#[test]
+fn indent_first_nested_list_item_is_a_noop() {
+    let initial = ftml! {
+        ul {
+            li {
+                p { "Parent" }
+                ul { li { p { "Child" } } }
+            }
+        }
+    };
+    let mut editor = DocumentEditor::new(initial.clone());
+
+    let mut path = ParagraphPath::new_root(0);
+    path.push_entry(0, 1); // nested list within the first entry
+    path.push_entry(0, 0); // "Child"
+    let pointer = CursorPointer {
+        paragraph_path: path,
+        span_path: SpanPath::new(vec![0]),
+        offset: 0,
+        segment_kind: SegmentKind::Text,
+    };
+    assert!(editor.move_to_pointer(&pointer));
+
+    let changed = editor.indent_current_paragraph();
+
+    assert_eq!(
+        editor.document(),
+        &initial,
+        "indent of the first nested item must not restructure the tree \
+         (changed={changed})\ntree:\n{}",
+        inspect::dump_tree(editor.document(), Some(&editor.cursor_pointer()))
+    );
+}
+
+/// Indenting the only item of a list into a preceding quote must not leave
+/// the now-empty list behind as an unremovable empty bullet.
+#[test]
+fn indent_single_list_item_into_quote_leaves_no_empty_list() {
+    let initial = ftml! {
+        quote { p { "Quoted" } }
+        ul { li { p { "Only" } } }
+    };
+    let mut editor = DocumentEditor::new(initial);
+
+    let pointer = pointer_to_entry_span(1, 0, 0);
+    assert!(editor.move_to_pointer(&pointer));
+    assert!(editor.indent_current_paragraph());
+
+    let expected = ftml! {
+        quote {
+            p { "Quoted" }
+            p { "Only" }
+        }
+    };
+    assert_eq!(
+        editor.document().clone(),
+        expected,
+        "tree:\n{}",
+        inspect::dump_tree(editor.document(), Some(&editor.cursor_pointer()))
+    );
+}
+
+/// The full "move a paragraph below a nested list item" flow: indenting a
+/// trailing paragraph twice should first make it a sibling list item, then
+/// a sibling of the nested item — never an empty item.
+#[test]
+fn indent_paragraph_below_nested_item_step_by_step() {
+    let initial = ftml! {
+        ul {
+            li {
+                p { "One" }
+                ul { li { p { "Two" } } }
+            }
+        }
+        p { "Para" }
+    };
+    let mut editor = DocumentEditor::new(initial);
+
+    let pointer = pointer_to_root_span(1);
+    assert!(editor.move_to_pointer(&pointer));
+
+    assert!(editor.indent_current_paragraph());
+    let after_first = ftml! {
+        ul {
+            li {
+                p { "One" }
+                ul { li { p { "Two" } } }
+            }
+            li { p { "Para" } }
+        }
+    };
+    assert_eq!(
+        editor.document().clone(),
+        after_first,
+        "after first indent\ntree:\n{}",
+        inspect::dump_tree(editor.document(), Some(&editor.cursor_pointer()))
+    );
+
+    assert!(editor.indent_current_paragraph());
+    let after_second = ftml! {
+        ul {
+            li {
+                p { "One" }
+                ul {
+                    li { p { "Two" } }
+                    li { p { "Para" } }
+                }
+            }
+        }
+    };
+    assert_eq!(
+        editor.document().clone(),
+        after_second,
+        "after second indent\ntree:\n{}",
+        inspect::dump_tree(editor.document(), Some(&editor.cursor_pointer()))
+    );
+}
+
+/// Unindenting a continuation paragraph (Ctrl-P creates one within the
+/// entry) from the middle of a list must split the list there, like
+/// unindenting an item does — not drop the paragraph below the whole list,
+/// where it seems to vanish.
+#[test]
+fn unindent_continuation_paragraph_splits_list() {
+    let initial = ftml! {
+        ul {
+            li { p { "A" } }
+            li {
+                p { "First" }
+                p { "Second" }
+            }
+            li { p { "B" } }
+        }
+    };
+    let mut editor = DocumentEditor::new(initial);
+
+    let pointer = pointer_to_entry_span(0, 1, 1); // "Second"
+    assert!(editor.move_to_pointer(&pointer));
+    assert!(editor.can_indent_less());
+    assert!(editor.unindent_current_paragraph());
+
+    let expected = ftml! {
+        ul {
+            li { p { "A" } }
+            li { p { "First" } }
+        }
+        p { "Second" }
+        ul {
+            li { p { "B" } }
+        }
+    };
+    assert_eq!(
+        editor.document().clone(),
+        expected,
+        "tree:\n{}",
+        inspect::dump_tree(editor.document(), Some(&editor.cursor_pointer()))
+    );
+    assert_eq!(editor.cursor_pointer().paragraph_path.root_index(), Some(1));
+}
+
+/// The reported flow: empty item between non-empty ones, Ctrl-P, unindent.
+/// The new paragraph must end up as an empty text paragraph splitting the
+/// list at that position, with the cursor on it.
+#[test]
+fn ctrl_p_then_unindent_on_empty_item_splits_list_in_place() {
+    let initial = ftml! {
+        ul {
+            li { p { "A" } }
+            li { p { "" } }
+            li { p { "B" } }
+        }
+    };
+    let mut editor = DocumentEditor::new(initial);
+
+    let pointer = pointer_to_entry_span(0, 1, 0); // the empty item
+    assert!(editor.move_to_pointer(&pointer));
+    assert!(editor.insert_paragraph_break_as_sibling());
+    assert!(editor.unindent_current_paragraph());
+
+    let expected = ftml! {
+        ul {
+            li { p { "A" } }
+            li { p { "" } }
+        }
+        p { "" }
+        ul {
+            li { p { "B" } }
+        }
+    };
+    assert_eq!(
+        editor.document().clone(),
+        expected,
+        "tree:\n{}",
+        inspect::dump_tree(editor.document(), Some(&editor.cursor_pointer()))
+    );
+    assert_eq!(editor.cursor_pointer().paragraph_path.root_index(), Some(1));
+}

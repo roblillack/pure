@@ -144,6 +144,24 @@ impl TestApp {
         }
     }
 
+    /// The terminal cursor position after the last draw.
+    pub fn cursor_position(&mut self) -> Option<Position> {
+        self.terminal.get_cursor_position().ok()
+    }
+
+    /// Plain-text contents of the terminal buffer, one string per row.
+    pub fn buffer_lines(&self) -> Vec<String> {
+        let buffer = self.terminal.backend().buffer();
+        let area = buffer.area();
+        (0..area.height)
+            .map(|y| {
+                (0..area.width)
+                    .map(|x| buffer[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect()
+    }
+
     /// Render the current frame to SVG.
     pub fn svg(&mut self) -> String {
         self.svg_with(CellMetrics::default())

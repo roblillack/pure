@@ -68,6 +68,18 @@ While pre-1.0, the minor version is bumped for breaking changes.
 - Inserting or deleting a character in a line that shows reveal codes later in
   the line no longer hides those codes (while keeping the formatting) until
   the next full re-render. (#28)
+- Changing the indent level of paragraphs near nested lists no longer leaves
+  behind empty list items that could not be removed. This covered several
+  cases, including indenting the first item of a nested list, indenting a sole
+  list item into a preceding quote, and unindenting the only child of a quote.
+- The Format menu's "Indent more" is now enabled only when indenting would
+  actually do something, matching what the operation performs.
+- Unindenting a paragraph from the middle of a list now splits the list at that
+  spot instead of dropping the paragraph below the entire list, where it
+  appeared to vanish.
+- Splitting a list by unindenting now redraws the whole document immediately
+  with the cursor in the right place, instead of leaving the view truncated and
+  the cursor misplaced until moving away and back.
 
 ## [0.4.2] - 2026-03-01
 

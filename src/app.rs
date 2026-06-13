@@ -1611,6 +1611,34 @@ impl App {
         self.status_message = Some((message.to_string(), Instant::now()));
     }
 
+    /// Appends a debug dump of the document tree (with cursor position) to
+    /// `pure-tree-dump.txt` in the temp directory. Bound to F12 in dev
+    /// (debug) builds only, for diagnosing structural corruption in a live
+    /// session.
+    #[cfg(debug_assertions)]
+    fn dump_document_tree(&mut self) {
+        use std::io::Write;
+
+        let pointer = self.display.cursor_pointer();
+        let dump = crate::editor::inspect::dump_tree(self.display.document(), Some(&pointer));
+        let path = std::env::temp_dir().join("pure-tree-dump.txt");
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let entry = format!("==== tree dump (unix {stamp}) ====\n{dump}\n");
+        let result = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .and_then(|mut file| file.write_all(entry.as_bytes()));
+        let message = match result {
+            Ok(()) => format!("Tree dumped to {}", path.display()),
+            Err(err) => format!("Tree dump failed: {err}"),
+        };
+        self.status_message = Some((message, Instant::now()));
+    }
+
     fn close_menu_bar(&mut self) {
         self.menu_bar = None;
     }
@@ -2232,6 +2260,10 @@ impl App {
                     }
                     (KeyCode::F(9), _) => {
                         self.toggle_reveal_codes();
+                    }
+                    #[cfg(debug_assertions)]
+                    (KeyCode::F(12), _) => {
+                        self.dump_document_tree();
                     }
                     (KeyCode::Char('c'), m) if m.contains(KeyModifiers::CONTROL) => {
                         // Copies the selection; without one the key is
