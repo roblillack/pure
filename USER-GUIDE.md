@@ -85,6 +85,14 @@ You can also open Markdown files:
 pure document.md
 ```
 
+**To start with a new, untitled document:**
+
+```
+pure
+```
+
+The status line shows "Untitled" until you save the document; pressing **Ctrl+S** then opens the Save As dialog so you can give it a name.
+
 ### The Clean Screen
 
 When you start Pure, you see the editing screen.
@@ -112,7 +120,7 @@ The **status line** displays information about your document and cursor position
 - The current line number
 - The cursor position on the line
 
-When you save a document, the status line displays the filename.
+The status line displays the document's filename — or "Untitled" before the document has been saved for the first time.
 
 ### Document Structure
 
@@ -144,11 +152,17 @@ Erases characters to the immediate left of the cursor as you type.
 **Delete**
 Deletes the character at the cursor position.
 
+**Ctrl+N**
+Starts a new, untitled document. If the current document has unsaved changes, Pure warns first; select New again to discard them.
+
+**Ctrl+O**
+Opens another document. A file dialog lets you type a path — with Tab completion, like in a shell — or pick a file from the listing with the arrow keys.
+
 **Ctrl+Q**
 Exits Pure. You will be prompted to save any unsaved changes.
 
 **Ctrl+S**
-Saves the current document.
+Saves the current document. An untitled document asks for a name through the Save As dialog first. To save under a different name, use Save As... in the File menu.
 
 **Ctrl+X**, **Ctrl+C**, **Ctrl+V**
 Cut, copy, and paste. Cut and copied text also reaches the system clipboard through your terminal.
@@ -320,7 +334,7 @@ Now that you've created a document, save it:
 
 1. Press **Ctrl+S**.
 
-2. If this is a new document, you'll be prompted for a filename.
+2. Since this is a new document, the Save As dialog opens to ask for a filename.
 
 3. Type: **study-abroad.ftml** and press **Enter**.
 
@@ -1151,7 +1165,7 @@ Pure uses FTML as its primary format because FTML preserves all formatting infor
 
 The menu bar stays hidden while you write. When activated, it appears at the top of the screen with these menus:
 
-- **File** - Save (Ctrl+S), Quit (Ctrl+Q)
+- **File** - New (Ctrl+N), Open... (Ctrl+O), Save (Ctrl+S), Save As..., Quit (Ctrl+Q)
 - **Edit** - Undo (Ctrl+Z), Redo (Ctrl+Y), Cut (Ctrl+X), Copy (Ctrl+C), Paste (Ctrl+V)
 - **Insert** - Line Break (Ctrl+J), Sibling Paragraph (Ctrl+P)
 - **Format** - Formatting Menu (Esc or Ctrl+Space)
@@ -1245,6 +1259,26 @@ Selection boundaries respect formatting structure. When you select text, you can
 
 ---
 
+### New Document
+
+**Purpose:** Start a new, untitled document.
+
+**Keyboard Shortcut:** Ctrl+N
+
+#### To start a new document:
+
+1. Press **Ctrl+N**, or choose **New** from the File menu.
+
+2. If the current document has unsaved changes, Pure warns you in the status line. Select New again to discard them, or save first.
+
+The new document is untitled — the status line shows "Untitled" — and is not connected to any file yet. Pressing **Ctrl+S** opens the Save As dialog to ask for a name.
+
+#### Additional Information:
+
+Starting Pure without a filename argument (`pure`) begins with an untitled document in the same way.
+
+---
+
 ### Newlines and Paragraph Breaks
 
 **Purpose:** Control document structure by inserting newlines and paragraph breaks.
@@ -1315,7 +1349,13 @@ Pure starts and loads the specified document.
 
 #### To open a document from within Pure:
 
-The Retrieve feature for opening documents while Pure is running is planned for a future release. Currently, you must specify the filename when starting Pure.
+1. Press **Ctrl+O**, or choose **Open...** from the File menu.
+
+2. Type the path to the document. Press **Tab** to complete it like in a shell, or pick an entry from the listing with the **Up/Down** arrow keys — selecting a directory with **Enter** descends into it.
+
+3. Press **Enter** to open the document, or **Esc** to cancel.
+
+If the current document has unsaved changes, Pure asks you to press Enter a second time before discarding them.
 
 #### Supported File Types:
 
@@ -1492,23 +1532,21 @@ The visible codes in Pure are representations of the FTML structure. They show w
 
 1. Press **Ctrl+S**.
 
-2. If this is a new document that hasn't been saved before, Pure prompts you for a filename.
+2. If the document is untitled (started without a filename or via File > New), the Save As dialog opens.
 
-3. Type a filename and press **Enter**.
+3. Type a filename — **Tab** completes the path like in a shell — and press **Enter**.
 
 The document is saved to disk.
 
 #### To save with a new name:
 
-Currently, Pure doesn't have a "Save As" feature. To save a document with a new name:
+1. Choose **Save As...** from the File menu (**Alt+F**).
 
-1. Exit Pure (Ctrl+Q).
+2. Edit the suggested path in the file dialog. Press **Tab** to complete a path like in a shell, or pick a directory or file from the listing with the **Up/Down** arrow keys.
 
-2. Copy the file to a new name using your terminal.
+3. Press **Enter** to save, or **Esc** to cancel.
 
-3. Open the new file with Pure.
-
-A dedicated "Save As" feature is planned for future releases.
+If the chosen name already belongs to another file, Pure asks you to press Enter a second time before overwriting it.
 
 #### Filename Extensions:
 
@@ -1581,6 +1619,10 @@ There are no automatic saves or backup copies. Remember to save frequently (Ctrl
 **Ctrl+Y** - Redo last undone change
 
 ### File Operations
+
+**Ctrl+N** - New untitled document
+
+**Ctrl+O** - Open document
 
 **Ctrl+S** - Save document
 

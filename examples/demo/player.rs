@@ -32,7 +32,7 @@ impl Backend {
     pub fn start(columns: u16, rows: u16) -> Self {
         let app = App::new(
             Document::new(),
-            PathBuf::from("demo.md"),
+            Some(PathBuf::from("demo.md")),
             DocumentFormat::Markdown,
             None,
         );

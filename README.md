@@ -22,6 +22,9 @@ pure document.ftml
 
 # Or work with Markdown
 pure notes.md
+
+# Or start with an untitled document and name it on first save
+pure
 ```
 
 ## Features
@@ -72,7 +75,9 @@ Pure provides an intuitive editing experience:
 
 Pure is designed for efficiency with comprehensive keyboard shortcuts:
 
-- **Ctrl+S** - Save document
+- **Ctrl+N** - New untitled document
+- **Ctrl+O** - Open document (file dialog with tab completion)
+- **Ctrl+S** - Save document (asks for a name when untitled)
 - **Ctrl+Q** - Quit (with save prompt)
 - **Ctrl+Z / Ctrl+Y** - Undo / redo
 - **Ctrl+X / Ctrl+C / Ctrl+V** - Cut / copy / paste
@@ -156,7 +161,10 @@ pure webpage.html
 
 **File Operations:**
 
-- Ctrl+S - Save
+- Ctrl+N - New untitled document
+- Ctrl+O - Open (file dialog with tab completion)
+- Ctrl+S - Save (asks for a name when untitled)
+- Save As... in the File menu saves under a new name
 - Ctrl+Q - Quit
 
 **Special Features:**

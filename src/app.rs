@@ -32,6 +32,7 @@ use tdoc::{Document, InlineStyle, ParagraphType, markdown, parse, writer::Writer
 
 use crate::editor::{CursorPointer, DocumentEditor};
 use crate::editor_display::{CursorDisplay, EditorDisplay};
+use crate::file_dialog::{FileDialogKind, FileDialogResult, FileDialogState};
 use crate::menu_bar::{
     AppAction, MENU_BAR, MenuBarEntry, MenuBarState, menu_title_offset, menu_with_accel,
 };
@@ -536,7 +537,9 @@ enum DragState {
 
 pub struct App {
     display: EditorDisplay,
-    file_path: PathBuf,
+    /// Path of the current document; `None` while it is untitled (started
+    /// without an argument or via File > New).
+    file_path: Option<PathBuf>,
     document_format: DocumentFormat,
     scroll_top: usize,
     should_quit: bool,
@@ -550,6 +553,10 @@ pub struct App {
     clipboard: Option<ClipboardContents>,
     context_menu: Option<ContextMenuState>,
     menu_bar: Option<MenuBarState>,
+    file_dialog: Option<FileDialogState>,
+    /// Whether the next New command may discard unsaved changes: the first
+    /// one only warns. Cleared again by any edit.
+    confirm_new: bool,
     last_click_instant: Option<Instant>,
     last_click_position: Option<(u16, u16)>,
     last_click_button: Option<MouseButton>,
@@ -570,7 +577,7 @@ pub struct App {
 impl App {
     pub fn new(
         document: Document,
-        path: PathBuf,
+        path: Option<PathBuf>,
         format: DocumentFormat,
         initial_status: Option<String>,
     ) -> Self {
@@ -590,6 +597,8 @@ impl App {
             clipboard: None,
             context_menu: None,
             menu_bar: None,
+            file_dialog: None,
+            confirm_new: false,
             last_click_instant: None,
             last_click_position: None,
             last_click_button: None,
@@ -996,6 +1005,131 @@ impl App {
         if self.menu_bar.is_some() {
             self.render_menu_bar(frame, area);
         }
+
+        if self.file_dialog.is_some() {
+            self.render_file_dialog(frame, area);
+        }
+    }
+
+    fn render_file_dialog(&self, frame: &mut Frame, area: Rect) {
+        let Some(dialog) = &self.file_dialog else {
+            return;
+        };
+        if area.width < 20 || area.height < 8 {
+            return;
+        }
+
+        let theme = self.display.theme();
+        let popup_style = theme.menu_style();
+
+        // Input line, separator, up to eight listing rows, and a footer,
+        // plus the border.
+        let width = 60.min(area.width.saturating_sub(4));
+        let list_rows = dialog.candidates().len().clamp(1, 8) as u16;
+        let height = (list_rows + 5).min(area.height.saturating_sub(2));
+        let popup_area = Rect::new(
+            area.x + (area.width.saturating_sub(width)) / 2,
+            area.y + (area.height.saturating_sub(height)) / 2,
+            width,
+            height,
+        );
+
+        frame.render_widget(Clear, popup_area);
+
+        let title = match dialog.kind() {
+            FileDialogKind::Open => "Open File",
+            FileDialogKind::SaveAs => "Save As",
+        };
+        let block = Block::default()
+            .title(title)
+            .borders(Borders::ALL)
+            .style(popup_style)
+            .border_style(Style::default().fg(Color::Gray));
+        let inner = block.inner(popup_area);
+        frame.render_widget(block, popup_area);
+        if inner.width < 3 || inner.height < 4 {
+            return;
+        }
+
+        // Path input, horizontally scrolled so the cursor stays visible.
+        let input_area = Rect::new(inner.x + 1, inner.y, inner.width - 2, 1);
+        let visible = input_area.width as usize;
+        let skip = (dialog.cursor() + 1).saturating_sub(visible);
+        let shown: String = dialog.input().chars().skip(skip).take(visible).collect();
+        frame.render_widget(Paragraph::new(shown).style(popup_style), input_area);
+        frame.set_cursor_position(Position::new(
+            input_area.x + (dialog.cursor() - skip) as u16,
+            input_area.y,
+        ));
+
+        let separator = "─".repeat(inner.width as usize);
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                separator,
+                Style::default().fg(Color::DarkGray),
+            )))
+            .style(popup_style),
+            Rect::new(inner.x, inner.y + 1, inner.width, 1),
+        );
+
+        let list_area = Rect::new(
+            inner.x,
+            inner.y + 2,
+            inner.width,
+            inner.height.saturating_sub(3),
+        );
+        if dialog.candidates().is_empty() {
+            frame.render_widget(
+                Paragraph::new(" (no matching files)")
+                    .style(popup_style.patch(theme.menu_disabled_style())),
+                list_area,
+            );
+        } else {
+            let items: Vec<ListItem> = dialog
+                .candidates()
+                .iter()
+                .map(|candidate| {
+                    let (name, style) = if candidate.is_dir {
+                        (
+                            format!(" {}/", candidate.name),
+                            Style::default().add_modifier(Modifier::BOLD),
+                        )
+                    } else {
+                        (format!(" {}", candidate.name), Style::default())
+                    };
+                    ListItem::new(Line::from(Span::styled(name, style)))
+                })
+                .collect();
+            let mut list_state = ListState::default();
+            list_state.select(dialog.selected());
+            let list = List::new(items)
+                .highlight_style(theme.menu_selected_style())
+                .style(popup_style);
+            frame.render_stateful_widget(list, list_area, &mut list_state);
+        }
+
+        // Footer: pending confirmation warning, otherwise key hints.
+        let footer_area = Rect::new(inner.x + 1, inner.y + inner.height - 1, inner.width - 2, 1);
+        let footer = if dialog.pending_confirm().is_some() {
+            let warning = match dialog.kind() {
+                FileDialogKind::Open => "Unsaved changes — press Enter again to discard them",
+                FileDialogKind::SaveAs => "File exists — press Enter again to overwrite",
+            };
+            Span::styled(warning, Style::default().fg(Color::LightYellow))
+        } else {
+            let action = match dialog.kind() {
+                FileDialogKind::Open => "open",
+                FileDialogKind::SaveAs => "save",
+            };
+            Span::styled(
+                format!("Tab: complete  Enter: {action}  Esc: cancel"),
+                theme.menu_disabled_style(),
+            )
+        };
+        frame.render_widget(
+            Paragraph::new(Line::from(footer)).style(popup_style),
+            footer_area,
+        );
     }
 
     fn render_menu_bar(&self, frame: &mut Frame, area: Rect) {
@@ -1551,7 +1685,10 @@ impl App {
     fn execute_app_action(&mut self, action: AppAction) -> Result<()> {
         let previous_cursor = self.display.cursor_pointer();
         match action {
+            AppAction::New => self.new_document(),
+            AppAction::Open => self.open_file_dialog(FileDialogKind::Open),
             AppAction::Save => self.save()?,
+            AppAction::SaveAs => self.open_file_dialog(FileDialogKind::SaveAs),
             AppAction::Quit => self.should_quit = true,
             AppAction::Undo => self.undo(),
             AppAction::Redo => self.redo(),
@@ -1594,7 +1731,11 @@ impl App {
         }
 
         let position = self.cursor_position_text();
-        let filename = self.file_path.display().to_string();
+        let filename = self
+            .file_path
+            .as_ref()
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| "Untitled".to_string());
         let marker = if self.dirty { "*" } else { "" };
         let breadcrumbs = self.breadcrumbs_text();
         let word_count = self.count_words();
@@ -2049,6 +2190,10 @@ impl App {
                 kind: KeyEventKind::Press,
                 ..
             }) => {
+                if self.handle_file_dialog_key(code, modifiers) {
+                    return Ok(());
+                }
+
                 if self.handle_menu_bar_key(code, modifiers)? {
                     return Ok(());
                 }
@@ -2078,6 +2223,12 @@ impl App {
                     }
                     (KeyCode::Char('s'), m) if m.contains(KeyModifiers::CONTROL) => {
                         self.save()?;
+                    }
+                    (KeyCode::Char('o'), m) if m.contains(KeyModifiers::CONTROL) => {
+                        self.open_file_dialog(FileDialogKind::Open);
+                    }
+                    (KeyCode::Char('n'), m) if m.contains(KeyModifiers::CONTROL) => {
+                        self.new_document();
                     }
                     (KeyCode::F(9), _) => {
                         self.toggle_reveal_codes();
@@ -2289,10 +2440,17 @@ impl App {
                 }
             }
             Event::Mouse(mouse_event) => {
+                if self.file_dialog.is_some() {
+                    return Ok(());
+                }
                 self.handle_mouse_event(mouse_event);
             }
             Event::Paste(text) if self.context_menu.is_none() && self.menu_bar.is_none() => {
-                self.paste_text(&text);
+                if let Some(dialog) = self.file_dialog.as_mut() {
+                    dialog.insert_str(&text);
+                } else {
+                    self.paste_text(&text);
+                }
             }
             _ => {}
         }
@@ -2304,21 +2462,28 @@ impl App {
     }
 
     fn save(&mut self) -> Result<()> {
+        // An untitled document needs a name first; saving continues from
+        // the Save As dialog.
+        let Some(path) = &self.file_path else {
+            self.open_file_dialog(FileDialogKind::SaveAs);
+            return Ok(());
+        };
+
         match self.document_format {
             DocumentFormat::Ftml => {
                 let writer = Writer::new();
                 let contents = writer
                     .write_to_string(self.display.document())
                     .context("failed to render FTML")?;
-                fs::write(&self.file_path, contents)
-                    .with_context(|| format!("failed to write {}", self.file_path.display()))?;
+                fs::write(path, contents)
+                    .with_context(|| format!("failed to write {}", path.display()))?;
             }
             DocumentFormat::Markdown => {
                 let mut contents = Vec::new();
                 markdown::write(&mut contents, self.display.document())
                     .context("failed to render Markdown")?;
-                fs::write(&self.file_path, contents)
-                    .with_context(|| format!("failed to write {}", self.file_path.display()))?;
+                fs::write(path, contents)
+                    .with_context(|| format!("failed to write {}", path.display()))?;
             }
         }
 
@@ -2327,8 +2492,197 @@ impl App {
         Ok(())
     }
 
+    fn open_file_dialog(&mut self, kind: FileDialogKind) {
+        let initial_input = match kind {
+            // Start in the current file's directory so its siblings are
+            // listed right away.
+            FileDialogKind::Open => match self.file_path.as_ref().and_then(|path| path.parent()) {
+                Some(parent) if !parent.as_os_str().is_empty() => {
+                    let parent = parent.display().to_string();
+                    if parent.ends_with('/') {
+                        parent
+                    } else {
+                        format!("{parent}/")
+                    }
+                }
+                _ => String::new(),
+            },
+            // Suggest the current path so saving under a sibling name only
+            // needs the file name edited.
+            FileDialogKind::SaveAs => self
+                .file_path
+                .as_ref()
+                .map(|path| path.display().to_string())
+                .unwrap_or_default(),
+        };
+        self.file_dialog = Some(FileDialogState::new(kind, initial_input));
+    }
+
+    /// Handle a key press while the file dialog is open. The dialog is
+    /// modal: every key is consumed.
+    fn handle_file_dialog_key(&mut self, code: KeyCode, modifiers: KeyModifiers) -> bool {
+        if self.file_dialog.is_none() {
+            return false;
+        }
+
+        match (code, modifiers) {
+            (KeyCode::Esc, _) => {
+                self.file_dialog = None;
+            }
+            (KeyCode::Enter, _) => {
+                let result = self
+                    .file_dialog
+                    .as_mut()
+                    .expect("file dialog checked above")
+                    .enter();
+                if let FileDialogResult::Accept(path) = result {
+                    self.accept_file_dialog(path);
+                }
+            }
+            _ => {
+                let Some(dialog) = self.file_dialog.as_mut() else {
+                    return true;
+                };
+                match (code, modifiers) {
+                    (KeyCode::Tab, _) => dialog.complete(),
+                    (KeyCode::Up, _) => dialog.move_selection(-1),
+                    (KeyCode::Down, _) => dialog.move_selection(1),
+                    (KeyCode::Left, _) => dialog.move_cursor_left(),
+                    (KeyCode::Right, _) => dialog.move_cursor_right(),
+                    (KeyCode::Home, _) => dialog.move_cursor_start(),
+                    (KeyCode::End, _) => dialog.move_cursor_end(),
+                    (KeyCode::Char('a'), m) if m.contains(KeyModifiers::CONTROL) => {
+                        dialog.move_cursor_start()
+                    }
+                    (KeyCode::Char('e'), m) if m.contains(KeyModifiers::CONTROL) => {
+                        dialog.move_cursor_end()
+                    }
+                    (KeyCode::Char('w'), m) if m.contains(KeyModifiers::CONTROL) => {
+                        dialog.delete_word_backward()
+                    }
+                    (KeyCode::Backspace, m)
+                        if m.contains(KeyModifiers::CONTROL) || m.contains(KeyModifiers::ALT) =>
+                    {
+                        dialog.delete_word_backward()
+                    }
+                    (KeyCode::Backspace, _) => dialog.backspace(),
+                    (KeyCode::Delete, _) => dialog.delete(),
+                    (KeyCode::Char(ch), m)
+                        if !m.contains(KeyModifiers::CONTROL) && !m.contains(KeyModifiers::ALT) =>
+                    {
+                        dialog.insert_char(ch)
+                    }
+                    _ => {}
+                }
+            }
+        }
+        true
+    }
+
+    /// Act on a path accepted in the file dialog. Destructive accepts —
+    /// opening over unsaved changes, overwriting another file — require a
+    /// second Enter on the unchanged path.
+    fn accept_file_dialog(&mut self, path: PathBuf) {
+        let Some(dialog) = self.file_dialog.as_mut() else {
+            return;
+        };
+        let kind = dialog.kind();
+        let needs_confirmation = match kind {
+            FileDialogKind::Open => self.dirty,
+            FileDialogKind::SaveAs => {
+                self.file_path.as_deref() != Some(path.as_path()) && path.exists()
+            }
+        };
+        if needs_confirmation && dialog.pending_confirm() != Some(path.as_path()) {
+            dialog.set_pending_confirm(path);
+            return;
+        }
+
+        self.file_dialog = None;
+        match kind {
+            FileDialogKind::Open => self.open_file(path),
+            FileDialogKind::SaveAs => self.save_as(path),
+        }
+    }
+
+    /// Swap in `document` as the current document and reset all
+    /// per-document state (undo history, selection, scroll, dirty flag).
+    /// Reveal codes mode survives the swap.
+    fn replace_document(
+        &mut self,
+        document: Document,
+        path: Option<PathBuf>,
+        format: DocumentFormat,
+    ) {
+        let reveal_codes = self.display.reveal_codes();
+        let mut editor = DocumentEditor::new(document);
+        editor.ensure_cursor_selectable();
+        self.display = EditorDisplay::new(editor);
+        self.display.set_reveal_codes(reveal_codes);
+        self.file_path = path;
+        self.document_format = format;
+        self.dirty = false;
+        self.confirm_new = false;
+        self.scroll_top = 0;
+        self.selection_anchor = None;
+        self.needs_position_rebuild = true;
+    }
+
+    /// Start an untitled document. With unsaved changes the first call only
+    /// warns; repeating the command discards them.
+    fn new_document(&mut self) {
+        if self.dirty && !self.confirm_new {
+            self.confirm_new = true;
+            self.status_message = Some((
+                "Unsaved changes — select New again to discard them".to_string(),
+                Instant::now(),
+            ));
+            return;
+        }
+        self.replace_document(Document::new(), None, DocumentFormat::Ftml);
+        self.status_message = Some(("New document".to_string(), Instant::now()));
+    }
+
+    /// Replace the current document with the one loaded from `path`. A
+    /// nonexistent path starts a new document there, mirroring the CLI.
+    fn open_file(&mut self, path: PathBuf) {
+        match load_document(&path) {
+            Ok((document, format, message)) => {
+                let message = message.unwrap_or_else(|| format!("Opened {}", path.display()));
+                self.replace_document(document, Some(path), format);
+                self.status_message = Some((message, Instant::now()));
+            }
+            Err(err) => {
+                self.status_message = Some((format!("{err:#}"), Instant::now()));
+            }
+        }
+    }
+
+    /// Save under a new path; the format follows the new extension. On
+    /// failure the previous path and format are restored.
+    fn save_as(&mut self, path: PathBuf) {
+        let previous_path = self.file_path.take();
+        let previous_format = self.document_format;
+        self.document_format = DocumentFormat::from_path(&path);
+        self.file_path = Some(path);
+        match self.save() {
+            Ok(()) => {
+                if let Some(path) = &self.file_path {
+                    self.status_message =
+                        Some((format!("Saved {}", path.display()), Instant::now()));
+                }
+            }
+            Err(err) => {
+                self.file_path = previous_path;
+                self.document_format = previous_format;
+                self.status_message = Some((format!("{err:#}"), Instant::now()));
+            }
+        }
+    }
+
     fn mark_dirty(&mut self) {
         self.dirty = true;
+        self.confirm_new = false;
         // EditorDisplay now handles layout updates automatically in its wrapper methods
         // (insert_char, delete, backspace, etc.) which includes position tracking via
         // incremental updates. No need to force a full re-render here.

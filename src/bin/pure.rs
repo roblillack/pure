@@ -16,21 +16,25 @@ use crossterm::{
 };
 use ratatui::{Terminal, backend::CrosstermBackend};
 
-use pure_tui::app::{App, load_document};
+use pure_tui::app::{App, DocumentFormat, load_document};
+use tdoc::Document;
 
 fn main() -> Result<()> {
     run()
 }
 
 fn run() -> Result<()> {
-    let mut args = env::args().skip(1);
-    let Some(path_arg) = args.next() else {
-        eprintln!("Usage: cargo run -- <file.ftml>");
-        return Ok(());
+    // Without an argument, start with an untitled document; saving it asks
+    // for a name through the Save As dialog.
+    let path = env::args().nth(1).map(PathBuf::from);
+    let (document, format, initial_status) = match &path {
+        Some(path) => load_document(path)?,
+        None => (
+            Document::new(),
+            DocumentFormat::Ftml,
+            Some("New document".to_string()),
+        ),
     };
-    let path = PathBuf::from(path_arg);
-
-    let (document, format, initial_status) = load_document(&path)?;
     let mut app = App::new(document, path, format, initial_status);
 
     enable_raw_mode().context("failed to enable raw mode")?;
