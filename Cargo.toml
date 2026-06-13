@@ -7,6 +7,20 @@ authors = ["Rob Lillack <rob@lillack.net>"]
 license = "MIT"
 readme = "README.md"
 repository = "https://github.com/roblillack/pure"
+# Whitelist only what's needed to build/install the crate. This keeps the
+# published package small by leaving out the demo GIF/cast, insta snapshots,
+# benches, test fixtures, examples, and the dedicated `*_tests.rs` modules
+# (all gated behind `#[cfg(test)]`/`#[cfg(feature = "recorder")]`, so they are
+# never part of a normal lib+bin build).
+include = [
+    "src/**/*.rs",
+    "!src/**/*_tests.rs",
+    "Cargo.toml",
+    "Cargo.lock",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE",
+]
 
 [package.metadata.release]
 pre-release-replacements = [
