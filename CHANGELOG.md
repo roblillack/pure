@@ -12,6 +12,16 @@ While pre-1.0, the minor version is bumped for breaking changes.
 
 ### Added
 
+- Link editing: "Edit Link..." in the context menu (or Ctrl+K) opens a modal
+  dialog with the link's visible text and target URL plus Open, Cancel, and
+  Save buttons. With the cursor inside a link it edits that link; over a
+  selection it turns the selected text into a link; otherwise it inserts a new
+  one. Clearing the URL removes the link, leaving the text in place. Tab and
+  Shift+Tab move between the fields and buttons, Space activates the focused
+  button, and Enter always saves while Esc always cancels. The Open button
+  launches the URL in the system browser (`xdg-open`/`open`/`start`). Links
+  remain non-clickable in the editor itself, so a click only places the
+  cursor — handy for editing a link in place.
 - Open... (Ctrl+O) and Save As... in the File menu. Both show a modal file
   dialog: a path input with shell-style Tab completion above a live listing
   of the directory it points into, navigable with the arrow keys (Enter

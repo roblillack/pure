@@ -31,6 +31,18 @@ fn style_last_word(demo: &mut Demo, shortcut: char) {
     demo.end();
 }
 
+/// Turn the current selection into a hyperlink via the Edit Link dialog: open
+/// it (the selected word pre-fills the text), Tab to the URL field, type the
+/// target, and press Enter to save.
+fn link_selection(demo: &mut Demo, target: &str) {
+    demo.ctrl('k');
+    demo.pause(700);
+    demo.tab();
+    demo.write(target);
+    demo.pause(900);
+    demo.paragraph_break(); // Enter saves the link
+}
+
 fn main() -> anyhow::Result<()> {
     let mut demo = Demo::start(80, 24);
 
@@ -77,6 +89,11 @@ fn main() -> anyhow::Result<()> {
     demo.shift_word_left();
     demo.context_menu('X'); // Strikethrough
     demo.end();
+
+    // Turn the final word "links" into a real hyperlink to the project repo.
+    demo.shift_word_left();
+    link_selection(&mut demo, "https://github.com/roblillack/pure");
+
     demo.paragraph_break();
 
     demo.context_menu('0'); // back to a Text paragraph
