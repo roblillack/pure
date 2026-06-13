@@ -405,6 +405,19 @@ impl EditorDisplay {
     ///
     /// Returns true if an incremental update succeeded, false if a full re-render is needed.
     pub fn clear_render_cache(&mut self) -> bool {
+        // The incremental path patches root paragraphs in place. When the
+        // number of root paragraphs changed (e.g. unindenting split a list),
+        // indices have shifted and the cached layout no longer matches the
+        // document, so it must be rebuilt from scratch.
+        let cached_paragraphs = self
+            .layout
+            .as_ref()
+            .map(|layout| layout.paragraph_lines.len());
+        if cached_paragraphs != Some(self.editor.document().paragraphs.len()) {
+            self.force_full_relayout();
+            return false;
+        }
+
         // Try incremental update if we know which paragraphs changed
         if !self.last_modified_paragraphs.is_empty() {
             let paragraphs_to_update = std::mem::take(&mut self.last_modified_paragraphs);

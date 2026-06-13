@@ -649,9 +649,6 @@ pub(crate) fn break_list_entry_for_non_list_target(
             if entry_index >= entries.len() {
                 return None;
             }
-            if entries[entry_index].len() > 1 {
-                return None;
-            }
             let entries_after = entries.split_off(entry_index + 1);
             let selected_entry = entries.remove(entry_index);
             if paragraph_index >= selected_entry.len() {
@@ -2236,24 +2233,30 @@ fn append_checklist_child(
     }
 }
 
-fn remove_nested_list_paragraph(document: &mut Document, parent_ctx: &EntryContext) {
+/// Removes the paragraph at `parent_ctx` (an emptied nested list) from its
+/// entry. If the entry held nothing else, the entry itself is removed —
+/// padding it with an empty paragraph would create an unremovable empty
+/// item. Returns true if the entry was removed.
+fn remove_nested_list_paragraph(document: &mut Document, parent_ctx: &EntryContext) -> bool {
     let Some(list_paragraph) = paragraph_mut(document, &parent_ctx.list_path) else {
-        return;
+        return false;
     };
     let entries = match list_paragraph {
         Paragraph::OrderedList { entries } | Paragraph::UnorderedList { entries } => entries,
-        _ => return,
+        _ => return false,
     };
     if parent_ctx.entry_index >= entries.len() {
-        return;
+        return false;
     }
     let parent_entry = &mut entries[parent_ctx.entry_index];
     if parent_ctx.paragraph_index < parent_entry.len() {
         parent_entry.remove(parent_ctx.paragraph_index);
     }
     if parent_entry.is_empty() {
-        parent_entry.push(empty_text_paragraph());
+        entries.remove(parent_ctx.entry_index);
+        return true;
     }
+    false
 }
 
 pub(crate) fn take_list_entry(
@@ -2295,6 +2298,41 @@ pub(crate) fn indent_list_entry_into_foreign_list(
         return None;
     }
 
+    // If the target list's last entry already ends in a nested list of the
+    // same type, the entry joins that list. Wrapping it into a fresh list
+    // appended as its own entry would fabricate an entry without content of
+    // its own — an empty-looking item.
+    if let Some((target_entry_index, target_paragraph_index)) =
+        trailing_nested_list_position(document, target_list_path, list_type)
+    {
+        let mut steps = target_list_path.steps().to_vec();
+        steps.push(PathStep::Entry {
+            entry_index: target_entry_index,
+            paragraph_index: target_paragraph_index,
+        });
+        let nested_path = ParagraphPath::from_steps(steps.clone());
+        let entry_len = entry.len();
+        let nested = paragraph_mut(document, &nested_path)?;
+        let new_entry_index = match nested {
+            Paragraph::OrderedList { entries } | Paragraph::UnorderedList { entries } => {
+                entries.push(entry);
+                entries.len() - 1
+            }
+            _ => return None,
+        };
+        steps.push(PathStep::Entry {
+            entry_index: new_entry_index,
+            paragraph_index: source_ctx.paragraph_index.min(entry_len.saturating_sub(1)),
+        });
+        steps.extend(source_ctx.tail_steps.iter().cloned());
+        return Some(CursorPointer {
+            paragraph_path: ParagraphPath::from_steps(steps),
+            span_path: pointer.span_path.clone(),
+            offset: pointer.offset,
+            segment_kind: pointer.segment_kind,
+        });
+    }
+
     let nested_paragraph = if list_type == ParagraphType::OrderedList {
         Paragraph::OrderedList {
             entries: vec![entry.clone()],
@@ -2328,6 +2366,49 @@ pub(crate) fn indent_list_entry_into_foreign_list(
     })
 }
 
+/// Splits the list at `list_path` after `entry_index`: entries beyond it
+/// are moved into a new list of the same type, which is returned for the
+/// caller to insert. Returns `None` when there are no entries to split off.
+pub(crate) fn split_list_entries_after(
+    document: &mut Document,
+    list_path: &ParagraphPath,
+    entry_index: usize,
+) -> Option<Paragraph> {
+    let list = paragraph_mut(document, list_path)?;
+    match list {
+        Paragraph::OrderedList { entries } => {
+            (entry_index + 1 < entries.len()).then(|| Paragraph::OrderedList {
+                entries: entries.split_off(entry_index + 1),
+            })
+        }
+        Paragraph::UnorderedList { entries } => {
+            (entry_index + 1 < entries.len()).then(|| Paragraph::UnorderedList {
+                entries: entries.split_off(entry_index + 1),
+            })
+        }
+        _ => None,
+    }
+}
+
+/// If the last paragraph of `list_path`'s last entry is a nested list of
+/// `list_type`, returns its (entry_index, paragraph_index).
+fn trailing_nested_list_position(
+    document: &Document,
+    list_path: &ParagraphPath,
+    list_type: ParagraphType,
+) -> Option<(usize, usize)> {
+    let list = paragraph_ref(document, list_path)?;
+    let entries = match list {
+        Paragraph::OrderedList { entries } | Paragraph::UnorderedList { entries } => entries,
+        _ => return None,
+    };
+    let entry_index = entries.len().checked_sub(1)?;
+    let entry = entries.get(entry_index)?;
+    let paragraph_index = entry.len().checked_sub(1)?;
+    (entry.get(paragraph_index)?.paragraph_type() == list_type)
+        .then_some((entry_index, paragraph_index))
+}
+
 pub(crate) fn promote_list_entry_to_parent(
     document: &mut Document,
     pointer: &CursorPointer,
@@ -2342,8 +2423,11 @@ pub(crate) fn promote_list_entry_to_parent(
         return None;
     }
 
-    if list_became_empty {
-        remove_nested_list_paragraph(document, &parent_ctx);
+    let mut insert_index = parent_ctx.entry_index + 1;
+    if list_became_empty && remove_nested_list_paragraph(document, &parent_ctx) {
+        // The nested list was the parent entry's only content and the entry
+        // is gone; the promoted entry takes its place.
+        insert_index = parent_ctx.entry_index;
     }
 
     let list = paragraph_mut(document, &parent_ctx.list_path)?;
@@ -2351,7 +2435,7 @@ pub(crate) fn promote_list_entry_to_parent(
         Paragraph::OrderedList { entries } | Paragraph::UnorderedList { entries } => entries,
         _ => return None,
     };
-    let insert_index = (parent_ctx.entry_index + 1).min(parent_entries.len());
+    let insert_index = insert_index.min(parent_entries.len());
     parent_entries.insert(insert_index, entry);
 
     let mut steps = parent_ctx.list_path.steps().to_vec();
@@ -2496,8 +2580,6 @@ pub(crate) fn take_paragraph_at(
             let parent_path = ParagraphPath::from_steps(steps);
             let parent = paragraph_mut(document, &parent_path)?;
 
-            let is_list = is_list_type(parent.paragraph_type());
-
             let entries = match parent {
                 Paragraph::OrderedList { entries } | Paragraph::UnorderedList { entries } => {
                     entries
@@ -2517,8 +2599,10 @@ pub(crate) fn take_paragraph_at(
                 entries.remove(entry_index);
             }
 
-            if is_list && entries.is_empty() {
-                entries.push(vec![empty_text_paragraph()]);
+            if entries.is_empty() {
+                // The taken paragraph was the list's last content: drop the
+                // list rather than leaving an empty, unremovable item behind.
+                remove_paragraph_by_path(document, &parent_path);
             }
             Some(removed)
         }
@@ -2645,6 +2729,11 @@ pub(crate) fn remove_paragraph_by_path(document: &mut Document, path: &Paragraph
             entry.remove(paragraph_index);
             if entry.is_empty() {
                 entries.remove(entry_index);
+            }
+            if entries.is_empty() {
+                // Removing the last entry must not leave a list without
+                // entries behind; cascade the removal to the list itself.
+                remove_paragraph_by_path(document, &parent_path);
             }
             true
         }
