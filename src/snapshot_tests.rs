@@ -93,6 +93,41 @@ fn selection_highlights_text() {
     assert_svg("selection_highlight", &mut app);
 }
 
+/// The single content line, with surrounding layout padding trimmed. Panics
+/// if the needle is not visible.
+fn content_line_with(app: &TestApp, needle: &str) -> String {
+    app.buffer_lines()
+        .into_iter()
+        .find(|line| line.contains(needle))
+        .map(|line| line.trim().to_string())
+        .unwrap_or_else(|| panic!("{needle:?} not on screen"))
+}
+
+#[test]
+fn backspace_deletes_the_active_selection() {
+    let mut app = TestApp::new(WIDTH, HEIGHT, ftml! { p { "Hello World" } });
+    // Select "Hello" (cursor anchored at the start, focus after the 'o').
+    for _ in 0..5 {
+        app.key_with(KeyCode::Right, KeyModifiers::SHIFT);
+    }
+    app.key(KeyCode::Backspace);
+    // The whole selection is gone — not just the character before the cursor,
+    // which would leave "Hell World".
+    assert_eq!(content_line_with(&app, "World"), "World");
+}
+
+#[test]
+fn delete_deletes_the_active_selection() {
+    let mut app = TestApp::new(WIDTH, HEIGHT, ftml! { p { "Hello World" } });
+    for _ in 0..5 {
+        app.key_with(KeyCode::Right, KeyModifiers::SHIFT);
+    }
+    app.key(KeyCode::Delete);
+    // The whole selection is gone — not just the character at the cursor,
+    // which would leave "HelloWorld".
+    assert_eq!(content_line_with(&app, "World"), "World");
+}
+
 #[test]
 fn context_menu_opens() {
     let mut app = sample_app();
