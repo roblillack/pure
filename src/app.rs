@@ -830,6 +830,23 @@ impl App {
         true
     }
 
+    /// Delete the active selection, if any. Returns true when a selection was
+    /// present and removed, in which case the caller must skip its own
+    /// character/word deletion (the deletion key consumed the selection).
+    fn delete_selection(&mut self) -> bool {
+        let Some(selection) = self.current_selection() else {
+            return false;
+        };
+        if !self.display.remove_selection(&selection) {
+            return false;
+        }
+        self.selection_anchor = None;
+        self.mark_dirty();
+        self.display.set_preferred_column(None);
+        self.needs_position_rebuild = true;
+        true
+    }
+
     /// Replace the selection (if any) and insert via `insert`. Shared tail
     /// of the plain-text and structured paste paths.
     fn paste_with(&mut self, insert: impl FnOnce(&mut EditorDisplay) -> bool) {
@@ -2444,13 +2461,13 @@ impl App {
                     (KeyCode::Backspace, m)
                         if m.contains(KeyModifiers::CONTROL) || m.contains(KeyModifiers::ALT) =>
                     {
-                        if self.display.delete_word_backward() {
+                        if !self.delete_selection() && self.display.delete_word_backward() {
                             self.mark_dirty();
                             self.display.set_preferred_column(None);
                         }
                     }
                     (KeyCode::Backspace, _) => {
-                        if self.display.backspace() {
+                        if !self.delete_selection() && self.display.backspace() {
                             self.mark_dirty();
                             self.display.set_preferred_column(None);
                         }
@@ -2458,13 +2475,13 @@ impl App {
                     (KeyCode::Delete, m)
                         if m.contains(KeyModifiers::CONTROL) || m.contains(KeyModifiers::ALT) =>
                     {
-                        if self.display.delete_word_forward() {
+                        if !self.delete_selection() && self.display.delete_word_forward() {
                             self.mark_dirty();
                             self.display.set_preferred_column(None);
                         }
                     }
                     (KeyCode::Delete, _) => {
-                        if self.display.delete() {
+                        if !self.delete_selection() && self.display.delete() {
                             self.mark_dirty();
                             self.display.set_preferred_column(None);
                         }

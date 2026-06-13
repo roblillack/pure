@@ -85,6 +85,10 @@ While pre-1.0, the minor version is bumped for breaking changes.
 - Splitting a list by unindenting now redraws the whole document immediately
   with the cursor in the right place, instead of leaving the view truncated and
   the cursor misplaced until moving away and back. (#35)
+- Pressing Backspace or Delete with an active selection now deletes the whole
+  selection instead of just the single character next to the cursor. The
+  word-wise variants (Ctrl/Alt+Backspace and Ctrl/Alt+Delete) do the same.
+  (#37)
 
 ### Misc
 
