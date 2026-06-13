@@ -49,12 +49,6 @@ While pre-1.0, the minor version is bumped for breaking changes.
   deterministic SVG, so styling, selection, and cursor placement diff as text
   and open in any browser. (#27)
 - We're now automatically adding release notes using the CI. (#30)
-- The README's demo GIF is now recorded automatically: `examples/demo`
-  scripts a Pure session as a series of simulated key presses, renders every
-  frame through the SVG snapshot harness, and assembles the result into
-  `demo.gif` — so the demo can be re-recorded with one command whenever the
-  interface changes. Without the `recorder` feature, `cargo run --example
-  demo` plays the same script live in the terminal instead.
 
 ### Fixed
 
@@ -72,14 +66,24 @@ While pre-1.0, the minor version is bumped for breaking changes.
   behind empty list items that could not be removed. This covered several
   cases, including indenting the first item of a nested list, indenting a sole
   list item into a preceding quote, and unindenting the only child of a quote.
+  (#35)
 - The Format menu's "Indent more" is now enabled only when indenting would
-  actually do something, matching what the operation performs.
+  actually do something, matching what the operation performs. (#35)
 - Unindenting a paragraph from the middle of a list now splits the list at that
   spot instead of dropping the paragraph below the entire list, where it
-  appeared to vanish.
+  appeared to vanish. (#35)
 - Splitting a list by unindenting now redraws the whole document immediately
   with the cursor in the right place, instead of leaving the view truncated and
-  the cursor misplaced until moving away and back.
+  the cursor misplaced until moving away and back. (#35)
+
+### Misc
+
+- The README's demo GIF is now recorded automatically: `examples/demo`
+  scripts a Pure session as a series of simulated key presses, renders every
+  frame through the SVG snapshot harness, and assembles the result into
+  `demo.gif` — so the demo can be re-recorded with one command whenever the
+  interface changes. Without the `recorder` feature, `cargo run --example
+  demo` plays the same script live in the terminal instead. (#31)
 
 ## [0.4.2] - 2026-03-01
 
