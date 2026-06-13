@@ -19,12 +19,12 @@ While pre-1.0, the minor version is bumped for breaking changes.
   extension and starts a new document for nonexistent paths; Save As writes
   in the format of the new extension, so saving a `.md` copy of an `.ftml`
   document converts it. Destructive accepts — opening over unsaved changes,
-  overwriting another file — need a confirming second Enter.
+  overwriting another file — need a confirming second Enter. (#34)
 - New (Ctrl+N) in the File menu starts an untitled document, and Pure can
   now be started without a filename argument to do the same. Untitled
   documents show "Untitled" in the status bar, and saving one opens the
   Save As dialog to ask for a name first. With unsaved changes, New warns
-  in the status line and only a repeated New discards them.
+  in the status line and only a repeated New discards them. (#34)
 - Clipboard support: Ctrl+X/Ctrl+C cut/copy the selection and Ctrl+V pastes,
   all also available in the Edit and context menus. Ctrl+C therefore no
   longer quits Pure; use Ctrl+Q for that. The internal clipboard keeps the selection
