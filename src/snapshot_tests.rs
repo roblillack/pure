@@ -450,8 +450,11 @@ fn open_dialog_asks_before_discarding_unsaved_changes() {
     app.ctrl('o');
     app.type_text("tests/fixtures/beta.md");
     app.key(KeyCode::Enter);
+    // Accepting Open over unsaved changes raises the save/discard prompt
+    // instead of opening straight away.
     assert_svg("file_dialog_unsaved_changes_warning", &mut app);
-    app.key(KeyCode::Enter);
+    // Discard throws the edits away and opens the chosen file.
+    app.key(KeyCode::Char('d'));
     assert_svg("file_dialog_discarded_and_opened", &mut app);
 }
 
@@ -492,25 +495,138 @@ fn ctrl_n_asks_before_discarding_unsaved_changes() {
     app.type_text("Summer ");
     app.ctrl('n');
     assert!(
-        app.svg().contains("Summer"),
-        "the first Ctrl+N must only warn, not discard the document"
+        !app.app.should_quit(),
+        "Ctrl+N with unsaved changes must prompt, not act outright"
     );
     assert_svg("new_document_unsaved_warning", &mut app);
-    app.ctrl('n');
+    // Discard starts the fresh untitled document.
+    app.key(KeyCode::Char('d'));
     assert_svg("new_document_after_confirm", &mut app);
 }
 
 #[test]
-fn typing_after_new_document_warning_requires_another_warning() {
+fn cancelling_the_save_prompt_keeps_the_document() {
     let mut app = sample_app();
     app.type_text("Summer ");
     app.ctrl('n');
-    // Editing after the warning invalidates it: the next Ctrl+N warns again.
-    app.type_text("and Winter ");
-    app.ctrl('n');
+    // Esc (or the Cancel button) dismisses the prompt and leaves the edited
+    // document exactly as it was.
+    app.key(KeyCode::Esc);
     assert!(
-        app.svg().contains("Winter"),
-        "Ctrl+N after further edits must warn again instead of discarding"
+        app.svg().contains("Summer"),
+        "cancelling the prompt must keep the unsaved document"
+    );
+    assert_svg("save_prompt_cancelled", &mut app);
+}
+
+#[test]
+fn ctrl_q_asks_before_discarding_unsaved_changes() {
+    let mut app = sample_app();
+    app.type_text("Summer ");
+    app.ctrl('q');
+    assert!(
+        !app.app.should_quit(),
+        "Ctrl+Q with unsaved changes must prompt rather than quit"
+    );
+    assert_svg("quit_unsaved_warning", &mut app);
+    app.key(KeyCode::Char('d'));
+    assert!(
+        app.app.should_quit(),
+        "Discard must go through with the quit"
+    );
+}
+
+#[test]
+fn ctrl_q_quits_immediately_without_unsaved_changes() {
+    let mut app = sample_app();
+    app.ctrl('q');
+    assert!(
+        app.app.should_quit(),
+        "a clean document must quit without a prompt"
+    );
+}
+
+#[test]
+fn saving_from_the_quit_prompt_writes_then_quits() {
+    let dir = std::env::temp_dir().join(format!("pure-confirm-save-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("create temp dir");
+    let target = dir.join("doc.ftml");
+    let _ = std::fs::remove_file(&target);
+
+    let mut app = TestApp::with_path(WIDTH, HEIGHT, sample_document(), target.clone());
+    app.type_text("Summer ");
+    app.ctrl('q');
+    // Save is focused by default; Enter writes the file and then quits.
+    app.key(KeyCode::Enter);
+    assert!(
+        app.app.should_quit(),
+        "Save must complete the deferred quit"
+    );
+    let contents = std::fs::read_to_string(&target).expect("document saved on the way out");
+    assert!(
+        contents.contains("Summer"),
+        "the unsaved edit must reach disk, got: {contents}"
+    );
+    let _ = std::fs::remove_file(&target);
+}
+
+#[test]
+fn dropping_a_file_opens_it() {
+    let mut app = sample_app();
+    let absolute = std::fs::canonicalize("tests/fixtures/beta.md").expect("fixture exists");
+    // A terminal delivers a file drop as a pasted path. (Not snapshotted: the
+    // status line would embed an absolute, machine-specific path.)
+    app.event(Event::Paste(absolute.to_string_lossy().into_owned()));
+    let lines = app.buffer_lines();
+    assert!(
+        lines.iter().any(|line| line.contains("Beta")),
+        "dropping a file onto a clean document opens it"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("Hello from the beta fixture")),
+        "the dropped file's body must be shown"
+    );
+}
+
+#[test]
+fn dropping_a_file_onto_modified_document_prompts() {
+    let mut app = sample_app();
+    app.type_text("Summer ");
+    let absolute = std::fs::canonicalize("tests/fixtures/beta.md").expect("fixture exists");
+    app.event(Event::Paste(absolute.to_string_lossy().into_owned()));
+    assert_svg("drop_unsaved_warning", &mut app);
+    app.key(KeyCode::Char('d'));
+    assert!(
+        app.buffer_lines().iter().any(|line| line.contains("Beta")),
+        "discarding opens the dropped file"
+    );
+}
+
+#[test]
+fn pasting_plain_text_is_not_treated_as_a_drop() {
+    let mut app = sample_app();
+    app.event(Event::Paste("just some text".to_string()));
+    assert!(
+        app.buffer_lines()
+            .iter()
+            .any(|line| line.contains("just some text")),
+        "ordinary pastes must still insert as text"
+    );
+}
+
+#[test]
+fn pasting_a_relative_path_inserts_it_as_text() {
+    let mut app = sample_app();
+    // Conservative detection: only absolute paths and file:// URIs are drops,
+    // so a relative path is inserted verbatim rather than opening the file.
+    app.event(Event::Paste("tests/fixtures/beta.md".to_string()));
+    assert!(
+        app.buffer_lines()
+            .iter()
+            .any(|line| line.contains("tests/fixtures/beta.md")),
+        "a relative path must be pasted as text, not opened"
     );
 }
 

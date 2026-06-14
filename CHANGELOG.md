@@ -10,6 +10,24 @@ While pre-1.0, the minor version is bumped for breaking changes.
 
 ## [Unreleased] - ReleaseDate
 
+### Added
+
+- Drag and drop: dropping a file onto the Pure window opens it. Terminals
+  deliver a drop as a pasted path, so a paste that is entirely existing file
+  path(s) — an absolute path or a `file://` URI — is opened instead of
+  inserted as text; ordinary pastes (prose, relative names) are unaffected.
+  Dropping several files opens the first.
+
+### Changed
+
+- Commands that would discard unsaved changes — New, Open, a dropped file, and
+  now Quit — show a single "Unsaved changes" prompt offering Save, Discard, or
+  Cancel (the S/D/C keys, Enter on the focused button, or Esc to cancel).
+  Choosing Save on an untitled document routes through Save As first, then
+  carries on. This replaces the earlier "select New again to discard" status
+  hint and the Open dialog's second-Enter-to-discard step; Quit previously
+  exited immediately without asking.
+
 ## [0.5.0] - 2026-06-13
 
 ### Added

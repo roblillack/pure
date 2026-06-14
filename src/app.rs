@@ -541,6 +541,150 @@ fn open_in_browser(url: &str) -> io::Result<()> {
         .map(|_child| ())
 }
 
+/// Parse a bracketed-paste payload as one or more dropped file paths.
+///
+/// Terminals have no dedicated file-drop event — dropping a file pastes its
+/// path — so this has to tell a drop apart from an ordinary text paste. The
+/// heuristic is deliberately conservative: a paste counts as a drop only when
+/// *every* whitespace-separated token is either a `file://` URI or an absolute
+/// path that points to an existing file. That matches how terminals insert
+/// dropped paths (always absolute, space-escaped or quoted, or as `file://`
+/// URIs) while leaving normal pastes — prose, relative names, snippets —
+/// untouched.
+///
+/// Returns the existing files in drop order, or an empty vec when the paste is
+/// not (entirely) a file drop.
+fn parse_dropped_paths(text: &str) -> Vec<PathBuf> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return Vec::new();
+    }
+
+    let tokens = split_drop_tokens(trimmed);
+    if tokens.is_empty() {
+        return Vec::new();
+    }
+
+    let mut paths = Vec::with_capacity(tokens.len());
+    for token in tokens {
+        match drop_token_to_path(&token) {
+            Some(path) => paths.push(path),
+            // A token that is not a recognisable dropped file means this is an
+            // ordinary text paste, not a drop.
+            None => return Vec::new(),
+        }
+    }
+    paths
+}
+
+/// Split a drop payload into path tokens on unquoted, unescaped whitespace.
+/// Backslash escapes the next character and single/double quotes protect runs
+/// of whitespace, so paths containing spaces survive however the terminal
+/// quoted them (macOS escapes with `\ `, Windows wraps in `"`).
+fn split_drop_tokens(text: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+    let mut started = false;
+    let mut quote: Option<char> = None;
+    let mut chars = text.chars();
+
+    while let Some(ch) = chars.next() {
+        match ch {
+            '\\' => {
+                if let Some(next) = chars.next() {
+                    current.push(next);
+                    started = true;
+                }
+            }
+            '\'' | '"' => {
+                match quote {
+                    Some(open) if open == ch => quote = None,
+                    Some(_) => current.push(ch),
+                    None => quote = Some(ch),
+                }
+                started = true;
+            }
+            ws if ws.is_whitespace() && quote.is_none() => {
+                if started {
+                    tokens.push(std::mem::take(&mut current));
+                    started = false;
+                }
+            }
+            other => {
+                current.push(other);
+                started = true;
+            }
+        }
+    }
+    if started {
+        tokens.push(current);
+    }
+    tokens
+}
+
+/// Resolve a single drop token to an existing absolute file path, or `None`
+/// when it is not one (which disqualifies the whole paste from being a drop).
+fn drop_token_to_path(token: &str) -> Option<PathBuf> {
+    let path = if let Some(rest) = token.strip_prefix("file://") {
+        // file://host/path — the authority runs up to the first slash and is
+        // ignored (only empty and "localhost" are meaningful, both local).
+        let slash = rest.find('/')?;
+        let decoded = percent_decode(&rest[slash..]);
+        PathBuf::from(strip_windows_drive_slash(&decoded))
+    } else {
+        PathBuf::from(token)
+    };
+
+    // Drops always insert absolute paths; requiring that (and that the file
+    // exists) keeps relative names typed or pasted as text from being mistaken
+    // for a drop.
+    if path.is_absolute() && path.is_file() {
+        Some(path)
+    } else {
+        None
+    }
+}
+
+/// On Windows a `file:///C:/...` URI decodes to `/C:/...`; drop the spurious
+/// leading slash before the drive letter. A no-op on other platforms.
+fn strip_windows_drive_slash(path: &str) -> &str {
+    #[cfg(windows)]
+    {
+        let bytes = path.as_bytes();
+        if bytes.len() >= 3
+            && bytes[0] == b'/'
+            && bytes[1].is_ascii_alphabetic()
+            && bytes[2] == b':'
+        {
+            return &path[1..];
+        }
+    }
+    path
+}
+
+/// Decode `%XX` escapes in a `file://` URI path; invalid escapes are kept
+/// verbatim. The result is lossy UTF-8, which is enough to look the file up —
+/// non-UTF-8 paths are rare and simply won't match an existing file.
+fn percent_decode(input: &str) -> String {
+    let bytes = input.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%'
+            && i + 2 < bytes.len()
+            && let Some(hi) = (bytes[i + 1] as char).to_digit(16)
+            && let Some(lo) = (bytes[i + 2] as char).to_digit(16)
+        {
+            out.push((hi * 16 + lo) as u8);
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
 /// What a cut or copy leaves on the internal clipboard.
 struct ClipboardContents {
     /// Plain-text rendering of the selection — what is offered to the system
@@ -568,6 +712,57 @@ enum DragState {
     Scrollbar(ScrollbarDrag),
 }
 
+/// A document-replacing command deferred behind the unsaved-changes prompt.
+/// Once the user resolves the prompt (saving or discarding), the action runs;
+/// cancelling drops it.
+#[derive(Clone, Debug)]
+enum PendingAction {
+    Quit,
+    NewDocument,
+    OpenPath(PathBuf),
+}
+
+/// The three choices offered by the unsaved-changes prompt.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ConfirmButton {
+    Save,
+    Discard,
+    Cancel,
+}
+
+/// The modal shown when a command would discard unsaved changes (New, Open, a
+/// dropped file, or Quit). Save writes the document first, Discard throws the
+/// changes away, Cancel aborts — each then runs (or drops) the pending action.
+struct ConfirmDialogState {
+    action: PendingAction,
+    focus: ConfirmButton,
+}
+
+impl ConfirmDialogState {
+    fn new(action: PendingAction) -> Self {
+        Self {
+            action,
+            focus: ConfirmButton::Save,
+        }
+    }
+
+    fn focus_next(&mut self) {
+        self.focus = match self.focus {
+            ConfirmButton::Save => ConfirmButton::Discard,
+            ConfirmButton::Discard => ConfirmButton::Cancel,
+            ConfirmButton::Cancel => ConfirmButton::Save,
+        };
+    }
+
+    fn focus_prev(&mut self) {
+        self.focus = match self.focus {
+            ConfirmButton::Save => ConfirmButton::Cancel,
+            ConfirmButton::Discard => ConfirmButton::Save,
+            ConfirmButton::Cancel => ConfirmButton::Discard,
+        };
+    }
+}
+
 pub struct App {
     display: EditorDisplay,
     /// Path of the current document; `None` while it is untitled (started
@@ -592,9 +787,13 @@ pub struct App {
     /// link being edited, the selection a new link is created from, or the
     /// (empty) cursor position a new link is inserted at.
     link_edit_range: Option<(CursorPointer, CursorPointer)>,
-    /// Whether the next New command may discard unsaved changes: the first
-    /// one only warns. Cleared again by any edit.
-    confirm_new: bool,
+    /// The unsaved-changes prompt, open while a New/Open/drop/Quit command
+    /// waits for the user to save, discard, or cancel.
+    confirm_dialog: Option<ConfirmDialogState>,
+    /// A pending action whose Save choice routed an untitled document through
+    /// the Save As dialog; it runs once that save succeeds, or is dropped if
+    /// the dialog is cancelled.
+    pending_after_save: Option<PendingAction>,
     last_click_instant: Option<Instant>,
     last_click_position: Option<(u16, u16)>,
     last_click_button: Option<MouseButton>,
@@ -638,7 +837,8 @@ impl App {
             file_dialog: None,
             link_dialog: None,
             link_edit_range: None,
-            confirm_new: false,
+            confirm_dialog: None,
+            pending_after_save: None,
             last_click_instant: None,
             last_click_position: None,
             last_click_button: None,
@@ -871,6 +1071,32 @@ impl App {
         self.paste_with(|display| display.insert_text(text));
     }
 
+    /// Route a bracketed-paste payload. Terminals have no dedicated file-drop
+    /// event: dropping a file onto the window pastes its path, so a paste that
+    /// is entirely existing file path(s) is treated as a drop and opened
+    /// (prompting to save first if the document is modified). Anything else is
+    /// inserted as ordinary text.
+    fn handle_paste_or_drop(&mut self, text: String) {
+        let dropped = parse_dropped_paths(&text);
+        let Some(first) = dropped.first().cloned() else {
+            self.paste_text(&text);
+            return;
+        };
+        // The editor holds a single document, so only the first of several
+        // dropped files is opened.
+        if dropped.len() > 1 {
+            self.status_message = Some((
+                format!(
+                    "Opening {} — {} other dropped files ignored",
+                    first.display(),
+                    dropped.len() - 1
+                ),
+                Instant::now(),
+            ));
+        }
+        self.request_open(first);
+    }
+
     fn paste_from_clipboard(&mut self) {
         let Some(contents) = &self.clipboard else {
             self.status_message = Some((
@@ -1070,6 +1296,10 @@ impl App {
         if self.link_dialog.is_some() {
             self.render_link_dialog(frame, area);
         }
+
+        if self.confirm_dialog.is_some() {
+            self.render_confirm_dialog(frame, area);
+        }
     }
 
     fn render_file_dialog(&self, frame: &mut Frame, area: Rect) {
@@ -1169,14 +1399,15 @@ impl App {
             frame.render_stateful_widget(list, list_area, &mut list_state);
         }
 
-        // Footer: pending confirmation warning, otherwise key hints.
+        // Footer: pending confirmation warning, otherwise key hints. Only Save
+        // As arms a pending confirmation now (overwriting an existing file);
+        // Open defers unsaved-changes to the separate prompt.
         let footer_area = Rect::new(inner.x + 1, inner.y + inner.height - 1, inner.width - 2, 1);
         let footer = if dialog.pending_confirm().is_some() {
-            let warning = match dialog.kind() {
-                FileDialogKind::Open => "Unsaved changes — press Enter again to discard them",
-                FileDialogKind::SaveAs => "File exists — press Enter again to overwrite",
-            };
-            Span::styled(warning, Style::default().fg(Color::LightYellow))
+            Span::styled(
+                "File exists — press Enter again to overwrite",
+                Style::default().fg(Color::LightYellow),
+            )
         } else {
             let action = match dialog.kind() {
                 FileDialogKind::Open => "open",
@@ -1778,11 +2009,11 @@ impl App {
     fn execute_app_action(&mut self, action: AppAction) -> Result<()> {
         let previous_cursor = self.display.cursor_pointer();
         match action {
-            AppAction::New => self.new_document(),
+            AppAction::New => self.request_new(),
             AppAction::Open => self.open_file_dialog(FileDialogKind::Open),
             AppAction::Save => self.save()?,
             AppAction::SaveAs => self.open_file_dialog(FileDialogKind::SaveAs),
-            AppAction::Quit => self.should_quit = true,
+            AppAction::Quit => self.request_quit(),
             AppAction::Undo => self.undo(),
             AppAction::Redo => self.redo(),
             AppAction::Cut => {
@@ -2287,6 +2518,10 @@ impl App {
                 kind: KeyEventKind::Press,
                 ..
             }) => {
+                if self.handle_confirm_dialog_key(code, modifiers)? {
+                    return Ok(());
+                }
+
                 if self.handle_file_dialog_key(code, modifiers) {
                     return Ok(());
                 }
@@ -2320,7 +2555,7 @@ impl App {
 
                 match (code, modifiers) {
                     (KeyCode::Char('q'), m) if m.contains(KeyModifiers::CONTROL) => {
-                        self.should_quit = true;
+                        self.request_quit();
                     }
                     (KeyCode::Char('s'), m) if m.contains(KeyModifiers::CONTROL) => {
                         self.save()?;
@@ -2332,7 +2567,7 @@ impl App {
                         self.open_link_dialog();
                     }
                     (KeyCode::Char('n'), m) if m.contains(KeyModifiers::CONTROL) => {
-                        self.new_document();
+                        self.request_new();
                     }
                     (KeyCode::F(9), _) => {
                         self.toggle_reveal_codes();
@@ -2548,18 +2783,25 @@ impl App {
                 }
             }
             Event::Mouse(mouse_event) => {
-                if self.file_dialog.is_some() || self.link_dialog.is_some() {
+                if self.file_dialog.is_some()
+                    || self.link_dialog.is_some()
+                    || self.confirm_dialog.is_some()
+                {
                     return Ok(());
                 }
                 self.handle_mouse_event(mouse_event);
             }
-            Event::Paste(text) if self.context_menu.is_none() && self.menu_bar.is_none() => {
+            Event::Paste(text)
+                if self.context_menu.is_none()
+                    && self.menu_bar.is_none()
+                    && self.confirm_dialog.is_none() =>
+            {
                 if let Some(dialog) = self.file_dialog.as_mut() {
                     dialog.insert_str(&text);
                 } else if let Some(dialog) = self.link_dialog.as_mut() {
                     dialog.insert_str(&text);
                 } else {
-                    self.paste_text(&text);
+                    self.handle_paste_or_drop(text);
                 }
             }
             _ => {}
@@ -2638,6 +2880,9 @@ impl App {
         match (code, modifiers) {
             (KeyCode::Esc, _) => {
                 self.file_dialog = None;
+                // Cancelling a Save As abandons any action that was waiting on
+                // it (e.g. a Save chosen in the unsaved-changes prompt).
+                self.pending_after_save = None;
             }
             (KeyCode::Enter, _) => {
                 let result = self
@@ -2697,8 +2942,10 @@ impl App {
             return;
         };
         let kind = dialog.kind();
+        // Overwriting another file still needs a second Enter; discarding
+        // unsaved changes on Open is now handled by the unsaved-changes prompt.
         let needs_confirmation = match kind {
-            FileDialogKind::Open => self.dirty,
+            FileDialogKind::Open => false,
             FileDialogKind::SaveAs => {
                 self.file_path.as_deref() != Some(path.as_path()) && path.exists()
             }
@@ -2710,7 +2957,7 @@ impl App {
 
         self.file_dialog = None;
         match kind {
-            FileDialogKind::Open => self.open_file(path),
+            FileDialogKind::Open => self.request_open(path),
             FileDialogKind::SaveAs => self.save_as(path),
         }
     }
@@ -3035,6 +3282,124 @@ impl App {
         );
     }
 
+    fn render_confirm_dialog(&self, frame: &mut Frame, area: Rect) {
+        let Some(dialog) = &self.confirm_dialog else {
+            return;
+        };
+        if area.width < 24 || area.height < 9 {
+            return;
+        }
+
+        let theme = self.display.theme();
+        let popup_style = theme.menu_style();
+
+        // A two-line message, a separator, the button row, and a footer, plus
+        // the border.
+        let width = 60.min(area.width.saturating_sub(4));
+        let height = 7u16.min(area.height.saturating_sub(2));
+        let popup_area = Rect::new(
+            area.x + (area.width.saturating_sub(width)) / 2,
+            area.y + (area.height.saturating_sub(height)) / 2,
+            width,
+            height,
+        );
+
+        frame.render_widget(Clear, popup_area);
+
+        let block = Block::default()
+            .title("Unsaved changes")
+            .borders(Borders::ALL)
+            .style(popup_style)
+            .border_style(Style::default().fg(Color::Gray));
+        let inner = block.inner(popup_area);
+        frame.render_widget(block, popup_area);
+        if inner.width < 10 || inner.height < 5 {
+            return;
+        }
+
+        // The question, naming the current document and the command it gates.
+        let what = match &dialog.action {
+            PendingAction::Quit => "quitting".to_string(),
+            PendingAction::NewDocument => "starting a new document".to_string(),
+            PendingAction::OpenPath(path) => {
+                let name = path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or("the dropped file");
+                format!("opening {name}")
+            }
+        };
+        let lead = match self
+            .file_path
+            .as_ref()
+            .and_then(|path| path.file_name())
+            .and_then(|name| name.to_str())
+        {
+            Some(name) => format!("Save changes to {name}"),
+            None => "Save changes".to_string(),
+        };
+        let message = format!("{lead} before {what}?");
+        frame.render_widget(
+            Paragraph::new(message)
+                .style(popup_style)
+                .wrap(Wrap { trim: true }),
+            Rect::new(inner.x, inner.y, inner.width, 2),
+        );
+
+        // Separator below the message.
+        let separator = "─".repeat(inner.width as usize);
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                separator,
+                Style::default().fg(Color::DarkGray),
+            )))
+            .style(popup_style),
+            Rect::new(inner.x, inner.y + 2, inner.width, 1),
+        );
+
+        // Button row, centred as a group.
+        let button_row = inner.y + 3;
+        let buttons = [
+            (ConfirmButton::Save, "[ Save ]"),
+            (ConfirmButton::Discard, "[ Discard ]"),
+            (ConfirmButton::Cancel, "[ Cancel ]"),
+        ];
+        let total: u16 = buttons
+            .iter()
+            .map(|(_, label)| label.chars().count() as u16)
+            .sum::<u16>()
+            + (buttons.len() as u16 - 1); // one space between each
+        let mut x = inner.x + inner.width.saturating_sub(total) / 2;
+        for (button, label) in buttons {
+            let width = label.chars().count() as u16;
+            let style = if dialog.focus == button {
+                theme.menu_selected_style()
+            } else {
+                popup_style
+            };
+            frame.render_widget(
+                Paragraph::new(Line::from(Span::styled(label, style))).style(popup_style),
+                Rect::new(x, button_row, width, 1),
+            );
+            // Park the caret on the focused button so it does not show through
+            // the popup at the document cursor's position.
+            if dialog.focus == button {
+                frame.set_cursor_position(Position::new(x, button_row));
+            }
+            x += width + 1;
+        }
+
+        // Footer hint.
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                "Enter: confirm   Tab/←→: move   Esc: cancel",
+                theme.menu_disabled_style(),
+            )))
+            .style(popup_style),
+            Rect::new(inner.x, inner.y + 4, inner.width, 1),
+        );
+    }
+
     /// Swap in `document` as the current document and reset all
     /// per-document state (undo history, selection, scroll, dirty flag).
     /// Reveal codes mode survives the swap.
@@ -3052,25 +3417,156 @@ impl App {
         self.file_path = path;
         self.document_format = format;
         self.dirty = false;
-        self.confirm_new = false;
         self.scroll_top = 0;
         self.selection_anchor = None;
         self.needs_position_rebuild = true;
     }
 
-    /// Start an untitled document. With unsaved changes the first call only
-    /// warns; repeating the command discards them.
-    fn new_document(&mut self) {
-        if self.dirty && !self.confirm_new {
-            self.confirm_new = true;
-            self.status_message = Some((
-                "Unsaved changes — select New again to discard them".to_string(),
-                Instant::now(),
-            ));
-            return;
+    /// Start an untitled document, prompting to save first if the current one
+    /// has unsaved changes.
+    fn request_new(&mut self) {
+        if self.dirty {
+            self.open_confirm_dialog(PendingAction::NewDocument);
+        } else {
+            self.new_document();
         }
+    }
+
+    /// Open `path`, prompting to save first if the current document has
+    /// unsaved changes.
+    fn request_open(&mut self, path: PathBuf) {
+        if self.dirty {
+            self.open_confirm_dialog(PendingAction::OpenPath(path));
+        } else {
+            self.open_file(path);
+        }
+    }
+
+    /// Quit, prompting to save first if the document has unsaved changes.
+    fn request_quit(&mut self) {
+        if self.dirty {
+            self.open_confirm_dialog(PendingAction::Quit);
+        } else {
+            self.should_quit = true;
+        }
+    }
+
+    /// Replace the document with a fresh untitled one (no unsaved-changes
+    /// check — callers gate that themselves).
+    fn new_document(&mut self) {
         self.replace_document(Document::new(), None, DocumentFormat::Ftml);
         self.status_message = Some(("New document".to_string(), Instant::now()));
+    }
+
+    /// Open the unsaved-changes prompt for `action`, unless one is already up.
+    fn open_confirm_dialog(&mut self, action: PendingAction) {
+        if self.confirm_dialog.is_some() {
+            return;
+        }
+        self.confirm_dialog = Some(ConfirmDialogState::new(action));
+    }
+
+    /// Run a document-replacing action once the unsaved-changes prompt has
+    /// been resolved by saving or discarding.
+    fn perform_pending_action(&mut self, action: PendingAction) {
+        match action {
+            PendingAction::Quit => self.should_quit = true,
+            PendingAction::NewDocument => self.new_document(),
+            PendingAction::OpenPath(path) => self.open_file(path),
+        }
+    }
+
+    /// Handle a key press while the unsaved-changes prompt is open. The prompt
+    /// is modal: every key is consumed. Enter/Space activate the focused
+    /// button, the S/D/C accelerators jump straight to a choice, Tab and the
+    /// arrows move focus, and Esc cancels.
+    fn handle_confirm_dialog_key(
+        &mut self,
+        code: KeyCode,
+        modifiers: KeyModifiers,
+    ) -> Result<bool> {
+        if self.confirm_dialog.is_none() {
+            return Ok(false);
+        }
+
+        match (code, modifiers) {
+            (KeyCode::Esc, _) => self.cancel_confirm_dialog(),
+            (KeyCode::Enter, _) | (KeyCode::Char(' '), _) => self.activate_confirm_button()?,
+            (KeyCode::Tab, _) | (KeyCode::Right, _) | (KeyCode::Down, _) => {
+                if let Some(dialog) = self.confirm_dialog.as_mut() {
+                    dialog.focus_next();
+                }
+            }
+            (KeyCode::BackTab, _) | (KeyCode::Left, _) | (KeyCode::Up, _) => {
+                if let Some(dialog) = self.confirm_dialog.as_mut() {
+                    dialog.focus_prev();
+                }
+            }
+            (KeyCode::Char('s' | 'S'), m) if !m.contains(KeyModifiers::CONTROL) => {
+                self.choose_confirm_button(ConfirmButton::Save)?;
+            }
+            (KeyCode::Char('d' | 'D'), m) if !m.contains(KeyModifiers::CONTROL) => {
+                self.choose_confirm_button(ConfirmButton::Discard)?;
+            }
+            (KeyCode::Char('c' | 'C'), m) if !m.contains(KeyModifiers::CONTROL) => {
+                self.choose_confirm_button(ConfirmButton::Cancel)?;
+            }
+            _ => {}
+        }
+        Ok(true)
+    }
+
+    /// Focus a button and immediately activate it (the letter accelerators).
+    fn choose_confirm_button(&mut self, button: ConfirmButton) -> Result<()> {
+        if let Some(dialog) = self.confirm_dialog.as_mut() {
+            dialog.focus = button;
+        }
+        self.activate_confirm_button()
+    }
+
+    /// Act on the focused button of the unsaved-changes prompt.
+    fn activate_confirm_button(&mut self) -> Result<()> {
+        let Some(dialog) = self.confirm_dialog.as_ref() else {
+            return Ok(());
+        };
+        match dialog.focus {
+            ConfirmButton::Save => self.confirm_save()?,
+            ConfirmButton::Discard => self.confirm_discard(),
+            ConfirmButton::Cancel => self.cancel_confirm_dialog(),
+        }
+        Ok(())
+    }
+
+    /// Dismiss the prompt and drop the pending action.
+    fn cancel_confirm_dialog(&mut self) {
+        self.confirm_dialog = None;
+    }
+
+    /// Discard the unsaved changes and run the pending action right away.
+    fn confirm_discard(&mut self) {
+        if let Some(dialog) = self.confirm_dialog.take() {
+            self.perform_pending_action(dialog.action);
+        }
+    }
+
+    /// Save the document, then run the pending action. A titled document is
+    /// written in place and the action runs immediately; an untitled one is
+    /// routed through the Save As dialog, with the action deferred until that
+    /// save succeeds (see [`App::save_as`]).
+    fn confirm_save(&mut self) -> Result<()> {
+        let Some(dialog) = self.confirm_dialog.take() else {
+            return Ok(());
+        };
+        let action = dialog.action;
+        self.save()?;
+        if self.file_dialog.is_some() {
+            // Untitled: save() opened the Save As dialog; continue once it
+            // completes successfully.
+            self.pending_after_save = Some(action);
+        } else if !self.dirty {
+            self.perform_pending_action(action);
+        }
+        Ok(())
     }
 
     /// Replace the current document with the one loaded from `path`. A
@@ -3101,10 +3597,16 @@ impl App {
                     self.status_message =
                         Some((format!("Saved {}", path.display()), Instant::now()));
                 }
+                // A Save chosen in the unsaved-changes prompt for an untitled
+                // document deferred its action until this save landed.
+                if let Some(action) = self.pending_after_save.take() {
+                    self.perform_pending_action(action);
+                }
             }
             Err(err) => {
                 self.file_path = previous_path;
                 self.document_format = previous_format;
+                self.pending_after_save = None;
                 self.status_message = Some((format!("{err:#}"), Instant::now()));
             }
         }
@@ -3112,7 +3614,6 @@ impl App {
 
     fn mark_dirty(&mut self) {
         self.dirty = true;
-        self.confirm_new = false;
         // EditorDisplay now handles layout updates automatically in its wrapper methods
         // (insert_char, delete, backspace, etc.) which includes position tracking via
         // incremental updates. No need to force a full re-render here.
@@ -3201,4 +3702,117 @@ struct ScrollRestore {
 struct RevealToggleSnapshot {
     scroll_ratio: f64,
     cursor_pointer: CursorPointer,
+}
+
+#[cfg(test)]
+mod drop_detection_tests {
+    use super::{parse_dropped_paths, percent_decode, split_drop_tokens};
+    use std::path::PathBuf;
+
+    /// Absolute path to an existing repository fixture.
+    fn fixture(rel: &str) -> PathBuf {
+        std::fs::canonicalize(rel).expect("fixture exists")
+    }
+
+    /// A unique temp file containing `name`, returned as its absolute path.
+    fn temp_file(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("pure-drop-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        let path = dir.join(name);
+        std::fs::write(&path, "x").expect("write temp file");
+        path
+    }
+
+    #[test]
+    fn absolute_path_to_existing_file_is_a_drop() {
+        let abs = fixture("tests/fixtures/beta.md");
+        assert_eq!(parse_dropped_paths(&abs.to_string_lossy()), vec![abs]);
+    }
+
+    #[test]
+    fn surrounding_whitespace_is_ignored() {
+        let abs = fixture("tests/fixtures/beta.md");
+        let payload = format!("  {}\n", abs.to_string_lossy());
+        assert_eq!(parse_dropped_paths(&payload), vec![abs]);
+    }
+
+    #[test]
+    fn file_uri_is_decoded_and_opened() {
+        let abs = fixture("tests/fixtures/beta.md");
+        let uri = format!("file://{}", abs.to_string_lossy());
+        assert_eq!(parse_dropped_paths(&uri), vec![abs]);
+    }
+
+    #[test]
+    fn file_uri_percent_decodes_spaces() {
+        let target = temp_file("a file.md");
+        let uri = format!("file://{}", target.to_string_lossy().replace(' ', "%20"));
+        assert_eq!(parse_dropped_paths(&uri), vec![target.clone()]);
+        let _ = std::fs::remove_file(&target);
+    }
+
+    #[test]
+    fn escaped_spaces_in_a_plain_path_are_unescaped() {
+        let target = temp_file("my other file.md");
+        // macOS inserts a dropped path with its spaces backslash-escaped.
+        let escaped = target.to_string_lossy().replace(' ', "\\ ");
+        assert_eq!(parse_dropped_paths(&escaped), vec![target.clone()]);
+        let _ = std::fs::remove_file(&target);
+    }
+
+    #[test]
+    fn multiple_file_uris_open_in_order() {
+        let a = fixture("tests/fixtures/beta.md");
+        let b = fixture("tests/fixtures/alpha.ftml");
+        let payload = format!(
+            "file://{}\nfile://{}",
+            a.to_string_lossy(),
+            b.to_string_lossy()
+        );
+        assert_eq!(parse_dropped_paths(&payload), vec![a, b]);
+    }
+
+    #[test]
+    fn a_relative_path_is_not_a_drop() {
+        assert!(parse_dropped_paths("tests/fixtures/beta.md").is_empty());
+    }
+
+    #[test]
+    fn an_absolute_path_to_a_missing_file_is_not_a_drop() {
+        assert!(parse_dropped_paths("/nonexistent/pure/missing.md").is_empty());
+    }
+
+    #[test]
+    fn a_directory_is_not_a_drop() {
+        let dir = fixture("tests/fixtures");
+        assert!(parse_dropped_paths(&dir.to_string_lossy()).is_empty());
+    }
+
+    #[test]
+    fn ordinary_text_is_not_a_drop() {
+        assert!(parse_dropped_paths("Just some prose with /slashes/ in it.").is_empty());
+        assert!(parse_dropped_paths("").is_empty());
+    }
+
+    #[test]
+    fn one_unrecognised_token_disqualifies_the_whole_paste() {
+        let abs = fixture("tests/fixtures/beta.md");
+        // A real file plus a word is a sentence, not a multi-file drop.
+        let payload = format!("{} notafile", abs.to_string_lossy());
+        assert!(parse_dropped_paths(&payload).is_empty());
+    }
+
+    #[test]
+    fn split_drop_tokens_respects_quotes_and_escapes() {
+        assert_eq!(split_drop_tokens("/a/b /c/d"), vec!["/a/b", "/c/d"]);
+        assert_eq!(split_drop_tokens(r"/a/b\ c"), vec!["/a/b c"]);
+        assert_eq!(split_drop_tokens("\"/a/b c\" /d"), vec!["/a/b c", "/d"]);
+    }
+
+    #[test]
+    fn percent_decode_handles_escapes_and_leaves_bad_ones() {
+        assert_eq!(percent_decode("a%20b"), "a b");
+        assert_eq!(percent_decode("100%"), "100%");
+        assert_eq!(percent_decode("%zz"), "%zz");
+    }
 }
