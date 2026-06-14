@@ -60,6 +60,7 @@ Pure provides an intuitive editing experience:
 - **Word Wrapping**: Automatic text flow without manual line breaks
 - **Mouse Support**: Click to position cursor, drag to select, double-click to select words, triple-click for paragraphs
 - **Clipboard**: Cut, copy, and paste — within Pure with formatting preserved; copying reaches the system clipboard through the terminal (OSC 52), pasting from other applications works via the terminal's paste shortcut (bracketed paste)
+- **Drag and Drop**: Drop a file onto the Pure window to open it (asking whether to save first if the current document has unsaved changes)
 - **Reveal Codes**: Press F9 to see the underlying formatting structure (inspired by WordPerfect)
 - **Menu Bar**: Press F10 (or an Alt accelerator like Alt+F) for a TurboVision-style menu bar
 - **Context Menu**: Press Esc to access all formatting options
@@ -90,6 +91,58 @@ Pure is designed for efficiency with comprehensive keyboard shortcuts:
 - **Context menu shortcuts** - Quick paragraph type changes (0-9)
 
 See the [User Guide](USER-GUIDE.md) for comprehensive documentation.
+
+## Terminal Compatibility
+
+A few of Pure's conveniences aren't pure Pure features — they're terminal
+capabilities Pure drives through standard escape sequences, so whether they work
+depends on your terminal emulator:
+
+- **Mouse** — clicking, dragging, selecting, and scrolling rely on the terminal
+  reporting mouse events (the xterm SGR mouse protocol). Supported almost
+  everywhere.
+- **Clipboard** — copying _out of_ Pure to the system clipboard uses the OSC 52
+  escape sequence. (Pasting _into_ Pure works everywhere: it arrives as a
+  bracketed paste when you use the terminal's own paste shortcut, e.g.
+  Ctrl+Shift+V. Cut/copy/paste _within_ Pure never needs the terminal.)
+- **Drag and drop** — dropping a file works only if the terminal delivers the
+  dropped path as a _bracketed paste_, which is what Pure listens for. Terminals
+  that instead inject the path as raw keystrokes type it into the document
+  rather than opening the file.
+
+| Terminal               | Mouse | Clipboard (OSC 52) | Drag & drop |
+| ---------------------- | :---: | :----------------: | :---------: |
+| Alacritty              |   ✓   |         ✓          |      ✓      |
+| foot                   |   ✓   |         ✓          |      ✓      |
+| Ghostty                |   ✓   |         ✓          |      ✓      |
+| GNOME Terminal (VTE)   |   ✓   |         —          |      ✓      |
+| iTerm2                 |   ✓   |        ✓ ¹         |      ✓      |
+| kitty                  |   ✓   |         ✓          |      ✓      |
+| Konsole                |   ✓   |         ✓          |      ✓      |
+| Terminal.app (macOS)   |   ✓   |         —          |      ✓      |
+| WezTerm                |   ✓   |         ✓          |      ✓      |
+| Windows Terminal       |   ✓   |         ✓          |     — ²     |
+| xterm                  |   ✓   |        ✓ ³         |      —      |
+| tmux (multiplexer)     |   ✓   |        ✓ ⁴         |     ✓ ⁵     |
+
+✓ = supported · — = not supported
+
+1. iTerm2: enable _Settings → General → Selection → "Applications in terminal
+   may access clipboard."_ (off by default).
+2. Windows Terminal injects a dropped path as raw keystrokes rather than a
+   paste, so Pure types the path instead of opening the file.
+3. xterm: set `allowWindowOps: true`, or remove window ops `20`/`21` from
+   `disallowedWindowOps`.
+4. tmux: add `set -g set-clipboard on`, and the outer terminal must itself
+   support OSC 52.
+5. Through tmux, drag & drop (and mouse and clipboard) work whenever the outer
+   terminal supports them — tmux relays the events to the active pane.
+
+GNOME Terminal and macOS Terminal.app don't implement OSC 52, so copying from
+Pure to the _system_ clipboard won't work there; copy and paste within Pure are
+unaffected. Drag & drop is listed as supported where the terminal hands the
+dropped file to applications; the handful of terminals not verified to wrap
+drops in a bracketed paste will type the path rather than open it (see above).
 
 ## Installation
 
