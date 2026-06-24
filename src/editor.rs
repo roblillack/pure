@@ -259,7 +259,15 @@ pub struct DocumentEditor {
     cursor: CursorPointer,
     cursor_segment: usize,
     reveal_codes: bool,
+    /// Content width (in columns) the read-only blocks — currently tables —
+    /// are laid out at when building their navigable per-line segments. Kept in
+    /// sync with the renderer's wrap width by [`EditorDisplay`] so the segments
+    /// match what is drawn. See [`DocumentEditor::set_layout_width`].
+    layout_width: usize,
 }
+
+/// Default content width used before the display reports its real wrap width.
+const DEFAULT_LAYOUT_WIDTH: usize = 80;
 
 impl DocumentEditor {
     fn normalize_selection(
@@ -573,6 +581,17 @@ impl DocumentEditor {
             return false;
         }
 
+        // Refuse to delete a selection that touches a read-only paragraph (e.g.
+        // a table), so its content cannot be removed even as part of a larger
+        // multi-paragraph selection.
+        if let Some(targets) = self.selection_paragraph_targets(selection)
+            && targets
+                .iter()
+                .any(|target| self.is_readonly_paragraph(&target.paragraph_path))
+        {
+            return false;
+        }
+
         let (start, end) = match self.normalize_selection(selection) {
             Some(bounds) => bounds,
             None => return false,
@@ -621,6 +640,7 @@ impl DocumentEditor {
             cursor: CursorPointer::default(),
             cursor_segment: 0,
             reveal_codes: false,
+            layout_width: DEFAULT_LAYOUT_WIDTH,
         };
         editor.rebuild_segments();
         editor.ensure_cursor_selectable();
@@ -629,6 +649,20 @@ impl DocumentEditor {
 
     pub fn document(&self) -> &Document {
         &self.document
+    }
+
+    /// Whether the paragraph at `path` is read-only (currently: tables). The
+    /// editor refuses to mutate read-only paragraphs, but the cursor may still
+    /// be positioned within them.
+    pub fn is_readonly_paragraph(&self, path: &ParagraphPath) -> bool {
+        paragraph_ref(&self.document, path)
+            .map(|paragraph| paragraph.paragraph_type() == ParagraphType::Table)
+            .unwrap_or(false)
+    }
+
+    /// Whether the cursor currently sits inside a read-only paragraph.
+    pub fn cursor_in_readonly(&self) -> bool {
+        self.is_readonly_paragraph(&self.cursor.paragraph_path)
     }
 
     /// Replace the document wholesale and move the cursor as close as
@@ -641,6 +675,17 @@ impl DocumentEditor {
             && !self.fallback_move_to_text(cursor, true)
         {
             self.ensure_cursor_selectable();
+        }
+    }
+
+    /// Update the content width used to lay out read-only blocks (tables) when
+    /// building their navigable segments. Rebuilds segments if the width
+    /// actually changed so the table's per-line cursor stops track the viewport.
+    pub fn set_layout_width(&mut self, width: usize) {
+        let width = width.max(1);
+        if width != self.layout_width {
+            self.layout_width = width;
+            self.rebuild_segments();
         }
     }
 
@@ -1002,6 +1047,9 @@ impl DocumentEditor {
     }
 
     pub fn indent_current_paragraph(&mut self) -> bool {
+        if self.cursor_in_readonly() {
+            return false;
+        }
         let Some(target) = self.indent_target_for_cursor() else {
             return false;
         };
@@ -1257,6 +1305,9 @@ impl DocumentEditor {
     }
 
     pub fn set_paragraph_type(&mut self, target: ParagraphType) -> bool {
+        if self.cursor_in_readonly() {
+            return false;
+        }
         let current_pointer = self.cursor.clone();
 
         let mut in_checklist_context = false;
@@ -1410,6 +1461,9 @@ impl DocumentEditor {
     }
 
     pub fn insert_paragraph_break(&mut self) -> bool {
+        if self.cursor_in_readonly() {
+            return false;
+        }
         if !self.cursor.is_valid() {
             return false;
         }
@@ -1428,6 +1482,9 @@ impl DocumentEditor {
     }
 
     pub fn insert_paragraph_break_as_sibling(&mut self) -> bool {
+        if self.cursor_in_readonly() {
+            return false;
+        }
         if !self.cursor.is_valid() {
             return false;
         }
@@ -1446,6 +1503,9 @@ impl DocumentEditor {
     }
 
     pub fn insert_char(&mut self, ch: char) -> bool {
+        if self.cursor_in_readonly() {
+            return false;
+        }
         let pointer = self.cursor.clone();
 
         // Check if we're trying to insert into an empty structure and populate it if needed
@@ -1522,6 +1582,9 @@ impl DocumentEditor {
     }
 
     pub fn backspace(&mut self) -> bool {
+        if self.cursor_in_readonly() {
+            return false;
+        }
         if self.segments.is_empty() {
             return false;
         }
@@ -1535,6 +1598,15 @@ impl DocumentEditor {
             if self.cursor_segment > 0 {
                 let prev_segment = &self.segments[self.cursor_segment - 1];
                 let prev_para_path = &prev_segment.paragraph_path;
+
+                // At the boundary of a read-only paragraph (a table), backspace
+                // is a no-op: it must neither remove/merge the block nor pull the
+                // cursor into it.
+                if prev_para_path != &self.cursor.paragraph_path
+                    && self.is_readonly_paragraph(prev_para_path)
+                {
+                    return false;
+                }
 
                 // Only check if it's a different paragraph
                 if prev_para_path != &self.cursor.paragraph_path
@@ -1996,6 +2068,12 @@ impl DocumentEditor {
 
         let prev_segment = self.segments[prev_segment_idx].clone();
 
+        // Never merge into a read-only paragraph (e.g. a table); its content is
+        // immutable, so the merge would either panic or destroy the block.
+        if self.is_readonly_paragraph(&prev_segment.paragraph_path) {
+            return false;
+        }
+
         // Calculate previous paragraph's character count for cursor positioning
         let prev_char_count: usize = self
             .segments
@@ -2166,6 +2244,10 @@ impl DocumentEditor {
                 // Lists shouldn't be merged like this
                 return false;
             }
+            Paragraph::Table { .. } => {
+                // Tables are read-only; never merge their content.
+                return false;
+            }
         };
 
         // Determine target based on previous paragraph type
@@ -2252,6 +2334,12 @@ impl DocumentEditor {
         }
 
         let next_segment = self.segments[next_segment_idx].clone();
+
+        // Never merge a read-only paragraph (e.g. a table) into the current one;
+        // its content is immutable and must not be consumed by the merge.
+        if self.is_readonly_paragraph(&next_segment.paragraph_path) {
+            return false;
+        }
 
         // Calculate current paragraph's character count for cursor positioning
         let current_char_count: usize = self
@@ -2509,6 +2597,10 @@ impl DocumentEditor {
                     // Lists shouldn't be merged like this
                     return false;
                 }
+                Paragraph::Table { .. } => {
+                    // Tables are read-only; never merge their content.
+                    return false;
+                }
             };
 
             // Determine target based on current paragraph type
@@ -2566,6 +2658,9 @@ impl DocumentEditor {
     }
 
     pub fn delete(&mut self) -> bool {
+        if self.cursor_in_readonly() {
+            return false;
+        }
         if self.segments.is_empty() {
             return false;
         }
@@ -2641,6 +2736,9 @@ impl DocumentEditor {
     }
 
     pub fn delete_word_backward(&mut self) -> bool {
+        if self.cursor_in_readonly() {
+            return false;
+        }
         if self.segments.is_empty() {
             return false;
         }
@@ -2686,6 +2784,9 @@ impl DocumentEditor {
     }
 
     pub fn delete_word_forward(&mut self) -> bool {
+        if self.cursor_in_readonly() {
+            return false;
+        }
         if self.segments.is_empty() {
             return false;
         }

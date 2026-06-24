@@ -3,11 +3,21 @@ use super::{
 };
 use tdoc::{ChecklistItem, Document, InlineStyle, Paragraph, ParagraphType, Span};
 
-pub fn collect_segments(document: &Document, reveal_codes: bool) -> Vec<SegmentRef> {
+pub fn collect_segments(
+    document: &Document,
+    reveal_codes: bool,
+    layout_width: usize,
+) -> Vec<SegmentRef> {
     let mut result = Vec::new();
     for (idx, paragraph) in document.paragraphs.iter().enumerate() {
         let mut path = ParagraphPath::new_root(idx);
-        collect_paragraph_segments(paragraph, &mut path, reveal_codes, &mut result);
+        collect_paragraph_segments(
+            paragraph,
+            &mut path,
+            reveal_codes,
+            layout_width,
+            &mut result,
+        );
     }
     result
 }
@@ -18,6 +28,7 @@ pub fn collect_segments_for_paragraph_tree(
     document: &Document,
     root_path: &ParagraphPath,
     reveal_codes: bool,
+    layout_width: usize,
 ) -> Vec<SegmentRef> {
     let mut result = Vec::new();
 
@@ -43,7 +54,13 @@ pub fn collect_segments_for_paragraph_tree(
         }
     } else if let Some(paragraph) = paragraph_ref(document, root_path) {
         let mut path = root_path.clone();
-        collect_paragraph_segments(paragraph, &mut path, reveal_codes, &mut result);
+        collect_paragraph_segments(
+            paragraph,
+            &mut path,
+            reveal_codes,
+            layout_width,
+            &mut result,
+        );
     }
     result
 }
@@ -303,6 +320,15 @@ fn dump_paragraph(
                 dump_checklist_item(item, path, &[item_index], depth + 1, cursor, out);
             }
         }
+        Paragraph::Table { rows } => {
+            let warn = if rows.is_empty() { "  !! NO ROWS" } else { "" };
+            let columns = rows.iter().map(|row| row.cells.len()).max().unwrap_or(0);
+            out.push_str(&format!(
+                "{indent}Table ({} rows x {} cols){warn}{marker}\n",
+                rows.len(),
+                columns
+            ));
+        }
     }
 }
 
@@ -445,12 +471,13 @@ fn collect_paragraph_segments(
     paragraph: &Paragraph,
     path: &mut ParagraphPath,
     reveal_codes: bool,
+    layout_width: usize,
     segments: &mut Vec<SegmentRef>,
 ) {
     collect_span_segments(paragraph, path, reveal_codes, segments);
     for (child_index, child) in paragraph.children().iter().enumerate() {
         path.push_child(child_index);
-        collect_paragraph_segments(child, path, reveal_codes, segments);
+        collect_paragraph_segments(child, path, reveal_codes, layout_width, segments);
         path.pop();
     }
     for (entry_index, entry) in paragraph.entries().iter().enumerate() {
@@ -467,7 +494,7 @@ fn collect_paragraph_segments(
         } else {
             for (child_index, child) in entry.iter().enumerate() {
                 path.push_entry(entry_index, child_index);
-                collect_paragraph_segments(child, path, reveal_codes, segments);
+                collect_paragraph_segments(child, path, reveal_codes, layout_width, segments);
                 path.pop();
             }
         }
@@ -476,6 +503,43 @@ fn collect_paragraph_segments(
         for (item_index, item) in paragraph.checklist_items().iter().enumerate() {
             collect_checklist_item_segments(item, path, &[item_index], reveal_codes, segments);
         }
+    }
+    if paragraph.paragraph_type() == ParagraphType::Table {
+        collect_table_segments(paragraph, path, layout_width, segments);
+    }
+}
+
+/// Tables are read-only and laid out entirely by the renderer. We mirror that
+/// layout here by asking the renderer for the per-line character counts at the
+/// current content width, then emit one navigable `Text` segment per rendered
+/// line (span path = line index, len = character count). This lines up exactly
+/// with the per-line cursor stops `DirectRenderer::render_table` emits, so the
+/// cursor can be positioned anywhere in the grid while edits stay blocked. A
+/// degenerate/empty table still gets a single zero-length stop so it remains
+/// selectable.
+fn collect_table_segments(
+    paragraph: &Paragraph,
+    path: &ParagraphPath,
+    layout_width: usize,
+    segments: &mut Vec<SegmentRef>,
+) {
+    let line_lengths = crate::render::table_line_char_counts(paragraph, layout_width);
+    if line_lengths.is_empty() {
+        segments.push(SegmentRef {
+            paragraph_path: path.clone(),
+            span_path: SpanPath::new(vec![0]),
+            len: 0,
+            kind: SegmentKind::Text,
+        });
+        return;
+    }
+    for (line_index, len) in line_lengths.into_iter().enumerate() {
+        segments.push(SegmentRef {
+            paragraph_path: path.clone(),
+            span_path: SpanPath::new(vec![line_index]),
+            len,
+            kind: SegmentKind::Text,
+        });
     }
 }
 

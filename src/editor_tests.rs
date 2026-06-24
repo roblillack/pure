@@ -3784,7 +3784,7 @@ fn indent_unindent_sequences_keep_tree_sound() {
             "seed '{seed_name}' is already unsound: {start_problems:?}"
         );
 
-        let segments = inspect::collect_segments(&seed, false);
+        let segments = inspect::collect_segments(&seed, false, 80);
         for segment in &segments {
             for ops in indent_op_sequences(4) {
                 let mut editor = DocumentEditor::new(seed.clone());

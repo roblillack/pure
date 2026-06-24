@@ -83,6 +83,12 @@ pub(crate) fn checklist_item_mut<'a>(
 }
 
 pub(crate) fn span_mut<'a>(paragraph: &'a mut Paragraph, path: &SpanPath) -> Option<&'a mut Span> {
+    // Only leaf paragraphs hold inline spans; `content_mut` panics otherwise.
+    // Non-leaf paragraphs (notably read-only tables, whose synthetic cursor
+    // segments carry a line-index span path) simply have no editable span here.
+    if !paragraph.paragraph_type().is_leaf() {
+        return None;
+    }
     let mut iter = path.indices().iter();
     let first = iter.next()?;
     let mut span = paragraph.content_mut().get_mut(*first)?;
@@ -129,7 +135,15 @@ pub(crate) fn paragraph_is_empty(paragraph: &Paragraph) -> bool {
         _ => true,
     };
 
-    content_empty && children_empty && entries_empty && checklist_empty
+    // A table carries its data in rows, not inline content; a table with any
+    // rows is not empty. This keeps read-only tables from being treated as
+    // blank paragraphs that adjacent backspace/delete edits would remove.
+    let rows_empty = match paragraph {
+        Paragraph::Table { rows } => rows.is_empty(),
+        _ => true,
+    };
+
+    content_empty && children_empty && entries_empty && checklist_empty && rows_empty
 }
 
 // ============================================================================
@@ -192,6 +206,9 @@ fn paragraph_to_checklist_items_recursive(paragraph: Paragraph) -> Vec<Checklist
             entries.into_iter().map(entry_to_checklist_item).collect()
         }
         Paragraph::Quote { children } => paragraphs_to_checklist_items_recursive(children),
+        // Tables are read-only and never participate in type conversions; treat
+        // them as contributing no checklist items if one is ever reached here.
+        Paragraph::Table { .. } => Vec::new(),
     }
 }
 
@@ -513,6 +530,11 @@ pub(crate) fn apply_paragraph_type_in_place(paragraph: &mut Paragraph, target: P
                         ChecklistItem::new(false)
                             .with_content(ensure_checklist_content(mem::take(content))),
                     ],
+                    // Tables are read-only and excluded from type conversions;
+                    // fall back to a single empty item if ever reached.
+                    Paragraph::Table { .. } => {
+                        vec![ChecklistItem::new(false).with_content(vec![Span::new_text("")])]
+                    }
                 };
                 Paragraph::Checklist { items }
             }

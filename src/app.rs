@@ -28,7 +28,8 @@ use ratatui::{
     text::{Line, Span, Text},
     widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap},
 };
-use tdoc::{Document, InlineStyle, ParagraphType, markdown, parse, writer::Writer};
+use tdoc::ftml::{Writer, parse};
+use tdoc::{Document, InlineStyle, ParagraphType, markdown};
 
 use crate::editor::{CursorPointer, DocumentEditor};
 use crate::editor_display::{CursorDisplay, EditorDisplay};

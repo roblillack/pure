@@ -1412,9 +1412,9 @@ dependencies = [
 
 [[package]]
 name = "tdoc"
-version = "0.10.0"
+version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d453f5c560271b2a73ccffcf9bc37e6cf1cf6d442bfb2282af1c46bd5367e1f1"
+checksum = "63729d85e41d192a48b1c7c0ff9e1ad6501b320f01c6b1f8391c934a60fb26d9"
 dependencies = [
  "atty",
  "clap",
