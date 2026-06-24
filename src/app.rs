@@ -29,7 +29,7 @@ use ratatui::{
     widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap},
 };
 use tdoc::ftml::{Writer, parse};
-use tdoc::{Document, InlineStyle, ParagraphType, markdown};
+use tdoc::{Document, InlineStyle, ParagraphType, gemini, html, markdown};
 
 use crate::editor::{CursorPointer, DocumentEditor};
 use crate::editor_display::{CursorDisplay, EditorDisplay};
@@ -47,9 +47,13 @@ const MOUSE_SCROLL_LINES: usize = 3;
 pub enum DocumentFormat {
     Ftml,
     Markdown,
+    Html,
+    Gemini,
 }
 
 impl DocumentFormat {
+    /// Picks the document format from a file's extension. Unknown (or missing)
+    /// extensions default to FTML, Pure's native format.
     fn from_path(path: &Path) -> Self {
         let ext = path
             .extension()
@@ -59,6 +63,8 @@ impl DocumentFormat {
             Some("md") | Some("markdown") | Some("mkd") | Some("mdown") | Some("mdtxt") => {
                 DocumentFormat::Markdown
             }
+            Some("html") | Some("htm") | Some("xhtml") => DocumentFormat::Html,
+            Some("gmi") | Some("gemini") => DocumentFormat::Gemini,
             _ => DocumentFormat::Ftml,
         }
     }
@@ -95,6 +101,8 @@ pub fn load_document(path: &PathBuf) -> Result<(Document, DocumentFormat, Option
             DocumentFormat::Ftml => parse(std::io::Cursor::new(content))
                 .map_err(|err| -> Box<dyn std::error::Error + Send + Sync> { Box::new(err) }),
             DocumentFormat::Markdown => markdown::parse(std::io::Cursor::new(content)),
+            DocumentFormat::Html => html::parse(std::io::Cursor::new(content)),
+            DocumentFormat::Gemini => gemini::parse(std::io::Cursor::new(content)),
         };
         match parsed {
             Ok(doc) => Ok((doc, format, None)),
@@ -2596,6 +2604,22 @@ impl App {
                 fs::write(path, contents)
                     .with_context(|| format!("failed to write {}", path.display()))?;
             }
+            DocumentFormat::Html => {
+                // A complete, standalone HTML page (doctype, head, embedded
+                // stylesheet) so the saved file opens directly in any browser.
+                let mut contents = Vec::new();
+                html::write_document(&mut contents, self.display.document())
+                    .context("failed to render HTML")?;
+                fs::write(path, contents)
+                    .with_context(|| format!("failed to write {}", path.display()))?;
+            }
+            DocumentFormat::Gemini => {
+                let mut contents = Vec::new();
+                gemini::write(&mut contents, self.display.document())
+                    .context("failed to render Gemini")?;
+                fs::write(path, contents)
+                    .with_context(|| format!("failed to write {}", path.display()))?;
+            }
         }
 
         self.dirty = false;
@@ -3203,3 +3227,7 @@ struct RevealToggleSnapshot {
     scroll_ratio: f64,
     cursor_pointer: CursorPointer,
 }
+
+#[cfg(test)]
+#[path = "app_tests.rs"]
+mod app_tests;
