@@ -12,6 +12,14 @@ While pre-1.0, the minor version is bumped for breaking changes.
 
 ### Added
 
+- HTML and Gemini import/export. Opening a `.html`/`.htm`/`.xhtml` or
+  `.gmi`/`.gemini` file now parses it with tdoc's dedicated HTML or Gemini
+  parser instead of the FTML parser, and saving writes the matching format —
+  HTML as a complete, standalone styled page that opens directly in a browser,
+  Gemini as Gemtext. The format follows the file's extension (including on Save
+  As), joining the existing Markdown and FTML support. Formatting that a target
+  format can't represent (e.g. embedded images in HTML) is dropped on save;
+  only FTML is guaranteed to round-trip losslessly.
 - Preliminary read-only table support. Tables in opened documents (e.g.
   Markdown `| ... |` tables) are rendered with tdoc's ANSI formatter as a
   box-drawn, multi-line block. The cursor can be positioned anywhere within a
