@@ -766,10 +766,10 @@ impl DocumentEditor {
     }
 
     pub(crate) fn rebuild_segments(&mut self) {
-        self.segments = collect_segments(&self.document, self.reveal_codes);
+        self.segments = collect_segments(&self.document, self.reveal_codes, self.layout_width);
         if self.segments.is_empty() {
             self.ensure_placeholder_segment();
-            self.segments = collect_segments(&self.document, self.reveal_codes);
+            self.segments = collect_segments(&self.document, self.reveal_codes, self.layout_width);
         }
         if self.segments.is_empty() {
             self.cursor = CursorPointer::default();
@@ -791,6 +791,7 @@ impl DocumentEditor {
             &self.document,
             root_path,
             self.reveal_codes,
+            self.layout_width,
         );
 
         // Replace the old segment range with new segments
@@ -799,7 +800,7 @@ impl DocumentEditor {
         // If segments are now empty, ensure we have a placeholder
         if self.segments.is_empty() {
             self.ensure_placeholder_segment();
-            self.segments = collect_segments(&self.document, self.reveal_codes);
+            self.segments = collect_segments(&self.document, self.reveal_codes, self.layout_width);
         }
 
         if self.segments.is_empty() {

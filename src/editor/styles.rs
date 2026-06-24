@@ -49,6 +49,16 @@ impl DocumentEditor {
             return false;
         }
 
+        // Refuse to restyle a selection that touches a read-only paragraph (a
+        // table): its content is immutable.
+        for segment_index in start_key.segment_index..=end_key.segment_index {
+            if let Some(segment) = self.segments.get(segment_index)
+                && self.is_readonly_paragraph(&segment.paragraph_path)
+            {
+                return false;
+            }
+        }
+
         // Collect the selected text ranges grouped by content root. While at
         // it, detect when the whole selection already carries the requested
         // style (or is plain already, when clearing) so re-applying it does

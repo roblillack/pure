@@ -422,6 +422,7 @@ impl<'a> DirectRenderer<'a> {
             ParagraphType::UnorderedList => self.render_unordered_list(paragraph, prefix),
             ParagraphType::OrderedList => self.render_ordered_list(paragraph, prefix),
             ParagraphType::Checklist => self.render_checklist(paragraph, prefix),
+            ParagraphType::Table => self.render_table(paragraph, prefix),
         }
     }
 
@@ -586,6 +587,109 @@ impl<'a> DirectRenderer<'a> {
         self.consume_lines_direct(lines);
 
         self.push_styled_line(&fence, self.theme.structural_style(), false);
+    }
+
+    /// Render a (read-only) table.
+    ///
+    /// The table is laid out by tdoc's ANSI formatter into a box-drawn,
+    /// multi-line block; we parse that output back into styled ratatui lines.
+    /// Each rendered line is treated like an immutable line of preformatted
+    /// text: the cursor can be positioned at any character offset (so vertical
+    /// and horizontal navigation pass transparently through the table), but the
+    /// editor rejects insertions/deletions while the cursor sits inside it.
+    fn render_table(&mut self, paragraph: &Paragraph, prefix: &str) {
+        let prefix_width = visible_width(prefix);
+        // Width budget handed to the formatter: the room left on the line after
+        // our own prefix/indentation. The formatter draws its own borders within
+        // this budget; we prepend `prefix` (and left padding) ourselves.
+        let content_width = self
+            .wrap_width
+            .saturating_sub(prefix_width)
+            .max(MIN_TABLE_WIDTH);
+        let mut rendered = render_table_lines(paragraph, content_width);
+        if rendered.is_empty() {
+            // Keep an empty/degenerate table navigable with a single stop.
+            rendered.push(RenderedTableLine::default());
+        }
+
+        let padding = self.left_padding.min(u16::MAX as usize) as u16;
+
+        for (line_index, rendered_line) in rendered.iter().enumerate() {
+            let mut spans: Vec<Span<'static>> = Vec::new();
+            if !prefix.is_empty() {
+                spans.extend(self.style_structural_prefix(prefix, Style::default()));
+            }
+            for (text, style) in &rendered_line.spans {
+                spans.push(Span::styled(text.clone(), *style));
+            }
+            let spans = self.prepend_padding(spans);
+            self.lines.push(Line::from(spans));
+            self.line_metrics.push(LineMetric {
+                counts_as_content: true,
+            });
+
+            // Emit a cursor stop for every character boundary on this line so the
+            // cursor can be placed anywhere within the rendered grid. The span
+            // path stores the rendered line index; the offset is the character
+            // index. These mirror the synthetic per-line segments the editor
+            // builds for the table (see EditorDisplay::sync_readonly_segments).
+            let span_path = SpanPath::new(vec![line_index]);
+            let mut content_column = prefix_width;
+            let mut chars = rendered_line.plain.chars();
+            let char_count = rendered_line.plain.chars().count();
+            for offset in 0..=char_count {
+                let col = content_column.min(u16::MAX as usize) as u16;
+                self.record_table_position(&span_path, offset, col, col.saturating_add(padding));
+                if let Some(ch) = chars.next() {
+                    content_column += UnicodeWidthChar::width(ch).unwrap_or(0);
+                }
+            }
+
+            self.current_line_index += 1;
+        }
+    }
+
+    /// Record a navigable position inside a table at an already-known visual
+    /// column. Mirrors the cursor/marker bookkeeping that `check_position_match`
+    /// and `consume_lines_direct` perform for ordinary text, but without routing
+    /// through the fragment/wrapping pipeline (the formatter already laid the
+    /// line out for us).
+    fn record_table_position(
+        &mut self,
+        span_path: &SpanPath,
+        offset: usize,
+        content_column: u16,
+        column: u16,
+    ) {
+        let pending = PendingPosition {
+            line: self.current_line_index,
+            column,
+            content_column,
+        };
+
+        if let Some(cursor) = self.cursor_pointer
+            && cursor.paragraph_path == self.current_paragraph_path
+            && cursor.span_path == *span_path
+            && cursor.offset == offset
+            && cursor.segment_kind == SegmentKind::Text
+        {
+            self.cursor_pending = Some(pending);
+        }
+
+        if self.track_all_positions {
+            let marker_id = self.next_marker_id;
+            self.next_marker_id += 1;
+            self.marker_to_pointer.insert(
+                marker_id,
+                CursorPointer {
+                    paragraph_path: self.current_paragraph_path.clone(),
+                    span_path: span_path.clone(),
+                    offset,
+                    segment_kind: SegmentKind::Text,
+                },
+            );
+            self.marker_pending.insert(marker_id, pending);
+        }
     }
 
     fn render_quote(&mut self, paragraph: &Paragraph, prefix: &str) {
@@ -2076,6 +2180,158 @@ impl<'a> LineBuilder<'a> {
     }
 }
 
+/// Smallest content width handed to the table formatter, so a deeply nested or
+/// very narrow viewport still produces a (cramped but valid) grid.
+const MIN_TABLE_WIDTH: usize = 8;
+
+/// A single line of a table after it has been rendered by tdoc's ANSI formatter
+/// and parsed back into ratatui styling.
+#[derive(Debug, Clone, Default)]
+struct RenderedTableLine {
+    /// Visible text with all escape sequences stripped. Used for cursor
+    /// offset/width math and for the synthetic per-line editor segments.
+    plain: String,
+    /// Styled runs that reproduce the formatter's ANSI styling.
+    spans: Vec<(String, Style)>,
+}
+
+/// Render a `Paragraph::Table` to styled lines using tdoc's ANSI formatter.
+///
+/// The table is wrapped in a throwaway single-paragraph document and rendered
+/// with [`FormattingStyle::ansi`] (Unicode box-drawing borders + SGR emphasis),
+/// then split into lines whose SGR sequences are translated into ratatui
+/// [`Style`]s. OSC 8 hyperlinks and link footnotes are disabled so the only
+/// escape sequences we have to interpret are simple SGR codes.
+fn render_table_lines(table: &Paragraph, content_width: usize) -> Vec<RenderedTableLine> {
+    use tdoc::formatter::{Formatter, FormattingStyle};
+
+    let mut style = FormattingStyle::ansi();
+    style.wrap_width = content_width.max(MIN_TABLE_WIDTH);
+    style.left_padding = 0;
+    style.enable_osc8_hyperlinks = false;
+    style.link_footnotes = false;
+
+    let doc = Document::new().with_paragraphs(vec![table.clone()]);
+    let mut buf: Vec<u8> = Vec::new();
+    if Formatter::new(&mut buf, style)
+        .write_document(&doc)
+        .is_err()
+    {
+        return Vec::new();
+    }
+    let text = String::from_utf8_lossy(&buf);
+
+    let mut lines: Vec<RenderedTableLine> = text.split('\n').map(parse_ansi_table_line).collect();
+    // Trim blank lines the document formatter adds around the block (paragraph
+    // spacing, the trailing newline, and the final reset escape on its own line).
+    while lines.last().is_some_and(|line| line.plain.is_empty()) {
+        lines.pop();
+    }
+    while lines.first().is_some_and(|line| line.plain.is_empty()) {
+        lines.remove(0);
+    }
+    lines
+}
+
+/// The per-line character counts a table renders to at the given content width.
+///
+/// This is the single source of truth the editor uses to build its synthetic
+/// per-line cursor segments for a table, so navigation stays in lockstep with
+/// what [`DirectRenderer::render_table`] draws (both go through
+/// [`render_table_lines`] at the same width). Returns one entry per rendered
+/// line; an empty vec means the table produced no output.
+pub(crate) fn table_line_char_counts(table: &Paragraph, content_width: usize) -> Vec<usize> {
+    render_table_lines(table, content_width)
+        .iter()
+        .map(|line| line.plain.chars().count())
+        .collect()
+}
+
+/// Parse a single formatter output line, splitting it into styled runs at SGR
+/// boundaries. Only the SGR codes that [`FormattingStyle::ansi`] emits are
+/// recognised; anything else is treated as literal text.
+fn parse_ansi_table_line(raw: &str) -> RenderedTableLine {
+    let mut plain = String::new();
+    let mut spans: Vec<(String, Style)> = Vec::new();
+    let mut current = String::new();
+    let mut mods = Modifier::empty();
+    let mut chars = raw.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        if ch == '\x1b' {
+            if chars.peek() == Some(&'[') {
+                chars.next(); // consume '['
+                let mut code = String::new();
+                let mut terminated = false;
+                for c in chars.by_ref() {
+                    if c == 'm' {
+                        terminated = true;
+                        break;
+                    }
+                    if c.is_ascii_digit() || c == ';' {
+                        code.push(c);
+                    } else {
+                        // Not an SGR sequence we understand; stop consuming.
+                        break;
+                    }
+                }
+                if terminated {
+                    let new_mods = apply_sgr_modifiers(mods, &code);
+                    if new_mods != mods {
+                        if !current.is_empty() {
+                            spans.push((std::mem::take(&mut current), modifier_style(mods)));
+                        }
+                        mods = new_mods;
+                    }
+                }
+            }
+            // Lone ESC (or an unrecognised sequence) is dropped.
+            continue;
+        }
+        current.push(ch);
+        plain.push(ch);
+    }
+
+    if !current.is_empty() {
+        spans.push((current, modifier_style(mods)));
+    }
+
+    RenderedTableLine { plain, spans }
+}
+
+fn modifier_style(mods: Modifier) -> Style {
+    if mods.is_empty() {
+        Style::default()
+    } else {
+        Style::default().add_modifier(mods)
+    }
+}
+
+/// Apply the numeric parameters of an SGR (`ESC [ … m`) sequence to the set of
+/// active text modifiers. Unknown parameters are ignored.
+fn apply_sgr_modifiers(mut mods: Modifier, code: &str) -> Modifier {
+    if code.is_empty() {
+        return Modifier::empty(); // `ESC[m` is shorthand for `ESC[0m`.
+    }
+    for part in code.split(';') {
+        match part.parse::<u16>().unwrap_or(0) {
+            0 => mods = Modifier::empty(),
+            1 => mods.insert(Modifier::BOLD),
+            22 => mods.remove(Modifier::BOLD),
+            3 => mods.insert(Modifier::ITALIC),
+            23 => mods.remove(Modifier::ITALIC),
+            4 => mods.insert(Modifier::UNDERLINED),
+            24 => mods.remove(Modifier::UNDERLINED),
+            7 => mods.insert(Modifier::REVERSED),
+            27 => mods.remove(Modifier::REVERSED),
+            9 => mods.insert(Modifier::CROSSED_OUT),
+            29 => mods.remove(Modifier::CROSSED_OUT),
+            _ => {}
+        }
+    }
+    mods
+}
+
 fn visible_width(text: &str) -> usize {
     text.chars()
         .map(|ch| UnicodeWidthChar::width(ch).unwrap_or(0))
@@ -2110,7 +2366,8 @@ mod tests {
     use super::*;
     use crate::editor::DocumentEditor;
     use std::io::Cursor;
-    use tdoc::{ftml, parse};
+    use tdoc::ftml;
+    use tdoc::ftml::parse;
 
     const SENTINELS: RenderSentinels = RenderSentinels {
         cursor: '\u{F8FF}',
@@ -3273,5 +3530,88 @@ mod tests {
                 "backward position {i} ({kind:?} offset={offset}) should have a visual position, got None"
             );
         }
+    }
+
+    fn sample_table() -> tdoc::Paragraph {
+        use tdoc::{Paragraph, Span as DocSpan, TableCell, TableRow};
+        Paragraph::new_table().with_rows(vec![
+            TableRow::new().with_cells(vec![
+                TableCell::new_header().with_content(vec![DocSpan::new_text("Name")]),
+                TableCell::new_header().with_content(vec![DocSpan::new_text("Role")]),
+            ]),
+            TableRow::new().with_cells(vec![
+                TableCell::new_data().with_content(vec![DocSpan::new_text("Alice")]),
+                TableCell::new_data().with_content(vec![DocSpan::new_text("Developer")]),
+            ]),
+        ])
+    }
+
+    #[test]
+    fn table_renders_box_drawn_lines() {
+        let document = Document::new().with_paragraphs(vec![sample_table()]);
+        let tracking = DirectCursorTracking {
+            cursor: None,
+            selection: None,
+            track_all_positions: true,
+        };
+        let theme = Theme::default();
+        let rendered = render_document_direct(&document, 40, 0, &[], tracking, &theme);
+        let lines = lines_to_strings(&rendered.lines);
+
+        // Unicode box-drawing borders from the ANSI formatter.
+        assert!(
+            lines.iter().any(|line| line.contains('┌')),
+            "expected a top border, got {lines:?}"
+        );
+        assert!(lines.iter().any(|line| line.contains('│')));
+        assert!(lines.iter().any(|line| line.contains("Name")));
+        assert!(lines.iter().any(|line| line.contains("Alice")));
+        // No escape sequences should survive parsing into ratatui spans.
+        assert!(
+            lines.iter().all(|line| !line.contains('\u{1b}')),
+            "ANSI escapes leaked into rendered text: {lines:?}"
+        );
+    }
+
+    #[test]
+    fn table_emits_navigable_cursor_positions() {
+        let document = Document::new().with_paragraphs(vec![sample_table()]);
+        let tracking = DirectCursorTracking {
+            cursor: None,
+            selection: None,
+            track_all_positions: true,
+        };
+        let theme = Theme::default();
+        let rendered = render_document_direct(&document, 40, 0, &[], tracking, &theme);
+
+        let total_positions: usize = rendered
+            .paragraph_lines
+            .iter()
+            .map(|info| info.positions.len())
+            .sum();
+        assert!(
+            total_positions > 0,
+            "expected the table to emit navigable cursor positions"
+        );
+
+        // Every recorded position should point at the table paragraph and carry
+        // a line index in its span path.
+        for info in &rendered.paragraph_lines {
+            for (pointer, _) in &info.positions {
+                assert_eq!(pointer.paragraph_path.root_index(), Some(0));
+                assert!(!pointer.span_path.indices().is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn ansi_parser_translates_bold_and_strips_escapes() {
+        let line = parse_ansi_table_line("\u{1b}[1mBold\u{1b}[22m plain");
+        assert_eq!(line.plain, "Bold plain");
+        assert_eq!(line.spans.len(), 2);
+        assert!(line.spans[0].1.add_modifier.contains(Modifier::BOLD));
+        assert!(!line.spans[1].1.add_modifier.contains(Modifier::BOLD));
+        assert_eq!(line.spans[0].0, "Bold");
+        assert_eq!(line.spans[1].0, " plain");
     }
 }

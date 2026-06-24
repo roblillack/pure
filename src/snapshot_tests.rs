@@ -42,6 +42,76 @@ fn sample_app() -> TestApp {
     TestApp::new(WIDTH, HEIGHT, sample_document())
 }
 
+const MARKDOWN_TABLE: &str = "# Team\n\nIntro paragraph before the table.\n\n| Name | Role | Notes |\n| --- | --- | --- |\n| Alice | Developer | Works on the parser and the renderer |\n| Bob | Designer | UI |\n\nClosing paragraph after the table.\n";
+
+fn table_document() -> Document {
+    tdoc::markdown::parse(std::io::Cursor::new(MARKDOWN_TABLE)).expect("parse markdown")
+}
+
+#[test]
+fn markdown_table_renders_with_box_drawing_borders() {
+    let doc = table_document();
+    let table_count = doc
+        .paragraphs
+        .iter()
+        .filter(|p| p.paragraph_type() == tdoc::ParagraphType::Table)
+        .count();
+    assert_eq!(table_count, 1, "markdown should parse into one table");
+
+    let mut app = TestApp::new(WIDTH, HEIGHT, doc);
+    app.draw();
+    let lines = app.buffer_lines();
+    assert!(
+        lines.iter().any(|l| l.contains('┌')),
+        "expected a top border in the rendered table"
+    );
+    assert!(
+        lines.iter().any(|l| l.contains('│') && l.contains("Alice")),
+        "expected a bordered content row in the rendered table"
+    );
+}
+
+#[test]
+fn table_document_renders() {
+    let mut app = TestApp::new(WIDTH, HEIGHT, table_document());
+    assert_svg("table_document_renders", &mut app);
+}
+
+#[test]
+fn cursor_is_drawn_inside_the_table() {
+    let mut app = TestApp::new(WIDTH, HEIGHT, table_document());
+    app.draw();
+
+    let table_rows: Vec<usize> = app
+        .buffer_lines()
+        .iter()
+        .enumerate()
+        .filter(|(_, line)| {
+            line.contains('│') || line.contains('┌') || line.contains('├') || line.contains('└')
+        })
+        .map(|(i, _)| i)
+        .collect();
+    assert!(!table_rows.is_empty(), "expected the table to be drawn");
+
+    // Walking down with the arrow keys should at some point place the visible
+    // terminal cursor on one of the table's rows.
+    let mut cursor_entered_table = false;
+    for _ in 0..8 {
+        app.key(KeyCode::Down);
+        app.draw();
+        if let Some(pos) = app.cursor_position()
+            && table_rows.contains(&(pos.y as usize))
+        {
+            cursor_entered_table = true;
+            break;
+        }
+    }
+    assert!(
+        cursor_entered_table,
+        "the terminal cursor should be drawn within the table while navigating through it"
+    );
+}
+
 #[test]
 fn initial_document() {
     let mut app = sample_app();

@@ -669,6 +669,11 @@ impl EditorDisplay {
         selection: Option<(CursorPointer, CursorPointer)>,
         track_all_positions: bool,
     ) {
+        // Keep the editor's read-only-block (table) layout width in sync with
+        // the width we're about to render at, so the navigable per-line table
+        // segments match what gets drawn. Rebuilds segments only if it changed.
+        self.editor.set_layout_width(wrap_width.max(1));
+
         // Use direct rendering - no document cloning needed!
         let cursor_pointer = self.editor.cursor_pointer();
 
@@ -2067,6 +2072,9 @@ fn flatten_paragraph(
         Paragraph::Checklist { items } => {
             flatten_checklist_items(items, blocks);
         }
+        // Tables are read-only; they carry no editable runs to flatten for
+        // copy/paste, so they contribute no paste blocks for now.
+        Paragraph::Table { .. } => {}
     }
 }
 
@@ -2693,7 +2701,7 @@ mod tests {
     #[test]
     fn move_down_from_h2_to_checklist() {
         use crate::editor::{ParagraphPath, SegmentKind, SpanPath};
-        use tdoc::parse;
+        use tdoc::ftml::parse;
         let content = std::fs::read_to_string("test.ftml").unwrap();
         let doc = parse(std::io::Cursor::new(content.clone())).unwrap();
         let mut display = EditorDisplay::new(DocumentEditor::new(doc));
@@ -2734,7 +2742,7 @@ mod tests {
 
     #[test]
     fn test_initial_cursor_navigation_in_test_ftml() {
-        use tdoc::parse;
+        use tdoc::ftml::parse;
 
         let content = std::fs::read_to_string("test.ftml").unwrap();
         let doc = parse(std::io::Cursor::new(content)).unwrap();
@@ -4192,5 +4200,193 @@ mod tests {
         assert_eq!(styled_texts(&entries[0][0])[0].0, "FirstSecond");
         assert_eq!(styled_texts(&entries[1][0])[0].0, "Third");
         assert_eq!(styled_texts(&entries[2][0])[0].0, "Last");
+    }
+
+    fn document_with_table() -> Document {
+        use tdoc::{TableCell, TableRow};
+        let table = Paragraph::new_table().with_rows(vec![
+            TableRow::new().with_cells(vec![
+                TableCell::new_header().with_content(vec![Span::new_text("Name")]),
+                TableCell::new_header().with_content(vec![Span::new_text("Role")]),
+            ]),
+            TableRow::new().with_cells(vec![
+                TableCell::new_data().with_content(vec![Span::new_text("Alice")]),
+                TableCell::new_data().with_content(vec![Span::new_text("Developer")]),
+            ]),
+        ]);
+        Document::new().with_paragraphs(vec![
+            Paragraph::new_text().with_content(vec![Span::new_text("Before the table")]),
+            table,
+            Paragraph::new_text().with_content(vec![Span::new_text("After the table")]),
+        ])
+    }
+
+    #[test]
+    fn cursor_navigates_into_and_through_a_table() {
+        let mut display = EditorDisplay::new(DocumentEditor::new(document_with_table()));
+        display.render_document_with_positions(60, 0, None);
+
+        // Start at the top (the paragraph before the table).
+        assert_eq!(
+            display.cursor_pointer().paragraph_path.root_index(),
+            Some(0)
+        );
+        assert!(!display.cursor_in_readonly());
+
+        // Pressing down should land the cursor inside the table (root index 1).
+        let mut entered_table = false;
+        for _ in 0..3 {
+            display.move_cursor_vertical(1);
+            display.render_document_with_positions(60, 0, None);
+            if display.cursor_pointer().paragraph_path.root_index() == Some(1) {
+                entered_table = true;
+                break;
+            }
+        }
+        assert!(
+            entered_table,
+            "cursor should enter the table when moving down"
+        );
+        assert!(
+            display.cursor_in_readonly(),
+            "the cursor should report being in a read-only block while inside the table"
+        );
+
+        // Continuing down eventually exits past the table to the trailing paragraph.
+        let mut exited_table = false;
+        for _ in 0..6 {
+            display.move_cursor_vertical(1);
+            display.render_document_with_positions(60, 0, None);
+            if display.cursor_pointer().paragraph_path.root_index() == Some(2) {
+                exited_table = true;
+                break;
+            }
+        }
+        assert!(
+            exited_table,
+            "cursor should move past the table to the next paragraph"
+        );
+        assert!(!display.cursor_in_readonly());
+    }
+
+    #[test]
+    fn table_content_cannot_be_edited() {
+        let mut display = EditorDisplay::new(DocumentEditor::new(document_with_table()));
+        display.render_document_with_positions(60, 0, None);
+
+        // Move the cursor into the table.
+        let mut tries = 0;
+        while display.cursor_pointer().paragraph_path.root_index() != Some(1) && tries < 5 {
+            display.move_cursor_vertical(1);
+            display.render_document_with_positions(60, 0, None);
+            tries += 1;
+        }
+        assert_eq!(
+            display.cursor_pointer().paragraph_path.root_index(),
+            Some(1)
+        );
+
+        let before = display.document().clone();
+
+        // None of the editing operations should mutate the table.
+        assert!(!display.insert_char('x'));
+        assert!(!display.backspace());
+        assert!(!display.delete());
+        assert!(!display.insert_paragraph_break());
+        assert!(!display.set_paragraph_type(tdoc::ParagraphType::Header1));
+
+        assert_eq!(
+            display.document().paragraphs,
+            before.paragraphs,
+            "read-only table content must be unchanged after edit attempts"
+        );
+    }
+
+    #[test]
+    fn backspace_at_start_of_paragraph_after_table_keeps_table() {
+        let mut display = EditorDisplay::new(DocumentEditor::new(document_with_table()));
+        display.render_document_with_positions(60, 0, None);
+
+        // Put the cursor at the very start of the paragraph that follows the table.
+        let pointer = CursorPointer {
+            paragraph_path: ParagraphPath::new_root(2),
+            span_path: SpanPath::new(vec![0]),
+            offset: 0,
+            segment_kind: SegmentKind::Text,
+        };
+        assert!(display.move_to_pointer(&pointer));
+
+        let before = display.document().clone();
+        // Backspace here must not consume the (read-only) table that precedes it.
+        display.backspace();
+        assert_eq!(
+            display.document().paragraphs.len(),
+            before.paragraphs.len(),
+            "the table must not be removed by backspacing into it"
+        );
+        assert_eq!(
+            display.document().paragraphs[1].paragraph_type(),
+            tdoc::ParagraphType::Table
+        );
+    }
+
+    #[test]
+    fn delete_at_end_of_paragraph_before_table_keeps_table() {
+        let mut display = EditorDisplay::new(DocumentEditor::new(document_with_table()));
+        display.render_document_with_positions(60, 0, None);
+
+        // Put the cursor at the end of the paragraph preceding the table.
+        let pointer = CursorPointer {
+            paragraph_path: ParagraphPath::new_root(0),
+            span_path: SpanPath::new(vec![0]),
+            offset: "Before the table".chars().count(),
+            segment_kind: SegmentKind::Text,
+        };
+        assert!(display.move_to_pointer(&pointer));
+
+        let before = display.document().clone();
+        display.delete();
+        assert_eq!(
+            display.document().paragraphs.len(),
+            before.paragraphs.len(),
+            "the table must not be merged/removed by forward-deleting into it"
+        );
+        assert_eq!(
+            display.document().paragraphs[1].paragraph_type(),
+            tdoc::ParagraphType::Table
+        );
+    }
+
+    #[test]
+    fn cursor_moves_horizontally_within_a_table_line() {
+        let mut display = EditorDisplay::new(DocumentEditor::new(document_with_table()));
+        display.render_document_with_positions(60, 0, None);
+
+        // Enter the table.
+        let mut tries = 0;
+        while display.cursor_pointer().paragraph_path.root_index() != Some(1) && tries < 5 {
+            display.move_cursor_vertical(1);
+            display.render_document_with_positions(60, 0, None);
+            tries += 1;
+        }
+        assert_eq!(
+            display.cursor_pointer().paragraph_path.root_index(),
+            Some(1)
+        );
+
+        // Right/left arrow movement stays inside the table and changes the offset.
+        let start = display.cursor_pointer();
+        assert!(
+            display.move_right(),
+            "should be able to move right in a table"
+        );
+        let moved = display.cursor_pointer();
+        assert_eq!(moved.paragraph_path.root_index(), Some(1));
+        assert_ne!(
+            (start.span_path.indices().to_vec(), start.offset),
+            (moved.span_path.indices().to_vec(), moved.offset),
+            "moving right should advance the cursor within the table"
+        );
+        assert!(display.move_left());
     }
 }

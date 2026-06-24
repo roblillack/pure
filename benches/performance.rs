@@ -357,7 +357,7 @@ fn bench_segment_collection() {
                 ITERATIONS
             },
             || {
-                let _ = editor::inspect::collect_segments(&doc, false);
+                let _ = editor::inspect::collect_segments(&doc, false, 80);
             },
         );
         result.print();
@@ -375,12 +375,12 @@ fn bench_segment_collection_with_reveal() {
     let doc = create_styled_document(MEDIUM_DOC_PARAGRAPHS);
 
     let result_normal = benchmark("collect_segments - reveal_codes OFF", ITERATIONS, || {
-        let _ = editor::inspect::collect_segments(&doc, false);
+        let _ = editor::inspect::collect_segments(&doc, false, 80);
     });
     result_normal.print();
 
     let result_reveal = benchmark("collect_segments - reveal_codes ON", ITERATIONS, || {
-        let _ = editor::inspect::collect_segments(&doc, true);
+        let _ = editor::inspect::collect_segments(&doc, true, 80);
     });
     result_reveal.print();
 }
@@ -538,7 +538,7 @@ fn bench_memory_allocations() {
     println!("\nDocument stats:");
     println!("  Paragraphs: {}", doc.paragraphs.len());
 
-    let segments = editor::inspect::collect_segments(&doc, false);
+    let segments = editor::inspect::collect_segments(&doc, false, 80);
     println!("  Segments: {}", segments.len());
 
     let tracking = DirectCursorTracking {

@@ -10,6 +10,17 @@ While pre-1.0, the minor version is bumped for breaking changes.
 
 ## [Unreleased] - ReleaseDate
 
+### Added
+
+- Preliminary read-only table support. Tables in opened documents (e.g.
+  Markdown `| ... |` tables) are rendered with tdoc's ANSI formatter as a
+  box-drawn, multi-line block. The cursor can be positioned anywhere within a
+  table — vertical and horizontal navigation pass transparently through it —
+  but its contents cannot yet be edited: typing, deletion, paragraph breaks,
+  type changes, restyling, and linking are all blocked inside a table, and
+  adjacent backspace/delete will not merge away or remove the block. Tables
+  round-trip unchanged on save.
+
 ## [0.5.0] - 2026-06-13
 
 ### Added

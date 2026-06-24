@@ -127,6 +127,11 @@ impl DocumentEditor {
         }
         let path = start.paragraph_path.clone();
 
+        // Read-only paragraphs (tables) cannot have their content rewritten.
+        if self.is_readonly_paragraph(&path) {
+            return false;
+        }
+
         // The character offset of the range start within its content root is
         // stable across the edit (text before it is untouched); remember it to
         // place the cursor at the end of the new link afterwards.
