@@ -1,9 +1,18 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="720" height="360" viewBox="0 0 720 360" font-family="'DejaVu Sans Mono', Menlo, Consolas, monospace" font-size="16px">
 <rect width="100%" height="100%" fill="#101010"/>
-<text x="250" y="75" fill="#d8d8d8" textLength="190" lengthAdjust="spacingAndGlyphs" xml:space="preserve" font-weight="bold">Summer Packing List</text>
+<text x="10" y="15" fill="#d8d8d8" textLength="190" lengthAdjust="spacingAndGlyphs" xml:space="preserve" font-weight="bold">Summer Packing List</text>
+<text x="0" y="55" fill="#d8d8d8" textLength="100" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> Pack the </text>
+<text x="100" y="55" fill="#d8d8d8" textLength="100" lengthAdjust="spacingAndGlyphs" xml:space="preserve" font-weight="bold">essentials</text>
+<text x="200" y="55" fill="#d8d8d8" textLength="120" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> before the </text>
+<text x="320" y="55" fill="#d8d8d8" textLength="40" lengthAdjust="spacingAndGlyphs" xml:space="preserve" font-style="italic">long</text>
+<text x="360" y="55" fill="#d8d8d8" textLength="360" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> trip.                              </text>
+<text x="0" y="95" fill="#d8d8d8" textLength="720" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> • Passport                                                             </text>
+<text x="0" y="115" fill="#d8d8d8" textLength="720" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> • Tickets                                                              </text>
+<text x="10" y="135" fill="#cccccc" textLength="10" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="30" y="135" fill="#555555" textLength="30" lengthAdjust="spacingAndGlyphs" xml:space="preserve" font-style="italic">Tra</text>
 <rect x="60" y="120" width="600" height="20" fill="#000000"/>
 <text x="60" y="135" fill="#e5e5e5" textLength="600" lengthAdjust="spacingAndGlyphs" xml:space="preserve">┌Open File─────────────────────────────────────────────────┐</text>
-<text x="0" y="155" fill="#d8d8d8" textLength="60" lengthAdjust="spacingAndGlyphs" xml:space="preserve">  Pack</text>
+<text x="10" y="155" fill="#cccccc" textLength="10" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
 <rect x="60" y="140" width="10" height="20" fill="#000000"/>
 <text x="60" y="155" fill="#e5e5e5" textLength="10" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
 <rect x="70" y="140" width="580" height="20" fill="#000000"/>
@@ -16,8 +25,6 @@
 <text x="70" y="175" fill="#666666" textLength="580" lengthAdjust="spacingAndGlyphs" xml:space="preserve">──────────────────────────────────────────────────────────</text>
 <rect x="650" y="160" width="10" height="20" fill="#000000"/>
 <text x="650" y="175" fill="#e5e5e5" textLength="10" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
-<text x="20" y="195" fill="#e5e5e5" textLength="20" lengthAdjust="spacingAndGlyphs" xml:space="preserve" opacity="0.6">• </text>
-<text x="40" y="195" fill="#d8d8d8" textLength="20" lengthAdjust="spacingAndGlyphs" xml:space="preserve">Pa</text>
 <rect x="60" y="180" width="10" height="20" fill="#000000"/>
 <text x="60" y="195" fill="#e5e5e5" textLength="10" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
 <rect x="70" y="180" width="580" height="20" fill="#000000"/>
@@ -32,17 +39,13 @@
 <rect x="590" y="200" width="60" height="20" fill="#000000"/>
 <rect x="650" y="200" width="10" height="20" fill="#000000"/>
 <text x="650" y="215" fill="#e5e5e5" textLength="10" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
-<text x="20" y="235" fill="#e5e5e5" textLength="20" lengthAdjust="spacingAndGlyphs" xml:space="preserve" opacity="0.6">• </text>
-<text x="40" y="235" fill="#d8d8d8" textLength="20" lengthAdjust="spacingAndGlyphs" xml:space="preserve">Ti</text>
 <rect x="60" y="220" width="600" height="20" fill="#000000"/>
 <text x="60" y="235" fill="#e5e5e5" textLength="600" lengthAdjust="spacingAndGlyphs" xml:space="preserve">└──────────────────────────────────────────────────────────┘</text>
-<text x="20" y="275" fill="#e5e5e5" textLength="20" lengthAdjust="spacingAndGlyphs" xml:space="preserve" opacity="0.6">| </text>
-<text x="40" y="275" fill="#d8d8d8" textLength="680" lengthAdjust="spacingAndGlyphs" xml:space="preserve">Travel light.                                                       </text>
-<rect x="0" y="340" width="40" height="20" fill="#2472c8"/>
-<text x="0" y="355" fill="#ffffff" textLength="40" lengthAdjust="spacingAndGlyphs" xml:space="preserve">4:8 </text>
-<rect x="40" y="340" width="100" height="20" fill="#2472c8"/>
-<text x="40" y="355" fill="#f5f543" textLength="100" lengthAdjust="spacingAndGlyphs" xml:space="preserve">test.ftml*</text>
+<rect x="0" y="340" width="50" height="20" fill="#2472c8"/>
+<text x="0" y="355" fill="#ffffff" textLength="50" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> 1:8 </text>
+<rect x="50" y="340" width="90" height="20" fill="#2472c8"/>
+<text x="50" y="355" fill="#f5f543" textLength="90" lengthAdjust="spacingAndGlyphs" xml:space="preserve">test.ftml</text>
 <rect x="140" y="340" width="580" height="20" fill="#2472c8"/>
-<text x="140" y="355" fill="#ffffff" textLength="580" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> Header Lvl 1, 13 lines, 14 words F10:Menu ^S:Save ^Q:Quit</text>
+<text x="140" y="355" fill="#ffffff" textLength="580" lengthAdjust="spacingAndGlyphs" xml:space="preserve">* · Heading 1 · 7 lines · FTML    F10:Menu ^S:Save ^Q:Quit</text>
 <rect x="300" y="140" width="10" height="20" fill="#ffffff" fill-opacity="0.4"/>
 </svg>

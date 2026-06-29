@@ -51,13 +51,13 @@ ratatui = "0.29"
 # 0.10.0 release predates the table API (Paragraph::Table, formatter table
 # rendering). Switch back to a published version once tables ship in a release.
 tdoc = { version = "0.11.0", default-features = false }
+# Shared structured-editor core (lives in the Piki workspace for now). Both apps
+# resolve the same crates.io `tdoc 0.11.0`, so document types are identical
+# across the crate boundary. Local path until the crate is published.
+tdoc-editor = { version = "0.1.0", path = "../piki/tdoc-editor" }
 unicode-width = "0.2.0"
 
 [dev-dependencies]
 gif = "0.14"
 insta = "1.43"
 resvg = "0.47"
-
-[[bench]]
-name = "performance"
-harness = true
