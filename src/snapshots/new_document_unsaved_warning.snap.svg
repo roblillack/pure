@@ -1,18 +1,18 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="720" height="360" viewBox="0 0 720 360" font-family="'DejaVu Sans Mono', Menlo, Consolas, monospace" font-size="16px">
 <rect width="100%" height="100%" fill="#101010"/>
-<text x="250" y="75" fill="#d8d8d8" textLength="190" lengthAdjust="spacingAndGlyphs" xml:space="preserve" font-weight="bold">Summer Packing List</text>
+<text x="260" y="75" fill="#d8d8d8" textLength="190" lengthAdjust="spacingAndGlyphs" xml:space="preserve" font-weight="bold">Summer Packing List</text>
 <text x="0" y="155" fill="#d8d8d8" textLength="110" lengthAdjust="spacingAndGlyphs" xml:space="preserve">  Pack the </text>
 <text x="110" y="155" fill="#d8d8d8" textLength="100" lengthAdjust="spacingAndGlyphs" xml:space="preserve" font-weight="bold">essentials</text>
 <text x="210" y="155" fill="#d8d8d8" textLength="120" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> before the </text>
 <text x="330" y="155" fill="#d8d8d8" textLength="40" lengthAdjust="spacingAndGlyphs" xml:space="preserve" font-style="italic">long</text>
 <text x="370" y="155" fill="#d8d8d8" textLength="350" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> trip.                             </text>
-<text x="20" y="195" fill="#808080" textLength="20" lengthAdjust="spacingAndGlyphs" xml:space="preserve">• </text>
+<text x="20" y="195" fill="#e5e5e5" textLength="20" lengthAdjust="spacingAndGlyphs" xml:space="preserve" opacity="0.6">• </text>
 <text x="40" y="195" fill="#d8d8d8" textLength="680" lengthAdjust="spacingAndGlyphs" xml:space="preserve">Passport                                                            </text>
-<text x="20" y="235" fill="#808080" textLength="20" lengthAdjust="spacingAndGlyphs" xml:space="preserve">• </text>
+<text x="20" y="235" fill="#e5e5e5" textLength="20" lengthAdjust="spacingAndGlyphs" xml:space="preserve" opacity="0.6">• </text>
 <text x="40" y="235" fill="#d8d8d8" textLength="680" lengthAdjust="spacingAndGlyphs" xml:space="preserve">Tickets                                                             </text>
-<text x="20" y="275" fill="#808080" textLength="10" lengthAdjust="spacingAndGlyphs" xml:space="preserve">|</text>
+<text x="20" y="275" fill="#e5e5e5" textLength="10" lengthAdjust="spacingAndGlyphs" xml:space="preserve" opacity="0.6">|</text>
 <text x="30" y="275" fill="#d8d8d8" textLength="690" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> Travel light.                                                       </text>
 <rect x="0" y="340" width="720" height="20" fill="#2472c8"/>
 <text x="0" y="355" fill="#ffffff" textLength="720" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> Unsaved changes — select New again to discard them                     </text>
-<rect x="320" y="60" width="10" height="20" fill="#ffffff" fill-opacity="0.4"/>
+<rect x="330" y="60" width="10" height="20" fill="#ffffff" fill-opacity="0.4"/>
 </svg>

@@ -3,12 +3,12 @@
 <rect x="710" y="0" width="10" height="20" fill="#e5e5e5"/>
 <rect x="710" y="20" width="10" height="20" fill="#e5e5e5"/>
 <rect x="710" y="40" width="10" height="20" fill="#e5e5e5"/>
-<text x="310" y="75" fill="#d8d8d8" textLength="70" lengthAdjust="spacingAndGlyphs" xml:space="preserve" font-weight="bold">Packing</text>
+<text x="320" y="75" fill="#d8d8d8" textLength="70" lengthAdjust="spacingAndGlyphs" xml:space="preserve" font-weight="bold">Packing</text>
 <rect x="710" y="60" width="10" height="20" fill="#e5e5e5"/>
 <rect x="710" y="80" width="10" height="20" fill="#e5e5e5"/>
 <rect x="710" y="100" width="10" height="20" fill="#e5e5e5"/>
 <rect x="710" y="120" width="10" height="20" fill="#e5e5e5"/>
-<text x="320" y="155" fill="#d8d8d8" textLength="50" lengthAdjust="spacingAndGlyphs" xml:space="preserve" font-weight="bold"> List</text>
+<text x="330" y="155" fill="#d8d8d8" textLength="50" lengthAdjust="spacingAndGlyphs" xml:space="preserve" font-weight="bold"> List</text>
 <rect x="710" y="140" width="10" height="20" fill="#e5e5e5"/>
 <rect x="710" y="160" width="10" height="20" fill="#e5e5e5"/>
 <rect x="710" y="180" width="10" height="20" fill="#e5e5e5"/>
@@ -20,11 +20,11 @@
 <text x="370" y="235" fill="#d8d8d8" textLength="340" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> trip.                            </text>
 <rect x="710" y="220" width="10" height="20" fill="#e5e5e5"/>
 <rect x="710" y="240" width="10" height="20" fill="#e5e5e5"/>
-<text x="20" y="275" fill="#808080" textLength="20" lengthAdjust="spacingAndGlyphs" xml:space="preserve">• </text>
+<text x="20" y="275" fill="#e5e5e5" textLength="20" lengthAdjust="spacingAndGlyphs" xml:space="preserve" opacity="0.6">• </text>
 <text x="40" y="275" fill="#d8d8d8" textLength="670" lengthAdjust="spacingAndGlyphs" xml:space="preserve">Passport                                                           </text>
 <rect x="710" y="260" width="10" height="20" fill="#e5e5e5"/>
 <rect x="710" y="280" width="10" height="20" fill="#e5e5e5"/>
-<text x="20" y="315" fill="#808080" textLength="20" lengthAdjust="spacingAndGlyphs" xml:space="preserve">• </text>
+<text x="20" y="315" fill="#e5e5e5" textLength="20" lengthAdjust="spacingAndGlyphs" xml:space="preserve" opacity="0.6">• </text>
 <text x="40" y="315" fill="#d8d8d8" textLength="670" lengthAdjust="spacingAndGlyphs" xml:space="preserve">Tickets                                                            </text>
 <rect x="710" y="300" width="10" height="20" fill="#e5e5e5"/>
 <rect x="0" y="340" width="40" height="20" fill="#2472c8"/>
@@ -33,5 +33,5 @@
 <text x="40" y="355" fill="#f5f543" textLength="100" lengthAdjust="spacingAndGlyphs" xml:space="preserve">test.ftml*</text>
 <rect x="140" y="340" width="580" height="20" fill="#2472c8"/>
 <text x="140" y="355" fill="#ffffff" textLength="580" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> Header Lvl 1, 17 lines, 13 words F10:Menu ^S:Save ^Q:Quit</text>
-<rect x="320" y="140" width="10" height="20" fill="#ffffff" fill-opacity="0.4"/>
+<rect x="330" y="140" width="10" height="20" fill="#ffffff" fill-opacity="0.4"/>
 </svg>

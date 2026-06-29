@@ -32,7 +32,7 @@ pub fn terminal_theme() -> Theme {
     let mut t = Theme {
         line_height: 1,
         // Quote bars share the gray of the other structural marks.
-        quote_bar_color: 0x808080FF,
+        quote_bar_color: TERMINAL_GRAY,
         // No page gutter: classic Pure had none, and a heading's top margin
         // (below) supplies the gap when the document opens with one.
         // `padding_horizontal` is a baseline; the app overrides it per-frame with
@@ -68,11 +68,9 @@ pub fn terminal_theme() -> Theme {
         // fence code blocks with `---` rules; both are drawn in gray.
         heading_underline: true,
         code_block_fence: true,
-        structural_color: 0x808080FF,
+        structural_color: TERMINAL_GRAY,
         // Collapse-by-max block margins with classic heading sizes.
         classic_block_spacing: true,
-        // Classic Pure wrapped text one column shy of the content width.
-        wrap_width_reduction: 1,
         // Classic Pure's quote bar was a literal `|`, not a box-drawing rule.
         quote_bar_as_text: true,
         ..Theme::default()
@@ -97,6 +95,12 @@ pub fn terminal_theme() -> Theme {
     t.table_header_background = t.background_color;
     t
 }
+
+/// Sentinel `structural_color` / `quote_bar_color`: the cell backend renders it
+/// as ratatui's themed [`Color::Gray`] (an ANSI color) rather than a fixed RGB,
+/// matching classic Pure (whose `structural_fg` was `Color::Gray`). The low
+/// alpha byte keeps it from colliding with any real `0xRRGGBBFF` theme color.
+pub const TERMINAL_GRAY: u32 = 0x80808001;
 
 fn to_color(rgba: u32) -> Color {
     let r = ((rgba >> 24) & 0xFF) as u8;
@@ -164,7 +168,9 @@ impl<'a> RatatuiDrawContext<'a> {
     /// Foreground color for the active draw color, mapping the theme default to
     /// the terminal's default foreground.
     fn fg(&self) -> Color {
-        if self.color == self.default_fg {
+        if self.color == TERMINAL_GRAY {
+            Color::Gray
+        } else if self.color == self.default_fg {
             Color::Reset
         } else {
             to_color(self.color)
@@ -193,7 +199,11 @@ impl<'a> RatatuiDrawContext<'a> {
         {
             return;
         }
-        let modifier = self.modifier | self.deco;
+        let mut modifier = self.modifier | self.deco;
+        // Classic Pure dimmed its structural marks (DIM atop the gray).
+        if self.color == TERMINAL_GRAY {
+            modifier |= Modifier::DIM;
+        }
         let is_page_bg = self.color == self.page_bg;
         let fg = self.fg();
         if let Some(cell) = self.buf.cell_mut((col as u16, row as u16)) {

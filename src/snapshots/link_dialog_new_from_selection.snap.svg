@@ -28,7 +28,7 @@
 <text x="90" y="175" fill="#ffffff" textLength="540" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> Target:                                              </text>
 <rect x="630" y="160" width="10" height="20" fill="#000000"/>
 <text x="630" y="175" fill="#e5e5e5" textLength="10" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
-<text x="20" y="195" fill="#808080" textLength="20" lengthAdjust="spacingAndGlyphs" xml:space="preserve">• </text>
+<text x="20" y="195" fill="#e5e5e5" textLength="20" lengthAdjust="spacingAndGlyphs" xml:space="preserve" opacity="0.6">• </text>
 <text x="40" y="195" fill="#d8d8d8" textLength="40" lengthAdjust="spacingAndGlyphs" xml:space="preserve">Pass</text>
 <rect x="80" y="180" width="10" height="20" fill="#000000"/>
 <text x="80" y="195" fill="#e5e5e5" textLength="10" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
@@ -41,7 +41,7 @@
 <text x="90" y="215" fill="#ffffff" textLength="540" lengthAdjust="spacingAndGlyphs" xml:space="preserve">   Open    Cancel   Save                              </text>
 <rect x="630" y="200" width="10" height="20" fill="#000000"/>
 <text x="630" y="215" fill="#e5e5e5" textLength="10" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
-<text x="20" y="235" fill="#808080" textLength="20" lengthAdjust="spacingAndGlyphs" xml:space="preserve">• </text>
+<text x="20" y="235" fill="#e5e5e5" textLength="20" lengthAdjust="spacingAndGlyphs" xml:space="preserve" opacity="0.6">• </text>
 <text x="40" y="235" fill="#d8d8d8" textLength="40" lengthAdjust="spacingAndGlyphs" xml:space="preserve">Tick</text>
 <rect x="80" y="220" width="10" height="20" fill="#000000"/>
 <text x="80" y="235" fill="#e5e5e5" textLength="10" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
@@ -50,7 +50,7 @@
 <text x="630" y="235" fill="#e5e5e5" textLength="10" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
 <rect x="80" y="240" width="560" height="20" fill="#000000"/>
 <text x="80" y="255" fill="#e5e5e5" textLength="560" lengthAdjust="spacingAndGlyphs" xml:space="preserve">└──────────────────────────────────────────────────────┘</text>
-<text x="20" y="275" fill="#808080" textLength="10" lengthAdjust="spacingAndGlyphs" xml:space="preserve">|</text>
+<text x="20" y="275" fill="#e5e5e5" textLength="10" lengthAdjust="spacingAndGlyphs" xml:space="preserve" opacity="0.6">|</text>
 <text x="30" y="275" fill="#d8d8d8" textLength="690" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> Travel light.                                                       </text>
 <rect x="0" y="340" width="40" height="20" fill="#2472c8"/>
 <text x="0" y="355" fill="#ffffff" textLength="40" lengthAdjust="spacingAndGlyphs" xml:space="preserve">4:8 </text>

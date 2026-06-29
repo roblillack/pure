@@ -6,11 +6,11 @@
 <text x="210" y="155" fill="#d8d8d8" textLength="120" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> before the </text>
 <text x="330" y="155" fill="#d8d8d8" textLength="40" lengthAdjust="spacingAndGlyphs" xml:space="preserve" font-style="italic">long</text>
 <text x="370" y="155" fill="#d8d8d8" textLength="350" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> trip.                             </text>
-<text x="20" y="195" fill="#808080" textLength="20" lengthAdjust="spacingAndGlyphs" xml:space="preserve">• </text>
+<text x="20" y="195" fill="#e5e5e5" textLength="20" lengthAdjust="spacingAndGlyphs" xml:space="preserve" opacity="0.6">• </text>
 <text x="40" y="195" fill="#d8d8d8" textLength="680" lengthAdjust="spacingAndGlyphs" xml:space="preserve">Passport                                                            </text>
-<text x="20" y="235" fill="#808080" textLength="20" lengthAdjust="spacingAndGlyphs" xml:space="preserve">• </text>
+<text x="20" y="235" fill="#e5e5e5" textLength="20" lengthAdjust="spacingAndGlyphs" xml:space="preserve" opacity="0.6">• </text>
 <text x="40" y="235" fill="#d8d8d8" textLength="680" lengthAdjust="spacingAndGlyphs" xml:space="preserve">Tickets                                                             </text>
-<text x="20" y="275" fill="#808080" textLength="10" lengthAdjust="spacingAndGlyphs" xml:space="preserve">|</text>
+<text x="20" y="275" fill="#e5e5e5" textLength="10" lengthAdjust="spacingAndGlyphs" xml:space="preserve" opacity="0.6">|</text>
 <text x="30" y="275" fill="#d8d8d8" textLength="690" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> Travel light.                                                       </text>
 <rect x="0" y="340" width="720" height="20" fill="#2472c8"/>
 <text x="0" y="355" fill="#ffffff" textLength="720" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> Nothing to paste — use the terminal's paste shortcut instead           </text>

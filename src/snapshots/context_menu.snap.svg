@@ -54,7 +54,7 @@
 <text x="250" y="175" fill="#ffffff" textLength="210" lengthAdjust="spacingAndGlyphs" xml:space="preserve">Numbered List     7  </text>
 <rect x="460" y="160" width="10" height="20" fill="#000000"/>
 <text x="460" y="175" fill="#e5e5e5" textLength="10" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
-<text x="20" y="195" fill="#808080" textLength="20" lengthAdjust="spacingAndGlyphs" xml:space="preserve">• </text>
+<text x="20" y="195" fill="#e5e5e5" textLength="20" lengthAdjust="spacingAndGlyphs" xml:space="preserve" opacity="0.6">• </text>
 <text x="40" y="195" fill="#d8d8d8" textLength="200" lengthAdjust="spacingAndGlyphs" xml:space="preserve">Passport            </text>
 <rect x="240" y="180" width="10" height="20" fill="#000000"/>
 <text x="240" y="195" fill="#e5e5e5" textLength="10" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
@@ -68,7 +68,7 @@
 <text x="250" y="215" fill="#ffffff" textLength="210" lengthAdjust="spacingAndGlyphs" xml:space="preserve">Checklist         9  </text>
 <rect x="460" y="200" width="10" height="20" fill="#000000"/>
 <text x="460" y="215" fill="#e5e5e5" textLength="10" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
-<text x="20" y="235" fill="#808080" textLength="20" lengthAdjust="spacingAndGlyphs" xml:space="preserve">• </text>
+<text x="20" y="235" fill="#e5e5e5" textLength="20" lengthAdjust="spacingAndGlyphs" xml:space="preserve" opacity="0.6">• </text>
 <text x="40" y="235" fill="#d8d8d8" textLength="200" lengthAdjust="spacingAndGlyphs" xml:space="preserve">Tickets             </text>
 <rect x="240" y="220" width="10" height="20" fill="#000000"/>
 <text x="240" y="235" fill="#e5e5e5" textLength="10" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
@@ -84,7 +84,7 @@
 <rect x="370" y="240" width="90" height="20" fill="#000000"/>
 <rect x="460" y="240" width="10" height="20" fill="#000000"/>
 <text x="460" y="255" fill="#e5e5e5" textLength="10" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
-<text x="20" y="275" fill="#808080" textLength="10" lengthAdjust="spacingAndGlyphs" xml:space="preserve">|</text>
+<text x="20" y="275" fill="#e5e5e5" textLength="10" lengthAdjust="spacingAndGlyphs" xml:space="preserve" opacity="0.6">|</text>
 <text x="30" y="275" fill="#d8d8d8" textLength="210" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> Travel light.       </text>
 <rect x="240" y="260" width="10" height="20" fill="#000000"/>
 <text x="240" y="275" fill="#e5e5e5" textLength="10" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
