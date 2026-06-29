@@ -77,8 +77,14 @@ pub fn terminal_theme() -> Theme {
         // Classic Pure put code flush with the body text and set it apart with
         // fences, not an indent.
         code_block_indent: 0,
-        // Render checkboxes as `[✓] `/`[ ] ` text, the way classic Pure did.
+        // Render checkboxes as `[✓] `/`[ ] ` text, the way classic Pure did,
+        // with the tick in green (the brackets stay structural-gray).
         checkbox_text: true,
+        checkmark_color: TERMINAL_GREEN,
+        // Links are themed ANSI blue and keep their own weight (bold links stay
+        // bold), matching classic Pure.
+        link_color: TERMINAL_BLUE,
+        link_uses_content_style: true,
         // A terminal has no font sizes, so mark H2/H3 with `===`/`---` rules and
         // fence code blocks with `---` rules; both are drawn in gray.
         heading_underline: true,
@@ -123,6 +129,15 @@ pub const TERMINAL_GRAY: u32 = 0x80808001;
 /// blue, `selection_fg`/`selection_bg`). The low alpha byte keeps it from
 /// colliding with any real `0xRRGGBBFF` theme color.
 pub const TERMINAL_SELECTION: u32 = 0xB4D5FE01;
+
+/// Sentinel checkmark color: the cell backend renders it as ratatui's themed
+/// [`Color::Green`] (an ANSI color), matching classic Pure's green check glyph.
+pub const TERMINAL_GREEN: u32 = 0x00800001;
+
+/// Sentinel link color: the cell backend renders it as ratatui's themed
+/// [`Color::Blue`] (an ANSI color) rather than a fixed RGB, matching classic
+/// Pure (whose `link_color` was `Color::Blue`).
+pub const TERMINAL_BLUE: u32 = 0x0000FF01;
 
 fn to_color(rgba: u32) -> Color {
     let r = ((rgba >> 24) & 0xFF) as u8;
@@ -192,6 +207,10 @@ impl<'a> RatatuiDrawContext<'a> {
     fn fg(&self) -> Color {
         if self.color == TERMINAL_GRAY {
             Color::Gray
+        } else if self.color == TERMINAL_GREEN {
+            Color::Green
+        } else if self.color == TERMINAL_BLUE {
+            Color::Blue
         } else if self.color == self.default_fg {
             Color::Reset
         } else {
