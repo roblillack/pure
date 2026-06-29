@@ -1,11 +1,11 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="720" height="360" viewBox="0 0 720 360" font-family="'DejaVu Sans Mono', Menlo, Consolas, monospace" font-size="16px">
 <rect width="100%" height="100%" fill="#101010"/>
-<text x="0" y="35" fill="#d8d8d8" textLength="720" lengthAdjust="spacingAndGlyphs" xml:space="preserve">  Read the manual carefully.                                            </text>
-<rect x="0" y="340" width="60" height="20" fill="#2472c8"/>
-<text x="0" y="355" fill="#ffffff" textLength="60" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> 2:12 </text>
-<rect x="60" y="340" width="90" height="20" fill="#2472c8"/>
-<text x="60" y="355" fill="#f5f543" textLength="90" lengthAdjust="spacingAndGlyphs" xml:space="preserve">test.ftml</text>
+<text x="0" y="15" fill="#d8d8d8" textLength="720" lengthAdjust="spacingAndGlyphs" xml:space="preserve">  Read the manual carefully.                                            </text>
+<rect x="0" y="340" width="50" height="20" fill="#2472c8"/>
+<text x="0" y="355" fill="#ffffff" textLength="50" lengthAdjust="spacingAndGlyphs" xml:space="preserve">1:12 </text>
+<rect x="50" y="340" width="100" height="20" fill="#2472c8"/>
+<text x="50" y="355" fill="#f5f543" textLength="100" lengthAdjust="spacingAndGlyphs" xml:space="preserve">test.ftml*</text>
 <rect x="150" y="340" width="570" height="20" fill="#2472c8"/>
-<text x="150" y="355" fill="#ffffff" textLength="570" lengthAdjust="spacingAndGlyphs" xml:space="preserve">* · Text · 3 lines · FTML        F10:Menu ^S:Save ^Q:Quit</text>
-<rect x="130" y="20" width="10" height="20" fill="#ffffff" fill-opacity="0.4"/>
+<text x="150" y="355" fill="#ffffff" textLength="570" lengthAdjust="spacingAndGlyphs" xml:space="preserve">, 1 lines, 4 words               F10:Menu ^S:Save ^Q:Quit</text>
+<rect x="130" y="0" width="10" height="20" fill="#ffffff" fill-opacity="0.4"/>
 </svg>

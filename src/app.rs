@@ -512,10 +512,13 @@ pub struct App {
     last_viewport_height: usize,
     last_total_lines: usize,
     last_scrollbar_column: u16,
-    /// Cursor position (1-based visual line/column) recorded at the last draw,
+    /// Cursor position (1-based content line/column) recorded at the last draw,
     /// for the status bar.
     cursor_line: usize,
     cursor_col: usize,
+    /// Total content lines (classic Pure's line count: wrapped text rows plus
+    /// counted inter-block margins, excluding decorations), for the status bar.
+    content_lines: usize,
     interactive: bool,
 }
 
@@ -560,6 +563,7 @@ impl App {
             last_scrollbar_column: 0,
             cursor_line: 1,
             cursor_col: 1,
+            content_lines: 1,
             interactive: true,
         }
     }
@@ -860,7 +864,13 @@ impl App {
     }
 
     fn scroll_by(&mut self, delta: i32) {
-        let next = (self.display.scroll_offset() + delta).max(0);
+        // Clamp to the scrollable range so the wheel/Ctrl+arrows can't push the
+        // whole document off the top into empty space (which reads as "scrolling
+        // is broken"). `max_scroll` uses the last frame's measured geometry.
+        let max_scroll = self
+            .last_total_lines
+            .saturating_sub(self.last_viewport_height) as i32;
+        let next = (self.display.scroll_offset() + delta).clamp(0, max_scroll.max(0));
         self.display.set_scroll(next);
         self.follow_cursor = false;
     }
@@ -1193,13 +1203,18 @@ impl App {
             cursor_col = self.display.cursor_column(&mut ctx);
         }
 
+        // The scrollbar works in visual rows (every gap counts), so keep the
+        // raw content height for it.
         self.last_total_lines = self.display.content_height().max(0) as usize;
 
-        // Record the cursor's 1-based visual line/column for the status bar.
-        if let Some((_x, y)) = cursor_pos {
+        // The status bar reports classic Pure's *content* line numbers, which
+        // count wrapped text rows plus collapsed inter-block margins but skip
+        // decorations (heading rules, code fences) and block spacing.
+        let (content_lines, cursor_line) = self.content_line_counts();
+        self.content_lines = content_lines;
+        self.cursor_line = cursor_line;
+        if cursor_pos.is_some() {
             self.cursor_col = cursor_col.unwrap_or(1).max(1);
-            self.cursor_line =
-                (y - text_area.y as i32 + self.display.scroll_offset() + 1).max(1) as usize;
         }
 
         self.draw_scrollbar(frame, scrollbar_area);
@@ -1243,6 +1258,39 @@ impl App {
         }
     }
 
+    /// Compute classic Pure's `(total_content_lines, cursor_content_line)` for
+    /// the status bar. The shared engine reports the per-leaf layout-line count
+    /// and where the cursor sits; here we add the collapse-by-max inter-block
+    /// margins (which classic Pure counted as content) computed from the
+    /// top-level paragraph types.
+    fn content_line_counts(&self) -> (usize, usize) {
+        let metrics = self.display.content_line_metrics();
+        let doc = self.display.editor().tdoc();
+
+        // Leading margin before each top-level paragraph (and the trailing one
+        // after the last), mirroring `tdoc_editor`'s classic spacing model.
+        let mut leading: Vec<i32> = Vec::with_capacity(doc.paragraphs.len());
+        let mut prev_bottom = 0i32;
+        for (i, p) in doc.paragraphs.iter().enumerate() {
+            let (top, bottom) = classic_block_margins(p.paragraph_type());
+            let base_gap = if i > 0 { 1 } else { 0 };
+            leading.push(base_gap.max(prev_bottom).max(top));
+            prev_bottom = bottom;
+        }
+        let margins_total: i32 = leading.iter().sum::<i32>() + prev_bottom;
+        let total = metrics.total_lines + margins_total.max(0) as usize;
+
+        let cursor_line = match (metrics.cursor_line_ordinal, metrics.cursor_root_paragraph) {
+            (Some(ord), Some(root)) => {
+                let margins_before: i32 = leading.iter().take(root + 1).sum();
+                ord + margins_before.max(0) as usize + 1
+            }
+            _ => 1,
+        };
+
+        (total.max(1), cursor_line.max(1))
+    }
+
     fn status_line(&mut self, width: usize) -> Line<'static> {
         self.prune_status_message();
 
@@ -1250,31 +1298,35 @@ impl App {
             return Line::from(format!(" {message}"));
         }
 
+        // Classic Pure showed the path as given (with its directory), not just
+        // the file name.
         let name = self
             .file_path
             .as_ref()
-            .and_then(|p| p.file_name())
-            .map(|n| n.to_string_lossy().to_string())
+            .map(|p| p.display().to_string())
             .unwrap_or_else(|| "Untitled".to_string());
         let dirty = if self.dirty { "*" } else { "" };
-        let format = match self.document_format {
-            DocumentFormat::Ftml => "FTML",
-            DocumentFormat::Markdown => "Markdown",
-            DocumentFormat::Html => "HTML",
-            DocumentFormat::Gemini => "Gemini",
-        };
-        let lines = self.last_total_lines.max(1);
+        let lines = self.content_lines.max(1);
+        let words = count_words(self.display.editor().tdoc());
+        // Block type breadcrumb (`Header Lvl 1`, `Quote`, …); plain body text
+        // carries no label, the way classic Pure rendered it.
         let block = block_type_label(self.display.editor().current_block_type());
-        let pos = format!(" {}:{} ", self.cursor_line, self.cursor_col);
+        let block_part = if block.is_empty() {
+            String::new()
+        } else {
+            format!(" {block}")
+        };
+        let pos = format!("{}:{} ", self.cursor_line, self.cursor_col);
 
         // The filename keeps its own accent color; the rest inherits the bar style.
-        let info = format!("{dirty} · {block} · {lines} lines · {format}");
+        let info = format!("{block_part}, {lines} lines, {words} words");
         let hints = " F10:Menu ^S:Save ^Q:Quit";
-        let left_len = pos.chars().count() + name.chars().count() + info.chars().count();
+        let left_len =
+            pos.chars().count() + name.chars().count() + dirty.len() + info.chars().count();
 
         let mut spans = vec![
             Span::raw(pos),
-            Span::styled(name, self.theme.filename_style()),
+            Span::styled(format!("{name}{dirty}"), self.theme.filename_style()),
             Span::raw(info),
         ];
         // Right-align the shortcut hints only when there is room; otherwise drop
@@ -2183,10 +2235,22 @@ impl App {
             && let Some(geometry) = self.scrollbar_geometry()
         {
             let rel = row.saturating_sub(self.last_text_area.y) as usize;
-            let anchor = rel.saturating_sub(geometry.knob_start);
+            let knob_end = geometry.knob_start + geometry.knob_size;
+            let on_knob = rel >= geometry.knob_start && rel < knob_end;
+            // Grabbing the knob keeps it under the pointer; clicking the track
+            // jumps the knob to center on the click (and a plain click — no drag —
+            // scrolls right away, which is what most terminals don't deliver a
+            // drag stream for).
+            let anchor = if on_knob {
+                rel - geometry.knob_start
+            } else {
+                geometry.knob_size / 2
+            }
+            .min(geometry.knob_size.saturating_sub(1));
             self.drag_state = Some(DragState::Scrollbar {
-                anchor_within_knob: anchor.min(geometry.knob_size.saturating_sub(1)),
+                anchor_within_knob: anchor,
             });
+            self.scrollbar_drag(row, anchor);
             return;
         }
 
@@ -2270,21 +2334,74 @@ impl App {
     }
 }
 
+/// Status-bar breadcrumb label for the block under the cursor, matching classic
+/// Pure (which used `tdoc::ParagraphType`'s `Display`). Plain top-level body text
+/// carries no label, so it returns `""`.
 fn block_type_label(block: BlockType) -> &'static str {
     match block {
-        BlockType::Paragraph => "Text",
-        BlockType::Heading { level: 1 } => "Heading 1",
-        BlockType::Heading { level: 2 } => "Heading 2",
-        BlockType::Heading { .. } => "Heading 3",
-        BlockType::CodeBlock { .. } => "Code",
+        BlockType::Paragraph => "",
+        BlockType::Heading { level: 1 } => "Header Lvl 1",
+        BlockType::Heading { level: 2 } => "Header Lvl 2",
+        BlockType::Heading { .. } => "Header Lvl 3",
+        BlockType::CodeBlock { .. } => "Code Block",
         BlockType::BlockQuote => "Quote",
         BlockType::ListItem {
             checkbox: Some(_), ..
         } => "Checklist",
-        BlockType::ListItem { ordered: true, .. } => "Numbered List",
-        BlockType::ListItem { .. } => "Bullet List",
+        BlockType::ListItem { ordered: true, .. } => "Ordered List",
+        BlockType::ListItem { .. } => "Unordered List",
         BlockType::Table { .. } => "Table",
     }
+}
+
+/// Classic-Pure `(top, bottom)` block margins in line units (see
+/// `tdoc_editor`'s `classic_margins`). Used to count content lines the way the
+/// old renderer did: only headings carry margins.
+fn classic_block_margins(pt: ParagraphType) -> (i32, i32) {
+    match pt {
+        ParagraphType::Header1 => (3, 3),
+        ParagraphType::Header2 => (3, 2),
+        ParagraphType::Header3 => (2, 1),
+        _ => (0, 0),
+    }
+}
+
+/// Count words across the whole document (content, list entries, checklist
+/// items and nested children), matching classic Pure's status-bar word count.
+fn count_words(doc: &Document) -> usize {
+    fn words_in_spans(spans: &[tdoc::Span]) -> usize {
+        spans
+            .iter()
+            .map(|span| {
+                span.text.split_whitespace().filter(|s| !s.is_empty()).count()
+                    + words_in_spans(&span.children)
+            })
+            .sum()
+    }
+    fn words_in_paragraph(p: &tdoc::Paragraph) -> usize {
+        let content = words_in_spans(p.content());
+        let children: usize = p.children().iter().map(words_in_paragraph).sum();
+        let entries: usize = p
+            .entries()
+            .iter()
+            .flat_map(|entry| entry.iter())
+            .map(words_in_paragraph)
+            .sum();
+        let checklist: usize = p
+            .checklist_items()
+            .iter()
+            .map(|item| {
+                words_in_spans(&item.content)
+                    + item
+                        .children
+                        .iter()
+                        .map(|nested| words_in_spans(&nested.content))
+                        .sum::<usize>()
+            })
+            .sum();
+        content + children + entries + checklist
+    }
+    doc.paragraphs.iter().map(words_in_paragraph).sum()
 }
 
 #[cfg(test)]

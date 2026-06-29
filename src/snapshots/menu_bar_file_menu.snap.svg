@@ -25,7 +25,6 @@
 <text x="310" y="15" fill="#ffffff" textLength="410" lengthAdjust="spacingAndGlyphs" xml:space="preserve">iew                                      </text>
 <rect x="10" y="20" width="180" height="20" fill="#000000"/>
 <text x="10" y="35" fill="#e5e5e5" textLength="180" lengthAdjust="spacingAndGlyphs" xml:space="preserve">┌────────────────┐</text>
-<text x="290" y="35" fill="#d8d8d8" textLength="120" lengthAdjust="spacingAndGlyphs" xml:space="preserve" font-weight="bold">Packing List</text>
 <rect x="10" y="40" width="10" height="20" fill="#000000"/>
 <text x="10" y="55" fill="#e5e5e5" textLength="10" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
 <rect x="20" y="40" width="160" height="20" fill="#3b8eea"/>
@@ -38,16 +37,13 @@
 <text x="20" y="75" fill="#ffffff" textLength="160" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> Open...     ^O </text>
 <rect x="180" y="60" width="10" height="20" fill="#000000"/>
 <text x="180" y="75" fill="#e5e5e5" textLength="10" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="290" y="75" fill="#d8d8d8" textLength="120" lengthAdjust="spacingAndGlyphs" xml:space="preserve" font-weight="bold">Packing List</text>
 <rect x="10" y="80" width="10" height="20" fill="#000000"/>
 <text x="10" y="95" fill="#e5e5e5" textLength="10" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
 <rect x="20" y="80" width="160" height="20" fill="#000000"/>
 <text x="20" y="95" fill="#666666" textLength="160" lengthAdjust="spacingAndGlyphs" xml:space="preserve">────────────────</text>
 <rect x="180" y="80" width="10" height="20" fill="#000000"/>
 <text x="180" y="95" fill="#e5e5e5" textLength="10" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
-<text x="190" y="95" fill="#d8d8d8" textLength="20" lengthAdjust="spacingAndGlyphs" xml:space="preserve" font-weight="bold">ls</text>
-<text x="210" y="95" fill="#d8d8d8" textLength="120" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> before the </text>
-<text x="330" y="95" fill="#d8d8d8" textLength="40" lengthAdjust="spacingAndGlyphs" xml:space="preserve" font-style="italic">long</text>
-<text x="370" y="95" fill="#d8d8d8" textLength="350" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> trip.                             </text>
 <rect x="10" y="100" width="10" height="20" fill="#000000"/>
 <text x="10" y="115" fill="#e5e5e5" textLength="10" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
 <rect x="20" y="100" width="160" height="20" fill="#000000"/>
@@ -66,6 +62,10 @@
 <text x="20" y="155" fill="#666666" textLength="160" lengthAdjust="spacingAndGlyphs" xml:space="preserve">────────────────</text>
 <rect x="180" y="140" width="10" height="20" fill="#000000"/>
 <text x="180" y="155" fill="#e5e5e5" textLength="10" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="190" y="155" fill="#d8d8d8" textLength="20" lengthAdjust="spacingAndGlyphs" xml:space="preserve" font-weight="bold">ls</text>
+<text x="210" y="155" fill="#d8d8d8" textLength="120" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> before the </text>
+<text x="330" y="155" fill="#d8d8d8" textLength="40" lengthAdjust="spacingAndGlyphs" xml:space="preserve" font-style="italic">long</text>
+<text x="370" y="155" fill="#d8d8d8" textLength="350" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> trip.                             </text>
 <rect x="10" y="160" width="10" height="20" fill="#000000"/>
 <text x="10" y="175" fill="#e5e5e5" textLength="10" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
 <rect x="20" y="160" width="160" height="20" fill="#000000"/>
@@ -74,13 +74,15 @@
 <text x="180" y="175" fill="#e5e5e5" textLength="10" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
 <rect x="10" y="180" width="180" height="20" fill="#000000"/>
 <text x="10" y="195" fill="#e5e5e5" textLength="180" lengthAdjust="spacingAndGlyphs" xml:space="preserve">└────────────────┘</text>
-<text x="20" y="235" fill="#cccccc" textLength="10" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
-<text x="40" y="235" fill="#555555" textLength="130" lengthAdjust="spacingAndGlyphs" xml:space="preserve" font-style="italic">Travel light.</text>
-<rect x="0" y="340" width="50" height="20" fill="#2472c8"/>
-<text x="0" y="355" fill="#ffffff" textLength="50" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> 2:1 </text>
-<rect x="50" y="340" width="90" height="20" fill="#2472c8"/>
-<text x="50" y="355" fill="#f5f543" textLength="90" lengthAdjust="spacingAndGlyphs" xml:space="preserve">test.ftml</text>
-<rect x="140" y="340" width="580" height="20" fill="#2472c8"/>
-<text x="140" y="355" fill="#ffffff" textLength="580" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> · Heading 1 · 13 lines · FTML    F10:Menu ^S:Save ^Q:Quit</text>
-<rect x="290" y="20" width="10" height="20" fill="#ffffff" fill-opacity="0.4"/>
+<text x="20" y="235" fill="#808080" textLength="20" lengthAdjust="spacingAndGlyphs" xml:space="preserve">• </text>
+<text x="40" y="235" fill="#d8d8d8" textLength="680" lengthAdjust="spacingAndGlyphs" xml:space="preserve">Tickets                                                             </text>
+<text x="20" y="275" fill="#808080" textLength="10" lengthAdjust="spacingAndGlyphs" xml:space="preserve">|</text>
+<text x="30" y="275" fill="#d8d8d8" textLength="690" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> Travel light.                                                       </text>
+<rect x="0" y="340" width="40" height="20" fill="#2472c8"/>
+<text x="0" y="355" fill="#ffffff" textLength="40" lengthAdjust="spacingAndGlyphs" xml:space="preserve">4:1 </text>
+<rect x="40" y="340" width="90" height="20" fill="#2472c8"/>
+<text x="40" y="355" fill="#f5f543" textLength="90" lengthAdjust="spacingAndGlyphs" xml:space="preserve">test.ftml</text>
+<rect x="130" y="340" width="590" height="20" fill="#2472c8"/>
+<text x="130" y="355" fill="#ffffff" textLength="590" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> Header Lvl 1, 13 lines, 13 words  F10:Menu ^S:Save ^Q:Quit</text>
+<rect x="290" y="60" width="10" height="20" fill="#ffffff" fill-opacity="0.4"/>
 </svg>

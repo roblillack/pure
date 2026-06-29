@@ -2,5 +2,5 @@
 <rect width="100%" height="100%" fill="#101010"/>
 <rect x="0" y="340" width="720" height="20" fill="#2472c8"/>
 <text x="0" y="355" fill="#ffffff" textLength="720" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> New document                                                           </text>
-<rect x="20" y="20" width="10" height="20" fill="#ffffff" fill-opacity="0.4"/>
+<rect x="20" y="0" width="10" height="20" fill="#ffffff" fill-opacity="0.4"/>
 </svg>

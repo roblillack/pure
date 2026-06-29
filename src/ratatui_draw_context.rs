@@ -31,24 +31,26 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 pub fn terminal_theme() -> Theme {
     let mut t = Theme {
         line_height: 1,
-        // One blank row above the first block so content isn't jammed against
-        // the top edge (classic Pure left a top gutter). `padding_horizontal` is
-        // a baseline; the app overrides it per-frame with a responsive page
-        // margin (see `app::page_margin`).
-        padding_vertical: 1,
+        // Quote bars share the gray of the other structural marks.
+        quote_bar_color: 0x808080FF,
+        // No page gutter: classic Pure had none, and a heading's top margin
+        // (below) supplies the gap when the document opens with one.
+        // `padding_horizontal` is a baseline; the app overrides it per-frame with
+        // a responsive page margin (see `app::page_margin`).
+        padding_vertical: 0,
         padding_horizontal: 1,
         quote_bar_width: 1,
-        // Headings get a blank row of breathing room above and below, echoing
-        // classic Pure's heavier heading margins (collapsed to cell scale).
-        heading_top_margin: 1,
-        heading_bottom_margin: 1,
-        // A character grid is far coarser than a pixel grid, but classic Pure
-        // still separated every block with one blank row. Keep that rhythm so
-        // the document reads the way it always has.
-        paragraph_spacing: 1,
-        list_item_spacing: 1,
-        quote_spacing: 1,
-        code_block_padding: 0,
+        // Block spacing is driven entirely by `classic_block_spacing` (the gap
+        // before a block is the max of the base gap and the adjacent margins),
+        // so the per-block trailing-spacing fields are all zero — otherwise the
+        // additive model would stack on top of the classic one.
+        heading_top_margin: 0,
+        heading_bottom_margin: 0,
+        paragraph_spacing: 0,
+        list_item_spacing: 0,
+        quote_spacing: 0,
+        // One row of padding above/below code hosts the fence rules.
+        code_block_padding: 1,
         quote_indent: 2,
         quote_bar_offset: 0,
         table_cell_padding_h: 1,
@@ -57,6 +59,22 @@ pub fn terminal_theme() -> Theme {
         text_decoration_lines: false,
         // Classic Pure centered the document title (level-1 heading).
         center_level1_headings: true,
+        // Classic Pure put code flush with the body text and set it apart with
+        // fences, not an indent.
+        code_block_indent: 0,
+        // Render checkboxes as `[✓] `/`[ ] ` text, the way classic Pure did.
+        checkbox_text: true,
+        // A terminal has no font sizes, so mark H2/H3 with `===`/`---` rules and
+        // fence code blocks with `---` rules; both are drawn in gray.
+        heading_underline: true,
+        code_block_fence: true,
+        structural_color: 0x808080FF,
+        // Collapse-by-max block margins with classic heading sizes.
+        classic_block_spacing: true,
+        // Classic Pure wrapped text one column shy of the content width.
+        wrap_width_reduction: 1,
+        // Classic Pure's quote bar was a literal `|`, not a box-drawing rule.
+        quote_bar_as_text: true,
         ..Theme::default()
     };
     for fs in [
@@ -69,6 +87,11 @@ pub fn terminal_theme() -> Theme {
     ] {
         fs.font_size = 0;
     }
+    // Classic Pure drew code and quote text in the default body color (no blue
+    // code, no dim italic quotes) and left the quote's emphasis to inline spans.
+    t.code_text.font_color = t.plain_text.font_color;
+    t.quote_text.font_color = t.plain_text.font_color;
+    t.quote_text.font_style = FontStyle::Regular;
     // A solid light header fill would hide the (terminal-default) header text;
     // drop it so table headers read as bold text on the terminal background.
     t.table_header_background = t.background_color;

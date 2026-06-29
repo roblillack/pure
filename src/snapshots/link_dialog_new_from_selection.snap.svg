@@ -1,9 +1,8 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="720" height="360" viewBox="0 0 720 360" font-family="'DejaVu Sans Mono', Menlo, Consolas, monospace" font-size="16px">
 <rect width="100%" height="100%" fill="#101010"/>
-<rect x="290" y="20" width="70" height="20" fill="#b4d5fe"/>
-<text x="290" y="35" fill="#d8d8d8" textLength="70" lengthAdjust="spacingAndGlyphs" xml:space="preserve" font-weight="bold">Packing</text>
-<text x="360" y="35" fill="#d8d8d8" textLength="50" lengthAdjust="spacingAndGlyphs" xml:space="preserve" font-weight="bold"> List</text>
-<text x="0" y="95" fill="#d8d8d8" textLength="80" lengthAdjust="spacingAndGlyphs" xml:space="preserve">  Pack t</text>
+<rect x="290" y="60" width="70" height="20" fill="#b4d5fe"/>
+<text x="290" y="75" fill="#d8d8d8" textLength="70" lengthAdjust="spacingAndGlyphs" xml:space="preserve" font-weight="bold">Packing</text>
+<text x="360" y="75" fill="#d8d8d8" textLength="50" lengthAdjust="spacingAndGlyphs" xml:space="preserve" font-weight="bold"> List</text>
 <rect x="80" y="80" width="560" height="20" fill="#000000"/>
 <text x="80" y="95" fill="#e5e5e5" textLength="560" lengthAdjust="spacingAndGlyphs" xml:space="preserve">┌Insert Link───────────────────────────────────────────┐</text>
 <rect x="80" y="100" width="10" height="20" fill="#000000"/>
@@ -11,25 +10,26 @@
 <rect x="90" y="100" width="540" height="20" fill="#000000"/>
 <rect x="630" y="100" width="10" height="20" fill="#000000"/>
 <text x="630" y="115" fill="#e5e5e5" textLength="10" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
-<text x="0" y="135" fill="#d8d8d8" textLength="80" lengthAdjust="spacingAndGlyphs" xml:space="preserve">  • Pass</text>
 <rect x="80" y="120" width="10" height="20" fill="#000000"/>
 <text x="80" y="135" fill="#e5e5e5" textLength="10" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
 <rect x="90" y="120" width="540" height="20" fill="#000000"/>
 <text x="90" y="135" fill="#ffffff" textLength="540" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> Text:   Packing                                      </text>
 <rect x="630" y="120" width="10" height="20" fill="#000000"/>
 <text x="630" y="135" fill="#e5e5e5" textLength="10" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="0" y="155" fill="#d8d8d8" textLength="80" lengthAdjust="spacingAndGlyphs" xml:space="preserve">  Pack t</text>
 <rect x="80" y="140" width="10" height="20" fill="#000000"/>
 <text x="80" y="155" fill="#e5e5e5" textLength="10" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
 <rect x="90" y="140" width="540" height="20" fill="#000000"/>
 <rect x="630" y="140" width="10" height="20" fill="#000000"/>
 <text x="630" y="155" fill="#e5e5e5" textLength="10" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
-<text x="0" y="175" fill="#d8d8d8" textLength="80" lengthAdjust="spacingAndGlyphs" xml:space="preserve">  • Tick</text>
 <rect x="80" y="160" width="10" height="20" fill="#000000"/>
 <text x="80" y="175" fill="#e5e5e5" textLength="10" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
 <rect x="90" y="160" width="540" height="20" fill="#000000"/>
 <text x="90" y="175" fill="#ffffff" textLength="540" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> Target:                                              </text>
 <rect x="630" y="160" width="10" height="20" fill="#000000"/>
 <text x="630" y="175" fill="#e5e5e5" textLength="10" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="20" y="195" fill="#808080" textLength="20" lengthAdjust="spacingAndGlyphs" xml:space="preserve">• </text>
+<text x="40" y="195" fill="#d8d8d8" textLength="40" lengthAdjust="spacingAndGlyphs" xml:space="preserve">Pass</text>
 <rect x="80" y="180" width="10" height="20" fill="#000000"/>
 <text x="80" y="195" fill="#e5e5e5" textLength="10" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
 <rect x="90" y="180" width="540" height="20" fill="#000000"/>
@@ -41,8 +41,8 @@
 <text x="90" y="215" fill="#ffffff" textLength="540" lengthAdjust="spacingAndGlyphs" xml:space="preserve">   Open    Cancel   Save                              </text>
 <rect x="630" y="200" width="10" height="20" fill="#000000"/>
 <text x="630" y="215" fill="#e5e5e5" textLength="10" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
-<text x="20" y="235" fill="#cccccc" textLength="10" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
-<text x="40" y="235" fill="#555555" textLength="40" lengthAdjust="spacingAndGlyphs" xml:space="preserve" font-style="italic">Trav</text>
+<text x="20" y="235" fill="#808080" textLength="20" lengthAdjust="spacingAndGlyphs" xml:space="preserve">• </text>
+<text x="40" y="235" fill="#d8d8d8" textLength="40" lengthAdjust="spacingAndGlyphs" xml:space="preserve">Tick</text>
 <rect x="80" y="220" width="10" height="20" fill="#000000"/>
 <text x="80" y="235" fill="#e5e5e5" textLength="10" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
 <rect x="90" y="220" width="540" height="20" fill="#000000"/>
@@ -50,11 +50,13 @@
 <text x="630" y="235" fill="#e5e5e5" textLength="10" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
 <rect x="80" y="240" width="560" height="20" fill="#000000"/>
 <text x="80" y="255" fill="#e5e5e5" textLength="560" lengthAdjust="spacingAndGlyphs" xml:space="preserve">└──────────────────────────────────────────────────────┘</text>
-<rect x="0" y="340" width="50" height="20" fill="#2472c8"/>
-<text x="0" y="355" fill="#ffffff" textLength="50" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> 2:8 </text>
-<rect x="50" y="340" width="90" height="20" fill="#2472c8"/>
-<text x="50" y="355" fill="#f5f543" textLength="90" lengthAdjust="spacingAndGlyphs" xml:space="preserve">test.ftml</text>
-<rect x="140" y="340" width="580" height="20" fill="#2472c8"/>
-<text x="140" y="355" fill="#ffffff" textLength="580" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> · Heading 1 · 13 lines · FTML    F10:Menu ^S:Save ^Q:Quit</text>
+<text x="20" y="275" fill="#808080" textLength="10" lengthAdjust="spacingAndGlyphs" xml:space="preserve">|</text>
+<text x="30" y="275" fill="#d8d8d8" textLength="690" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> Travel light.                                                       </text>
+<rect x="0" y="340" width="40" height="20" fill="#2472c8"/>
+<text x="0" y="355" fill="#ffffff" textLength="40" lengthAdjust="spacingAndGlyphs" xml:space="preserve">4:8 </text>
+<rect x="40" y="340" width="90" height="20" fill="#2472c8"/>
+<text x="40" y="355" fill="#f5f543" textLength="90" lengthAdjust="spacingAndGlyphs" xml:space="preserve">test.ftml</text>
+<rect x="130" y="340" width="590" height="20" fill="#2472c8"/>
+<text x="130" y="355" fill="#ffffff" textLength="590" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> Header Lvl 1, 13 lines, 13 words  F10:Menu ^S:Save ^Q:Quit</text>
 <rect x="240" y="120" width="10" height="20" fill="#ffffff" fill-opacity="0.4"/>
 </svg>

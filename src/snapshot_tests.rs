@@ -96,25 +96,28 @@ fn cursor_is_drawn_inside_the_table() {
     let mut app = TestApp::new(WIDTH, HEIGHT, table_document());
     app.draw();
 
-    let table_rows: Vec<usize> = app
-        .buffer_lines()
-        .iter()
-        .enumerate()
-        .filter(|(_, line)| {
-            line.contains('│') || line.contains('┌') || line.contains('├') || line.contains('└')
-        })
-        .map(|(i, _)| i)
-        .collect();
-    assert!(!table_rows.is_empty(), "expected the table to be drawn");
+    // The table's on-screen rows; recomputed each step since navigation can
+    // scroll the view, which shifts every row's visual y.
+    let table_rows = |app: &TestApp| -> Vec<usize> {
+        app.buffer_lines()
+            .iter()
+            .enumerate()
+            .filter(|(_, line)| {
+                line.contains('│') || line.contains('┌') || line.contains('├') || line.contains('└')
+            })
+            .map(|(i, _)| i)
+            .collect()
+    };
+    assert!(!table_rows(&app).is_empty(), "expected the table to be drawn");
 
     // Walking down with the arrow keys should at some point place the visible
     // terminal cursor on one of the table's rows.
     let mut cursor_entered_table = false;
-    for _ in 0..8 {
+    for _ in 0..12 {
         app.key(KeyCode::Down);
         app.draw();
         if let Some(pos) = app.cursor_position()
-            && table_rows.contains(&(pos.y as usize))
+            && table_rows(&app).contains(&(pos.y as usize))
         {
             cursor_entered_table = true;
             break;
@@ -185,6 +188,268 @@ fn rendered_left_gutter_grows_with_width() {
          (narrow={}, wide={})",
         leading_spaces(&narrow),
         leading_spaces(&wide),
+    );
+}
+
+/// Checklist markers render as the classic bracketed text (`[✓] ` / `[ ] `)
+/// directly abutting the item text — not a wide-gap drawn box.
+#[test]
+fn checklist_renders_bracket_markers() {
+    let doc = ftml! {
+        checklist {
+            done { "Write the parser" }
+            todo { "Write the docs" }
+        }
+    };
+    let mut app = TestApp::new(WIDTH, HEIGHT, doc);
+    app.draw();
+    let lines = app.buffer_lines();
+    assert!(
+        lines.iter().any(|l| l.contains("[✓] Write the parser")),
+        "checked item should render `[✓] ` immediately before its text"
+    );
+    assert!(
+        lines.iter().any(|l| l.contains("[ ] Write the docs")),
+        "unchecked item should render `[ ] ` immediately before its text"
+    );
+}
+
+/// A code block is only modestly inset, not pushed ~10 columns in (the old
+/// pixel inset interpreted as cells).
+#[test]
+fn code_block_is_not_over_indented() {
+    let doc = ftml! {
+        p { "Intro." }
+        code { "fn main() {}" }
+    };
+    let mut app = TestApp::new(WIDTH, HEIGHT, doc);
+    app.draw();
+    let code = app
+        .buffer_lines()
+        .into_iter()
+        .find(|l| l.contains("fn main"))
+        .expect("code line on screen");
+    let indent = code.len() - code.trim_start().len();
+    assert!(
+        indent <= 4,
+        "code should be modestly inset, got {indent} columns: {code:?}"
+    );
+}
+
+/// Scrolling can't push the whole document off the top into empty space: after
+/// wheeling far past the end of a short document, content is still visible.
+#[test]
+fn over_scroll_keeps_content_visible() {
+    use crossterm::event::{MouseEvent, MouseEventKind};
+    let doc = ftml! {
+        h1 { "Doc" }
+        p { "Alpha" } p { "Beta" } p { "Gamma" }
+    };
+    let mut app = TestApp::new(40, 12, doc);
+    app.draw();
+    for _ in 0..40 {
+        app.event(Event::Mouse(MouseEvent {
+            kind: MouseEventKind::ScrollDown,
+            column: 5,
+            row: 5,
+            modifiers: KeyModifiers::NONE,
+        }));
+    }
+    let lines = app.buffer_lines();
+    let content_rows = lines[..lines.len() - 1]
+        .iter()
+        .filter(|l| !l.trim().is_empty())
+        .count();
+    assert!(
+        content_rows > 0,
+        "over-scrolling must not leave a blank document"
+    );
+}
+
+/// H2/H3 headings get a rule (`===`/`---`) beneath them so heading levels stay
+/// distinguishable in a terminal (which has no font sizes). H1 is centered and
+/// gets no rule.
+#[test]
+fn headings_get_underline_rules() {
+    let doc = ftml! {
+        h1 { "Title" }
+        h2 { "Section Two" }
+        p { "Body." }
+        h3 { "Sub Three" }
+    };
+    let mut app = TestApp::new(50, 20, doc);
+    app.draw();
+    let lines = app.buffer_lines();
+    let row_of = |needle: &str| lines.iter().position(|l| l.contains(needle));
+    let h2 = row_of("Section Two").expect("H2 visible");
+    let h3 = row_of("Sub Three").expect("H3 visible");
+    assert!(
+        lines[h2 + 1].contains("==========="),
+        "H2 should be underlined with '=': {:?}",
+        lines[h2 + 1]
+    );
+    assert!(
+        lines[h3 + 1].contains("---------"),
+        "H3 should be underlined with '-': {:?}",
+        lines[h3 + 1]
+    );
+}
+
+/// Code blocks are fenced with a full-width `-` rule above and below (classic
+/// Pure), and the code text itself is flush with the body (no indent).
+#[test]
+fn code_block_has_fence_rules() {
+    let doc = ftml! {
+        p { "Intro." }
+        code { "fn main() {}" }
+        p { "Outro." }
+    };
+    let mut app = TestApp::new(60, 20, doc);
+    app.draw();
+    let lines = app.buffer_lines();
+    let code = lines
+        .iter()
+        .position(|l| l.contains("fn main"))
+        .expect("code visible");
+    let is_fence = |s: &str| {
+        let t = s.trim();
+        t.len() >= 4 && t.chars().all(|c| c == '-')
+    };
+    assert!(
+        is_fence(&lines[code - 1]),
+        "expected a `-` fence above the code: {:?}",
+        lines[code - 1]
+    );
+    assert!(
+        is_fence(&lines[code + 1]),
+        "expected a `-` fence below the code: {:?}",
+        lines[code + 1]
+    );
+}
+
+/// The quote bar is a literal ASCII `|`, the way classic Pure drew it — not a
+/// box-drawing rule.
+#[test]
+fn quote_bar_is_ascii_pipe() {
+    let doc = ftml! {
+        quote { p { "Heed this." } }
+    };
+    let mut app = TestApp::new(50, 12, doc);
+    app.draw();
+    let bar = content_line_with(&app, "Heed this.");
+    assert!(
+        bar.starts_with('|'),
+        "quote line should start with an ASCII pipe: {bar:?}"
+    );
+    assert!(
+        !bar.contains('│'),
+        "quote bar should not use a box-drawing glyph: {bar:?}"
+    );
+}
+
+/// The status bar reports the cursor as a *content* line/column, the block-type
+/// breadcrumb (`Header Lvl N`), and classic Pure's line + word counts. A leading
+/// H1 carries a 3-line top margin that counts as content, so the title sits on
+/// content line 4.
+#[test]
+fn status_bar_reports_classic_line_and_word_counts() {
+    let doc = ftml! {
+        h1 { "Title" }
+        p { "two words" }
+    };
+    let mut app = TestApp::new(60, 20, doc);
+    app.draw();
+    let status = app
+        .buffer_lines()
+        .last()
+        .cloned()
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    assert!(
+        status.starts_with("4:1 "),
+        "H1 with its 3-line top margin should put the cursor on content line 4: {status:?}"
+    );
+    assert!(
+        status.contains("Header Lvl 1"),
+        "block breadcrumb should read `Header Lvl 1`: {status:?}"
+    );
+    // Content lines = 3-line H1 top margin + title + 3-line gap + paragraph = 8
+    // (margins that classic Pure counted, but not decorations); word count is
+    // Title + "two words" = 3.
+    assert!(
+        status.contains(", 8 lines, 3 words"),
+        "expected classic content-line + word counts: {status:?}"
+    );
+}
+
+/// A single click on the scrollbar track jumps the scroll there (most terminals
+/// don't deliver a drag stream, so click-to-jump is what makes it usable).
+#[test]
+fn scrollbar_click_jumps() {
+    use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+    let doc = ftml! {
+        h1 { "D" }
+        p { "a" } p { "b" } p { "c" } p { "d" } p { "e" } p { "f" }
+        p { "g" } p { "h" } p { "i" } p { "j" } p { "k" } p { "l" }
+    };
+    let mut app = TestApp::new(80, 14, doc);
+    app.draw();
+    let first_letter = |app: &TestApp| -> String {
+        let lines = app.buffer_lines();
+        lines[..lines.len() - 1]
+            .iter()
+            .find(|l| {
+                let t = l.trim();
+                t.len() == 1 && t.chars().next().unwrap().is_ascii_lowercase()
+            })
+            .map(|l| l.trim().to_string())
+            .unwrap_or_default()
+    };
+    let before = first_letter(&app);
+    let sb = 79u16;
+    // A click (down+up, no drag) low on the scrollbar.
+    app.event(Event::Mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: sb,
+        row: 10,
+        modifiers: KeyModifiers::NONE,
+    }));
+    app.event(Event::Mouse(MouseEvent {
+        kind: MouseEventKind::Up(MouseButton::Left),
+        column: sb,
+        row: 10,
+        modifiers: KeyModifiers::NONE,
+    }));
+    assert_ne!(
+        before,
+        first_letter(&app),
+        "clicking down the scrollbar track should scroll the document"
+    );
+}
+
+/// Vertical cursor movement walks through every line of a code block (the lines
+/// carry cumulative byte offsets, so navigation doesn't stall on the first one).
+#[test]
+fn cursor_moves_through_code_block_lines() {
+    let doc = ftml! {
+        p { "before" }
+        code { "line one\nline two\nline three" }
+        p { "after" }
+    };
+    let mut app = TestApp::new(50, 16, doc);
+    app.draw();
+    let mut rows = vec![app.cursor_position().map(|p| p.y)];
+    for _ in 0..4 {
+        app.key(KeyCode::Down);
+        rows.push(app.cursor_position().map(|p| p.y));
+    }
+    // The cursor visits four distinct rows (before + 3 code lines) before reaching
+    // the trailing paragraph — i.e. it doesn't get stuck on the first code line.
+    let distinct: std::collections::BTreeSet<_> = rows.iter().flatten().collect();
+    assert!(
+        distinct.len() >= 4,
+        "cursor should descend through the code block, visited rows: {rows:?}"
     );
 }
 
