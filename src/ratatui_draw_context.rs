@@ -31,17 +31,23 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 pub fn terminal_theme() -> Theme {
     let mut t = Theme {
         line_height: 1,
-        padding_vertical: 0,
+        // One blank row above the first block so content isn't jammed against
+        // the top edge (classic Pure left a top gutter). `padding_horizontal` is
+        // a baseline; the app overrides it per-frame with a responsive page
+        // margin (see `app::page_margin`).
+        padding_vertical: 1,
         padding_horizontal: 1,
         quote_bar_width: 1,
-        heading_top_margin: 0,
-        heading_bottom_margin: 0,
-        // A character grid is far coarser than a pixel grid: collapse the GUI's
-        // inter-block padding so the document reads densely. One blank row
-        // between paragraphs/quotes; lists and code stay tight.
+        // Headings get a blank row of breathing room above and below, echoing
+        // classic Pure's heavier heading margins (collapsed to cell scale).
+        heading_top_margin: 1,
+        heading_bottom_margin: 1,
+        // A character grid is far coarser than a pixel grid, but classic Pure
+        // still separated every block with one blank row. Keep that rhythm so
+        // the document reads the way it always has.
         paragraph_spacing: 1,
-        list_item_spacing: 0,
-        quote_spacing: 0,
+        list_item_spacing: 1,
+        quote_spacing: 1,
         code_block_padding: 0,
         quote_indent: 2,
         quote_bar_offset: 0,
@@ -49,6 +55,8 @@ pub fn terminal_theme() -> Theme {
         table_cell_padding_v: 0,
         // Underline/strikethrough become cell attributes, not separate lines.
         text_decoration_lines: false,
+        // Classic Pure centered the document title (level-1 heading).
+        center_level1_headings: true,
         ..Theme::default()
     };
     for fs in [
@@ -213,10 +221,20 @@ const BOX_LEFT: u8 = 4;
 const BOX_RIGHT: u8 = 8;
 
 /// Direction bitmask (up/down/left/right) for an existing box-drawing glyph.
+///
+/// The lone-direction stubs (`╵╷╴╶`) matter: a grid line's endpoint is painted
+/// as a single inward direction so that, when the perpendicular line is drawn
+/// over it, the two merge into the correct corner/junction. Reading the stub
+/// back as its true single direction (rather than a full `│`/`─`) is what keeps
+/// corners from collapsing into `┼`/`├`.
 fn box_mask(sym: &str) -> u8 {
     match sym {
         "─" => BOX_LEFT | BOX_RIGHT,
         "│" => BOX_UP | BOX_DOWN,
+        "╵" => BOX_UP,
+        "╷" => BOX_DOWN,
+        "╴" => BOX_LEFT,
+        "╶" => BOX_RIGHT,
         "┌" => BOX_DOWN | BOX_RIGHT,
         "┐" => BOX_DOWN | BOX_LEFT,
         "└" => BOX_UP | BOX_RIGHT,
@@ -244,7 +262,12 @@ fn box_glyph(mask: u8) -> &'static str {
         m if m == BOX_DOWN | BOX_LEFT | BOX_RIGHT => "┬",
         m if m == BOX_UP | BOX_LEFT | BOX_RIGHT => "┴",
         m if m == BOX_UP | BOX_DOWN | BOX_LEFT | BOX_RIGHT => "┼",
-        m if m & (BOX_LEFT | BOX_RIGHT) != 0 => "─",
+        // Lone-direction stubs: an endpoint that hasn't met its perpendicular
+        // line yet (in a finished table grid these are always merged away).
+        m if m == BOX_UP => "╵",
+        m if m == BOX_DOWN => "╷",
+        m if m == BOX_LEFT => "╴",
+        m if m == BOX_RIGHT => "╶",
         _ => "│",
     }
 }
@@ -288,15 +311,46 @@ impl DrawContext for RatatuiDrawContext<'_> {
     fn draw_line(&mut self, x1: i32, y1: i32, x2: i32, y2: i32) {
         // Horizontal/vertical runs draw box-drawing glyphs, merging at crossings
         // into the right junction (┼ ├ ┬ ┌ …) so table grids look connected.
+        //
+        // The engine speaks in pixels, where a stroke's two endpoints are real
+        // corners — table grids are drawn corner-to-corner and must paint *both*
+        // endpoints (inclusive) so the junctions join. A quote bar, however, is a
+        // *span*: the engine draws it from a line's top to its bottom edge
+        // (`y..y + line.height`), where the bottom edge is the next row's top, not
+        // a cell to paint. On the coarse cell grid a one-row-tall span (height 1)
+        // would otherwise bleed into the row below, so treat a unit span as the
+        // single cell it covers.
         if y1 == y2 {
+            // Horizontal stroke. Each endpoint carries only its inward direction
+            // so that, when merged with the verticals drawn first, grid corners
+            // become ┌┐└┘ and edge crossings become ┬┴├┤ instead of all ┼.
             let (a, b) = (x1.min(x2), x1.max(x2));
             for x in a..=b {
-                self.put_line(x, y1, BOX_LEFT | BOX_RIGHT);
+                let mut mask = BOX_LEFT | BOX_RIGHT;
+                if x == a {
+                    mask &= !BOX_LEFT;
+                }
+                if x == b {
+                    mask &= !BOX_RIGHT;
+                }
+                self.put_line(x, y1, mask);
             }
         } else if x1 == x2 {
             let (a, b) = (y1.min(y2), y1.max(y2));
-            for y in a..=b {
-                self.put_line(x1, y, BOX_UP | BOX_DOWN);
+            if b - a == 1 {
+                // Unit-height span (quote bar): paint only the row it occupies.
+                self.put_line(x1, a, BOX_UP | BOX_DOWN);
+            } else {
+                for y in a..=b {
+                    let mut mask = BOX_UP | BOX_DOWN;
+                    if y == a {
+                        mask &= !BOX_UP;
+                    }
+                    if y == b {
+                        mask &= !BOX_DOWN;
+                    }
+                    self.put_line(x1, y, mask);
+                }
             }
         }
     }

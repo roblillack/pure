@@ -61,8 +61,8 @@ fn markdown_table_renders_with_box_drawing_borders() {
     let mut app = TestApp::new(WIDTH, HEIGHT, doc);
     app.draw();
     let lines = app.buffer_lines();
-    // The shared engine draws table grid lines with `─`/`│` (no box-drawing
-    // corner/junction glyphs yet — a rendering-polish item).
+    // The cell backend merges the engine's grid strokes into proper box-drawing
+    // junctions: corners (┌┐└┘) and tees/crosses (┬┴├┤┼).
     assert!(
         lines.iter().any(|l| l.contains('─')),
         "expected a horizontal table border"
@@ -70,6 +70,18 @@ fn markdown_table_renders_with_box_drawing_borders() {
     assert!(
         lines.iter().any(|l| l.contains('│')),
         "expected vertical table borders"
+    );
+    assert!(
+        lines.iter().any(|l| l.contains('┌') && l.contains('┬') && l.contains('┐')),
+        "expected a top border with corner and tee glyphs"
+    );
+    assert!(
+        lines.iter().any(|l| l.contains('└') && l.contains('┴') && l.contains('┘')),
+        "expected a bottom border with corner and tee glyphs"
+    );
+    assert!(
+        lines.iter().any(|l| l.contains('├') && l.contains('┼') && l.contains('┤')),
+        "expected an interior row separator with junction glyphs"
     );
 }
 
@@ -118,6 +130,62 @@ fn cursor_is_drawn_inside_the_table() {
 fn initial_document() {
     let mut app = sample_app();
     assert_svg("initial_document", &mut app);
+}
+
+/// The page margin is responsive: flush-left on narrow terminals, a small gutter
+/// at medium widths, and centered with a capped text measure when wide. This
+/// mirrors classic Pure (see [`crate::app::page_margin`]).
+#[test]
+fn page_margin_is_responsive() {
+    use crate::app::page_margin;
+    // Narrow: single-cell gutter only.
+    assert_eq!(page_margin(40), 1);
+    assert_eq!(page_margin(59), 1);
+    // Medium: a two-cell gutter.
+    assert_eq!(page_margin(60), 2);
+    assert_eq!(page_margin(99), 2);
+    // Wide: center the content, capping the measure near 92 columns.
+    assert_eq!(page_margin(100), 4);
+    assert_eq!(page_margin(140), 24);
+    assert_eq!(page_margin(200), 54);
+    // The capped text measure stays roughly constant once centered.
+    for w in [120, 160, 200, 300] {
+        let measure = w - 2 * page_margin(w);
+        assert!(
+            (90..=100).contains(&measure),
+            "width {w}: text measure {measure} should stay near ~92 columns"
+        );
+    }
+}
+
+/// Render the same document at several terminal widths and confirm the left
+/// gutter actually grows (content is indented and, when wide, centered) rather
+/// than always hugging the left edge.
+#[test]
+fn rendered_left_gutter_grows_with_width() {
+    let leading_spaces = |app: &TestApp| -> usize {
+        let lines = app.buffer_lines();
+        let content = &lines[..lines.len().saturating_sub(1)]; // skip the status bar
+        content
+            .iter()
+            .filter(|l| !l.trim().is_empty())
+            .map(|l| l.len() - l.trim_start().len())
+            .min()
+            .unwrap_or(0)
+    };
+
+    let mut narrow = TestApp::new(50, 18, sample_document());
+    narrow.draw();
+    let mut wide = TestApp::new(140, 18, sample_document());
+    wide.draw();
+
+    assert!(
+        leading_spaces(&wide) > leading_spaces(&narrow) + 10,
+        "a wide terminal should center content with a much larger gutter \
+         (narrow={}, wide={})",
+        leading_spaces(&narrow),
+        leading_spaces(&wide),
+    );
 }
 
 #[test]

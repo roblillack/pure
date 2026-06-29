@@ -102,6 +102,31 @@ pub fn load_document(path: &PathBuf) -> Result<(Document, DocumentFormat, Option
     }
 }
 
+/// Responsive horizontal page margin (in cells) for a content area `width` cells
+/// wide, mirroring classic Pure: flush-left when narrow, a small gutter at
+/// medium widths, and centered with a capped ~92-column text measure when wide.
+///
+/// The shared layout engine applies `padding_horizontal` symmetrically and
+/// subtracts `2 * padding` from the wrap width, so returning this value as the
+/// engine's horizontal padding both indents and centers the content.
+pub fn page_margin(width: i32) -> i32 {
+    if width <= 0 {
+        return 0;
+    }
+    if width < 60 {
+        // Narrow terminals: use the full width (a single-cell gutter keeps text
+        // off the very edge without wasting columns).
+        return 1;
+    }
+    if width < 100 {
+        return 2.min(width / 2);
+    }
+    // Wide terminals: center the content and cap the text measure near 92
+    // columns so long lines stay readable instead of spanning the whole screen.
+    let margin = (width - 100) / 2 + 4;
+    margin.min((width - 1) / 2).max(0)
+}
+
 // ---------------------------------------------------------------------------
 // Context menu (model-agnostic): types, entry builders, navigation.
 // ---------------------------------------------------------------------------
@@ -1145,10 +1170,16 @@ impl App {
             text_area.width as i32,
             text_area.height as i32,
         );
+        // Responsive page margin: indent (and, on wide terminals, center) the
+        // content the way classic Pure did. The engine treats horizontal padding
+        // symmetrically, so this both gutters and centers in one shot.
+        self.display
+            .set_horizontal_padding(page_margin(text_area.width as i32));
 
         let follow = self.follow_cursor;
         let (page_bg, default_fg) = self.palette();
         let mut cursor_pos: Option<(i32, i32)> = None;
+        let cursor_col: Option<usize>;
         {
             let buf = frame.buffer_mut();
             let mut ctx = RatatuiDrawContext::new(buf, area).with_palette(page_bg, default_fg);
@@ -1157,14 +1188,16 @@ impl App {
             }
             self.display.draw(&mut ctx);
             cursor_pos = self.display.cursor_screen_position(&mut ctx).or(cursor_pos);
+            // Logical column relative to the line's text start, so centered or
+            // indented lines (e.g. a centered H1) still report a natural column.
+            cursor_col = self.display.cursor_column(&mut ctx);
         }
 
         self.last_total_lines = self.display.content_height().max(0) as usize;
 
         // Record the cursor's 1-based visual line/column for the status bar.
-        if let Some((x, y)) = cursor_pos {
-            let ph = self.display.theme().padding_horizontal;
-            self.cursor_col = (x - text_area.x as i32 - ph + 1).max(1) as usize;
+        if let Some((_x, y)) = cursor_pos {
+            self.cursor_col = cursor_col.unwrap_or(1).max(1);
             self.cursor_line =
                 (y - text_area.y as i32 + self.display.scroll_offset() + 1).max(1) as usize;
         }

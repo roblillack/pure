@@ -1,17 +1,16 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="720" height="360" viewBox="0 0 720 360" font-family="'DejaVu Sans Mono', Menlo, Consolas, monospace" font-size="16px">
 <rect width="100%" height="100%" fill="#101010"/>
-<text x="10" y="15" fill="#d8d8d8" textLength="120" lengthAdjust="spacingAndGlyphs" xml:space="preserve" font-weight="bold">Packing List</text>
-<text x="0" y="55" fill="#d8d8d8" textLength="100" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> Pack the </text>
-<text x="100" y="55" fill="#d8d8d8" textLength="100" lengthAdjust="spacingAndGlyphs" xml:space="preserve" font-weight="bold">essentials</text>
-<text x="200" y="55" fill="#d8d8d8" textLength="120" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> before the </text>
-<text x="320" y="55" fill="#d8d8d8" textLength="40" lengthAdjust="spacingAndGlyphs" xml:space="preserve" font-style="italic">long</text>
-<text x="360" y="55" fill="#d8d8d8" textLength="360" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> trip.                              </text>
-<text x="0" y="95" fill="#d8d8d8" textLength="720" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> • Passport                                                             </text>
-<text x="0" y="135" fill="#d8d8d8" textLength="720" lengthAdjust="spacingAndGlyphs" xml:space="preserve">   Tickets                                                              </text>
-<text x="10" y="155" fill="#cccccc" textLength="10" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
-<text x="30" y="155" fill="#555555" textLength="130" lengthAdjust="spacingAndGlyphs" xml:space="preserve" font-style="italic">Travel light.</text>
-<text x="10" y="175" fill="#cccccc" textLength="10" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="290" y="35" fill="#d8d8d8" textLength="120" lengthAdjust="spacingAndGlyphs" xml:space="preserve" font-weight="bold">Packing List</text>
+<text x="0" y="95" fill="#d8d8d8" textLength="110" lengthAdjust="spacingAndGlyphs" xml:space="preserve">  Pack the </text>
+<text x="110" y="95" fill="#d8d8d8" textLength="100" lengthAdjust="spacingAndGlyphs" xml:space="preserve" font-weight="bold">essentials</text>
+<text x="210" y="95" fill="#d8d8d8" textLength="120" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> before the </text>
+<text x="330" y="95" fill="#d8d8d8" textLength="40" lengthAdjust="spacingAndGlyphs" xml:space="preserve" font-style="italic">long</text>
+<text x="370" y="95" fill="#d8d8d8" textLength="350" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> trip.                             </text>
+<text x="0" y="135" fill="#d8d8d8" textLength="720" lengthAdjust="spacingAndGlyphs" xml:space="preserve">  • Passport                                                            </text>
+<text x="0" y="175" fill="#d8d8d8" textLength="720" lengthAdjust="spacingAndGlyphs" xml:space="preserve">    Tickets                                                             </text>
+<text x="20" y="235" fill="#cccccc" textLength="10" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<text x="40" y="235" fill="#555555" textLength="130" lengthAdjust="spacingAndGlyphs" xml:space="preserve" font-style="italic">Travel light.</text>
 <rect x="0" y="340" width="720" height="20" fill="#2472c8"/>
 <text x="0" y="355" fill="#ffffff" textLength="720" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> Cut to clipboard                                                       </text>
-<rect x="100" y="120" width="10" height="20" fill="#ffffff" fill-opacity="0.4"/>
+<rect x="110" y="160" width="10" height="20" fill="#ffffff" fill-opacity="0.4"/>
 </svg>
