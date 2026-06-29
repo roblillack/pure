@@ -850,13 +850,35 @@ impl App {
     }
 
     fn move_page(&mut self, down: bool, extend: bool) {
-        let steps = self.last_viewport_height.max(1).saturating_sub(1).max(1);
+        // Classic Pure jumped ~90% of a viewport per Page key, measured in visual
+        // rows — so the blank gaps between blocks count toward the distance. The
+        // shared engine moves the cursor one *content line* at a time (skipping
+        // those gaps), so step content lines until the cursor's content-y has
+        // advanced by the target number of rows rather than stepping a fixed
+        // count (which would overshoot by the height of every gap crossed).
+        let viewport = self.last_viewport_height.max(1);
+        let target_rows = (((viewport as f32) * 0.9).round() as i32).max(1);
         self.with_ctx(|d, ctx| {
-            for _ in 0..steps {
+            let start_y = d.cursor_content_y(ctx).map(|(y, _)| y);
+            // Cap iterations defensively: a page can't cross more content lines
+            // than it spans rows, so `target_rows` steps is always enough.
+            for _ in 0..target_rows.max(1) {
+                let before = d.cursor_content_y(ctx).map(|(y, _)| y);
                 if down {
                     d.move_cursor_visual_down(extend, ctx);
                 } else {
                     d.move_cursor_visual_up(extend, ctx);
+                }
+                let after = d.cursor_content_y(ctx).map(|(y, _)| y);
+                // Stop at the document edge (no further movement)…
+                if after == before {
+                    break;
+                }
+                // …or once we've travelled a full page worth of rows.
+                if let (Some(s), Some(a)) = (start_y, after)
+                    && (a - s).abs() >= target_rows
+                {
+                    break;
                 }
             }
         });

@@ -31,6 +31,21 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 pub fn terminal_theme() -> Theme {
     let mut t = Theme {
         line_height: 1,
+        // Classic Pure reserved one trailing column for the end-of-line cursor,
+        // so it wrapped at `wrap_width - 1`. Match that so prose wraps to the
+        // same lines (and the document is the same number of lines tall, which
+        // keeps scrolling in lockstep).
+        wrap_width_reduction: 1,
+        // Classic Pure dropped the inter-word space at a wrap rather than letting
+        // it force an early break, so a word's trailing space never costs a column.
+        wrap_defer_trailing_space: true,
+        // Classic Pure kept exactly one line of context between the cursor and
+        // the viewport edge before scrolling (the GUI's pixel margin is far too
+        // large at one-cell line heights).
+        cursor_scroll_margin: 1,
+        // Selected text is white on an ANSI light-blue fill, the way classic
+        // Pure drew it (see `TERMINAL_SELECTION`).
+        selection_color: TERMINAL_SELECTION,
         // Quote bars share the gray of the other structural marks.
         quote_bar_color: TERMINAL_GRAY,
         // No page gutter: classic Pure had none, and a heading's top margin
@@ -101,6 +116,13 @@ pub fn terminal_theme() -> Theme {
 /// matching classic Pure (whose `structural_fg` was `Color::Gray`). The low
 /// alpha byte keeps it from colliding with any real `0xRRGGBBFF` theme color.
 pub const TERMINAL_GRAY: u32 = 0x80808001;
+
+/// Sentinel `selection_color`: the cell backend fills selected cells with
+/// ratatui's themed [`Color::LightBlue`] and forces their glyphs to
+/// [`Color::White`], matching classic Pure (whose selection was white-on-light-
+/// blue, `selection_fg`/`selection_bg`). The low alpha byte keeps it from
+/// colliding with any real `0xRRGGBBFF` theme color.
+pub const TERMINAL_SELECTION: u32 = 0xB4D5FE01;
 
 fn to_color(rgba: u32) -> Color {
     let r = ((rgba >> 24) & 0xFF) as u8;
@@ -210,13 +232,24 @@ impl<'a> RatatuiDrawContext<'a> {
             if bg_only {
                 // The page background is the terminal default — leave it unpainted
                 // so the editor adopts the user's terminal colors. Other fills
-                // (selection, highlight, table header) are drawn explicitly.
+                // (selection, highlight, table header) are drawn explicitly. The
+                // selection fill uses the themed ANSI light blue, not a fixed RGB.
                 cell.set_bg(if is_page_bg {
                     Color::Reset
+                } else if self.color == TERMINAL_SELECTION {
+                    Color::LightBlue
                 } else {
                     to_color(self.color)
                 });
             } else if let Some(sym) = symbol {
+                // Glyphs drawn over the selection fill (painted just before, in
+                // the same run) are forced white, matching classic Pure's
+                // white-on-light-blue selection.
+                let fg = if cell.bg == Color::LightBlue {
+                    Color::White
+                } else {
+                    fg
+                };
                 cell.set_symbol(sym);
                 cell.set_style(Style::default().fg(fg).add_modifier(modifier));
             }

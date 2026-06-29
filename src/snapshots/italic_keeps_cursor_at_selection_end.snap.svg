@@ -2,8 +2,8 @@
 <rect width="100%" height="100%" fill="#101010"/>
 <text x="0" y="15" fill="#d8d8d8" textLength="720" lengthAdjust="spacingAndGlyphs" xml:space="preserve">  Intro paragraph.                                                      </text>
 <text x="0" y="55" fill="#d8d8d8" textLength="200" lengthAdjust="spacingAndGlyphs" xml:space="preserve">  Pure is a modern, </text>
-<rect x="200" y="40" width="290" height="20" fill="#b4d5fe"/>
-<text x="200" y="55" fill="#d8d8d8" textLength="290" lengthAdjust="spacingAndGlyphs" xml:space="preserve" font-style="italic">terminal-based word processor</text>
+<rect x="200" y="40" width="290" height="20" fill="#3b8eea"/>
+<text x="200" y="55" fill="#ffffff" textLength="290" lengthAdjust="spacingAndGlyphs" xml:space="preserve" font-style="italic">terminal-based word processor</text>
 <text x="490" y="55" fill="#d8d8d8" textLength="230" lengthAdjust="spacingAndGlyphs" xml:space="preserve">.                      </text>
 <rect x="0" y="340" width="50" height="20" fill="#2472c8"/>
 <text x="0" y="355" fill="#ffffff" textLength="50" lengthAdjust="spacingAndGlyphs" xml:space="preserve">3:48 </text>

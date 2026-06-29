@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="720" height="360" viewBox="0 0 720 360" font-family="'DejaVu Sans Mono', Menlo, Consolas, monospace" font-size="16px">
 <rect width="100%" height="100%" fill="#101010"/>
-<text x="290" y="75" fill="#d8d8d8" textLength="130" lengthAdjust="spacingAndGlyphs" xml:space="preserve" font-weight="bold">Shopping List</text>
+<text x="280" y="75" fill="#d8d8d8" textLength="130" lengthAdjust="spacingAndGlyphs" xml:space="preserve" font-weight="bold">Shopping List</text>
 <text x="0" y="155" fill="#d8d8d8" textLength="110" lengthAdjust="spacingAndGlyphs" xml:space="preserve">  Pack the </text>
 <text x="110" y="155" fill="#d8d8d8" textLength="100" lengthAdjust="spacingAndGlyphs" xml:space="preserve" font-weight="bold">essentials</text>
 <text x="210" y="155" fill="#d8d8d8" textLength="120" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> before the </text>
@@ -18,5 +18,5 @@
 <text x="40" y="355" fill="#f5f543" textLength="100" lengthAdjust="spacingAndGlyphs" xml:space="preserve">test.ftml*</text>
 <rect x="140" y="340" width="580" height="20" fill="#2472c8"/>
 <text x="140" y="355" fill="#ffffff" textLength="580" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> Header Lvl 1, 13 lines, 13 words F10:Menu ^S:Save ^Q:Quit</text>
-<rect x="370" y="60" width="10" height="20" fill="#ffffff" fill-opacity="0.4"/>
+<rect x="360" y="60" width="10" height="20" fill="#ffffff" fill-opacity="0.4"/>
 </svg>
