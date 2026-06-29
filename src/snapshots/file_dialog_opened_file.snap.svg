@@ -3,6 +3,6 @@
 <text x="320" y="75" fill="#d8d8d8" textLength="50" lengthAdjust="spacingAndGlyphs" xml:space="preserve" font-weight="bold">Alpha</text>
 <text x="0" y="155" fill="#d8d8d8" textLength="720" lengthAdjust="spacingAndGlyphs" xml:space="preserve">  Hello from the alpha fixture.                                         </text>
 <rect x="0" y="340" width="720" height="20" fill="#2472c8"/>
-<text x="0" y="355" fill="#ffffff" textLength="720" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> Opened tests/fixtures/alpha.ftml                                       </text>
+<text x="0" y="355" fill="#ffffff" textLength="720" lengthAdjust="spacingAndGlyphs" xml:space="preserve">4:1 Opened tests/fixtures/alpha.ftml                                    </text>
 <rect x="320" y="60" width="10" height="20" fill="#ffffff" fill-opacity="0.4"/>
 </svg>

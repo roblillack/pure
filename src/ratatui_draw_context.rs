@@ -114,6 +114,9 @@ pub fn terminal_theme() -> Theme {
     // A solid light header fill would hide the (terminal-default) header text;
     // drop it so table headers read as bold text on the terminal background.
     t.table_header_background = t.background_color;
+    // Classic Pure drew the table grid in the default text color (not a distinct
+    // border gray), so it renders as the terminal's default foreground.
+    t.table_border_color = t.plain_text.font_color;
     t
 }
 

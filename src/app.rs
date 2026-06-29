@@ -1317,7 +1317,9 @@ impl App {
         self.prune_status_message();
 
         if let Some((message, _)) = &self.status_message {
-            return Line::from(format!(" {message}"));
+            // Classic Pure kept the cursor position in front of a transient
+            // message (e.g. "4:1 Copied to clipboard"), not just the message.
+            return Line::from(format!("{}:{} {message}", self.cursor_line, self.cursor_col));
         }
 
         // Classic Pure showed the path as given (with its directory), not just
@@ -1330,19 +1332,24 @@ impl App {
         let dirty = if self.dirty { "*" } else { "" };
         let lines = self.content_lines.max(1);
         let words = count_words(self.display.editor().tdoc());
-        // Block type breadcrumb (`Header Lvl 1`, `Quote`, …); plain body text
-        // carries no label, the way classic Pure rendered it.
+        // Breadcrumb: the block type (`Text`, `Header Lvl 1`, `Quote`, …) followed
+        // by the inline styles under the cursor (`Bold`, `Link`, …), joined with
+        // ` > ` — the way classic Pure showed `Text > Bold`.
+        let mut crumbs: Vec<&str> = Vec::new();
         let block = block_type_label(self.display.editor().current_block_type());
-        let block_part = if block.is_empty() {
+        if !block.is_empty() {
+            crumbs.push(block);
+        }
+        crumbs.extend(self.display.editor().cursor_inline_labels());
+        let block_part = if crumbs.is_empty() {
             String::new()
         } else {
-            format!(" {block}")
+            format!(" {}", crumbs.join(" > "))
         };
         let pos = format!("{}:{} ", self.cursor_line, self.cursor_col);
 
         // The filename keeps its own accent color; the rest inherits the bar style.
         let info = format!("{block_part}, {lines} lines, {words} words");
-        let hints = " F10:Menu ^S:Save ^Q:Quit";
         let left_len =
             pos.chars().count() + name.chars().count() + dirty.len() + info.chars().count();
 
@@ -1351,11 +1358,34 @@ impl App {
             Span::styled(format!("{name}{dirty}"), self.theme.filename_style()),
             Span::raw(info),
         ];
-        // Right-align the shortcut hints only when there is room; otherwise drop
-        // them so the left half isn't jammed/truncated.
-        if left_len + hints.chars().count() <= width {
-            spans.push(Span::raw(" ".repeat(width - left_len - hints.chars().count())));
-            spans.push(Span::raw(hints));
+
+        // Right-align the shortcut hints, fitting them most-important-first so a
+        // long left side drops `F10:Menu` before the save/quit hints (rather than
+        // dropping them all at once), the way classic Pure degraded them.
+        const MIN_PADDING: usize = 1;
+        let all_shortcuts = ["F10:Menu", "^S:Save", "^Q:Quit"];
+        let mut shortcuts: Vec<&str> = Vec::new();
+        let mut shortcuts_width = 0usize;
+        for shortcut in all_shortcuts.iter().rev() {
+            let test_width = if shortcuts.is_empty() {
+                shortcut.chars().count()
+            } else {
+                shortcuts_width + 1 + shortcut.chars().count()
+            };
+            if left_len + MIN_PADDING + test_width <= width {
+                shortcuts.insert(0, shortcut);
+                shortcuts_width = test_width;
+            } else {
+                break;
+            }
+        }
+        if !shortcuts.is_empty() {
+            let padding = width
+                .saturating_sub(left_len)
+                .saturating_sub(shortcuts_width)
+                .max(MIN_PADDING);
+            spans.push(Span::raw(" ".repeat(padding)));
+            spans.push(Span::raw(shortcuts.join(" ")));
         }
         Line::from(spans)
     }
@@ -2361,7 +2391,7 @@ impl App {
 /// carries no label, so it returns `""`.
 fn block_type_label(block: BlockType) -> &'static str {
     match block {
-        BlockType::Paragraph => "",
+        BlockType::Paragraph => "Text",
         BlockType::Heading { level: 1 } => "Header Lvl 1",
         BlockType::Heading { level: 2 } => "Header Lvl 2",
         BlockType::Heading { .. } => "Header Lvl 3",

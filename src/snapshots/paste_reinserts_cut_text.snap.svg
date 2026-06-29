@@ -28,6 +28,6 @@
 <text x="40" y="315" fill="#d8d8d8" textLength="670" lengthAdjust="spacingAndGlyphs" xml:space="preserve">Tickets                                                            </text>
 <rect x="710" y="300" width="10" height="20" fill="#e5e5e5"/>
 <rect x="0" y="340" width="720" height="20" fill="#2472c8"/>
-<text x="0" y="355" fill="#ffffff" textLength="720" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> Cut to clipboard                                                       </text>
+<text x="0" y="355" fill="#ffffff" textLength="720" lengthAdjust="spacingAndGlyphs" xml:space="preserve">8:8 Cut to clipboard                                                    </text>
 <rect x="380" y="140" width="10" height="20" fill="#ffffff" fill-opacity="0.4"/>
 </svg>
