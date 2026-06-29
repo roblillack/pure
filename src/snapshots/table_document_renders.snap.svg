@@ -30,6 +30,6 @@
 <rect x="40" y="340" width="90" height="20" fill="#2472c8"/>
 <text x="40" y="355" fill="#f5f543" textLength="90" lengthAdjust="spacingAndGlyphs" xml:space="preserve">test.ftml</text>
 <rect x="130" y="340" width="590" height="20" fill="#2472c8"/>
-<text x="130" y="355" fill="#ffffff" textLength="590" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> Header Lvl 1, 14 lines, 11 words  F10:Menu ^S:Save ^Q:Quit</text>
+<text x="130" y="355" fill="#ffffff" textLength="590" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> Header Lvl 1, 18 lines, 11 words  F10:Menu ^S:Save ^Q:Quit</text>
 <rect x="330" y="60" width="10" height="20" fill="#ffffff" fill-opacity="0.4"/>
 </svg>

@@ -901,8 +901,10 @@ impl App {
 
     fn open_link_dialog(&mut self) {
         if let Some(((path, index), url)) = self.display.find_link_near_cursor() {
+            // Pre-fill the text field with the link's existing label.
+            let label = self.display.link_label_near_cursor().unwrap_or_default();
             self.link_edit = Some(LinkEdit::Existing { path, index });
-            self.link_dialog = Some(LinkDialogState::new(String::new(), url, true));
+            self.link_dialog = Some(LinkDialogState::new(label, url, true));
         } else if self.has_selection() {
             let text = self.display.editor().get_selection_text();
             self.link_edit = Some(LinkEdit::Selection);
@@ -1551,8 +1553,10 @@ impl App {
             return;
         }
         let popup_style = self.theme.menu_style();
-        let width = 56.min(area.width.saturating_sub(4));
-        let height = 9.min(area.height.saturating_sub(2));
+
+        // Two input rows, a separator, the button row, and a footer, plus border.
+        let width = 60.min(area.width.saturating_sub(4));
+        let height = 7u16.min(area.height.saturating_sub(2));
         let popup_area = Rect::new(
             area.x + (area.width.saturating_sub(width)) / 2,
             area.y + (area.height.saturating_sub(height)) / 2,
@@ -1568,44 +1572,101 @@ impl App {
             .border_style(Style::default().fg(Color::Gray));
         let inner = block.inner(popup_area);
         frame.render_widget(block, popup_area);
-        if inner.width < 8 || inner.height < 5 {
+        if inner.width < 10 || inner.height < 5 {
             return;
         }
 
-        let field = |label: &str, value: &str| -> String { format!("{label} {value}") };
-        let text_area = Rect::new(inner.x + 1, inner.y + 1, inner.width - 2, 1);
-        let target_area = Rect::new(inner.x + 1, inner.y + 3, inner.width - 2, 1);
+        const LABEL_WIDTH: u16 = 6;
+        let field_x = inner.x + LABEL_WIDTH;
+        let field_width = inner.width.saturating_sub(LABEL_WIDTH).max(1);
+
+        // The text and URL rows, each prefixed with its label.
+        let fields = [
+            (LinkField::Text, "Text:", dialog.text(), inner.y),
+            (LinkField::Target, "URL:", dialog.target(), inner.y + 1),
+        ];
+        for (field, label, value, y) in fields {
+            frame.render_widget(
+                Paragraph::new(Line::from(Span::styled(label, self.theme.menu_disabled_style())))
+                    .style(popup_style),
+                Rect::new(inner.x, y, LABEL_WIDTH, 1),
+            );
+            let focused = dialog.focus() == field;
+            let caret = if focused { dialog.active_cursor().unwrap_or(0) } else { 0 };
+            let visible = field_width as usize;
+            let skip = if focused { (caret + 1).saturating_sub(visible) } else { 0 };
+            let shown: String = value.chars().skip(skip).take(visible).collect();
+            frame.render_widget(
+                Paragraph::new(shown).style(popup_style),
+                Rect::new(field_x, y, field_width, 1),
+            );
+            if focused {
+                frame.set_cursor_position(Position::new(field_x + (caret - skip) as u16, y));
+            }
+        }
+
+        // Separator below the inputs.
+        let separator = "─".repeat(inner.width as usize);
         frame.render_widget(
-            Paragraph::new(field("Text:  ", dialog.text())).style(popup_style),
-            text_area,
-        );
-        frame.render_widget(
-            Paragraph::new(field("Target:", dialog.target())).style(popup_style),
-            target_area,
+            Paragraph::new(Line::from(Span::styled(
+                separator,
+                Style::default().fg(Color::DarkGray),
+            )))
+            .style(popup_style),
+            Rect::new(inner.x, inner.y + 2, inner.width, 1),
         );
 
-        let buttons = match dialog.focus() {
-            LinkField::Open => "[ Open ]  Cancel   Save ",
-            LinkField::Cancel => "  Open  [ Cancel ] Save ",
-            LinkField::Save => "  Open    Cancel  [ Save ]",
-            _ => "  Open    Cancel   Save ",
+        // Button row: Open on the left, Cancel and Save flush right.
+        let button_row = inner.y + 3;
+        let has_target = !dialog.target().trim().is_empty();
+        let button_style = |field: LinkField, enabled: bool| -> Style {
+            if dialog.focus() == field {
+                self.theme.menu_selected_style()
+            } else if enabled {
+                popup_style
+            } else {
+                popup_style.patch(self.theme.menu_disabled_style())
+            }
+        };
+
+        let open = "[ Open ]";
+        let cancel = "[ Cancel ]";
+        let save = "[ Save ]";
+        let save_w = save.chars().count() as u16;
+        let cancel_w = cancel.chars().count() as u16;
+        let open_x = inner.x;
+        let save_x = inner.x + inner.width.saturating_sub(save_w);
+        let cancel_x = save_x.saturating_sub(cancel_w + 1);
+
+        let buttons = [
+            (LinkField::Open, open, open_x, open.chars().count() as u16, has_target),
+            (LinkField::Cancel, cancel, cancel_x, cancel_w, true),
+            (LinkField::Save, save, save_x, save_w, true),
+        ];
+        for (field, label, x, w, enabled) in buttons {
+            frame.render_widget(
+                Paragraph::new(Line::from(Span::styled(label, button_style(field, enabled))))
+                    .style(popup_style),
+                Rect::new(x, button_row, w, 1),
+            );
+            // Park the caret on the focused button so it doesn't show through at
+            // the document cursor's position.
+            if dialog.focus() == field {
+                frame.set_cursor_position(Position::new(x, button_row));
+            }
+        }
+
+        // Footer hints.
+        let hint = if dialog.focus().is_button() {
+            "Space: activate   Enter: save   Esc: cancel"
+        } else {
+            "Enter: save   Esc: cancel   Tab: next"
         };
         frame.render_widget(
-            Paragraph::new(buttons).style(popup_style),
-            Rect::new(inner.x + 1, inner.y + inner.height - 2, inner.width - 2, 1),
+            Paragraph::new(Line::from(Span::styled(hint, self.theme.menu_disabled_style())))
+                .style(popup_style),
+            Rect::new(inner.x, inner.y + 4, inner.width, 1),
         );
-
-        if let Some(cursor) = dialog.active_cursor() {
-            let (base, label_len) = match dialog.focus() {
-                LinkField::Text => (text_area, 7),
-                LinkField::Target => (target_area, 7),
-                _ => (text_area, 7),
-            };
-            frame.set_cursor_position(Position::new(
-                base.x + (label_len + cursor) as u16,
-                base.y,
-            ));
-        }
     }
 
     fn render_menu_bar(&self, frame: &mut Frame, area: Rect) {
