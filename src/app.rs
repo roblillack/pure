@@ -519,6 +519,10 @@ pub struct App {
     /// Total content lines (classic Pure's line count: wrapped text rows plus
     /// counted inter-block margins, excluding decorations), for the status bar.
     content_lines: usize,
+    /// Memoized status-bar word count: `(edit_revision, words)`. Counting words
+    /// is an O(document) tree walk, so we recompute it only when the editor's
+    /// revision changes (i.e. after an edit), not on every cursor move/redraw.
+    word_count_cache: Option<(u64, usize)>,
     interactive: bool,
 }
 
@@ -564,7 +568,22 @@ impl App {
             cursor_line: 1,
             cursor_col: 1,
             content_lines: 1,
+            word_count_cache: None,
             interactive: true,
+        }
+    }
+
+    /// Status-bar word count, memoized on the editor's revision so the
+    /// O(document) walk runs only after an edit, not on every redraw.
+    fn word_count(&mut self) -> usize {
+        let rev = self.display.edit_revision();
+        match self.word_count_cache {
+            Some((cached_rev, words)) if cached_rev == rev => words,
+            _ => {
+                let words = count_words(self.display.editor().tdoc());
+                self.word_count_cache = Some((rev, words));
+                words
+            }
         }
     }
 
@@ -1352,7 +1371,7 @@ impl App {
             .unwrap_or_else(|| "Untitled".to_string());
         let dirty = if self.dirty { "*" } else { "" };
         let lines = self.content_lines.max(1);
-        let words = count_words(self.display.editor().tdoc());
+        let words = self.word_count();
         // Breadcrumb: the block type (`Text`, `Header Lvl 1`, `Quote`, …) followed
         // by the inline styles under the cursor (`Bold`, `Link`, …), joined with
         // ` > ` — the way classic Pure showed `Text > Bold`.
