@@ -888,6 +888,34 @@ fn reveal_codes_show_inline_styles_inside_a_link() {
 }
 
 #[test]
+fn highlight_inside_a_badge_link_renders() {
+    // A README-style badge: an image inside a link `[![Build Status](img)](url)`.
+    // tdoc has no image type, so this parses to a link-in-link; it must still be
+    // stylable (and the style must render). Selecting "Status" and highlighting it
+    // should paint the highlight (ANSI light-yellow) — previously nothing happened.
+    let doc = tdoc::markdown::parse(std::io::Cursor::new(
+        "[![Build Status](https://x/badge.svg)](https://x/actions)\n",
+    ))
+    .expect("parse markdown");
+    let mut app = TestApp::new(WIDTH, HEIGHT, doc);
+
+    // Flattened link text is "Build Status"; select "Status" (offset 6..12).
+    for _ in 0..6 {
+        app.key(KeyCode::Right);
+    }
+    for _ in 0..6 {
+        app.key_with(KeyCode::Right, KeyModifiers::SHIFT);
+    }
+    app.key(KeyCode::Esc);
+    app.key_with(KeyCode::Char('H'), KeyModifiers::SHIFT);
+
+    assert!(
+        app.svg().contains("#f5f543"),
+        "highlighting text inside the link must render the highlight background"
+    );
+}
+
+#[test]
 fn reveal_codes_backspace_removes_style_inside_a_link() {
     // Bold "anu" inside link_document's "manual" link, then via reveal codes step
     // onto the inner `<Bold]` tag and delete it: the bold is removed but the link
