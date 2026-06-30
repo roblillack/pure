@@ -670,10 +670,291 @@ fn stacked_inline_styles_render_combined_and_unstack_via_reveal_tag() {
     assert_svg("stacked_styles_unstack_via_reveal_tag", &mut app);
 }
 
-// NOTE: the "reveal codes" feature (showing inline-style tags like `[Italic>`)
-// is not implemented on the shared `tdoc-editor` rendering engine yet, so the
-// former `editing_keeps_reveal_codes_visible` test was removed during the
-// migration. Restore it once reveal-codes support is ported.
+/// Parse the `line:col` the status bar prints at the start of its row.
+fn status_col(app: &mut TestApp) -> usize {
+    let lines = app.buffer_lines();
+    let status = lines.last().cloned().unwrap_or_default();
+    let token = status.split_whitespace().next().unwrap_or("");
+    token.split(':').nth(1).unwrap_or("0").trim().parse().unwrap_or(0)
+}
+
+#[test]
+fn reveal_codes_lets_cursor_step_onto_tags() {
+    let document = ftml! {
+        p { "Pure is a modern, " i { "terminal-based word processor" } "." }
+    };
+    let mut app = TestApp::new(WIDTH, HEIGHT, document);
+    app.key_with(KeyCode::Char('v'), KeyModifiers::ALT);
+    app.key(KeyCode::Enter);
+
+    // Move to the italic boundary (offset 18) — the caret sits before `[Italic>`.
+    for _ in 0..18 {
+        app.key(KeyCode::Right);
+    }
+    let col_before = status_col(&mut app);
+    let x_before = app.cursor_position().expect("cursor").x;
+
+    // One step lands the caret onto the `[Italic>` tag: the column is unchanged
+    // (the tag is not a document character) but the caret jumps past its glyphs.
+    app.key(KeyCode::Right);
+    let col_on_tag = status_col(&mut app);
+    let x_on_tag = app.cursor_position().expect("cursor").x;
+    assert_eq!(
+        col_before, col_on_tag,
+        "column must not change when stepping onto a reveal tag"
+    );
+    assert!(
+        x_on_tag > x_before + 1,
+        "caret must advance across the tag glyphs (before={x_before}, on_tag={x_on_tag})"
+    );
+
+    // The next step leaves the tag and enters the styled text: column advances.
+    app.key(KeyCode::Right);
+    assert_eq!(
+        status_col(&mut app),
+        col_before + 1,
+        "column advances by one entering the styled text"
+    );
+
+    // Stepping back left returns onto the tag (column unchanged again).
+    app.key(KeyCode::Left);
+    assert_eq!(status_col(&mut app), col_before);
+    assert_eq!(app.cursor_position().expect("cursor").x, x_on_tag);
+}
+
+#[test]
+fn reveal_codes_cursor_sits_before_leading_start_tag() {
+    // A paragraph that *starts* with a styled run renders its `[Bold>` tag before
+    // any text. The caret must be placeable before that tag (column 1), then step
+    // onto it (column unchanged), then into the text (column 2).
+    let document = ftml! {
+        p { b { "bold" } " and more" }
+    };
+    let mut app = TestApp::new(WIDTH, HEIGHT, document);
+    app.key_with(KeyCode::Char('v'), KeyModifiers::ALT);
+    app.key(KeyCode::Enter);
+
+    // Caret is at the very start: before `[Bold>`, column 1, at the left margin.
+    let x_before = app.cursor_position().expect("cursor").x;
+    assert_eq!(status_col(&mut app), 1);
+
+    // Step onto the tag: column stays 1, caret jumps past the `[Bold>` glyphs.
+    app.key(KeyCode::Right);
+    let x_on_tag = app.cursor_position().expect("cursor").x;
+    assert_eq!(status_col(&mut app), 1, "column must stay 1 on the leading tag");
+    assert!(
+        x_on_tag > x_before + 1,
+        "caret must advance past the leading tag (before={x_before}, on_tag={x_on_tag})"
+    );
+
+    // Into the styled text: column advances to 2.
+    app.key(KeyCode::Right);
+    assert_eq!(status_col(&mut app), 2);
+
+    // And back left returns onto the tag, then before it.
+    app.key(KeyCode::Left);
+    assert_eq!(status_col(&mut app), 1);
+    assert_eq!(app.cursor_position().expect("cursor").x, x_on_tag);
+    app.key(KeyCode::Left);
+    assert_eq!(app.cursor_position().expect("cursor").x, x_before);
+}
+
+#[test]
+fn reveal_codes_word_jump_stops_on_tags() {
+    // Classic Pure treated each reveal tag as a word stop. Ctrl+Right should land
+    // on the `[Bold>` tag (column unchanged) rather than skipping over it.
+    let document = ftml! {
+        p { "alpha " b { "beta" } " gamma" }
+    };
+    let mut app = TestApp::new(WIDTH, HEIGHT, document);
+    app.key_with(KeyCode::Char('v'), KeyModifiers::ALT);
+    app.key(KeyCode::Enter);
+
+    // Two word-jumps reach the bold boundary, before `[Bold>` (offset 6).
+    app.key_with(KeyCode::Right, KeyModifiers::CONTROL);
+    app.key_with(KeyCode::Right, KeyModifiers::CONTROL);
+    let col_before = status_col(&mut app);
+    let x_before = app.cursor_position().expect("cursor").x;
+
+    // The next word-jump stops *on* the tag: column unchanged, caret past the tag.
+    app.key_with(KeyCode::Right, KeyModifiers::CONTROL);
+    assert_eq!(
+        status_col(&mut app),
+        col_before,
+        "word-jump onto a reveal tag must not change the column"
+    );
+    assert!(
+        app.cursor_position().expect("cursor").x > x_before + 1,
+        "word-jump must advance the caret past the tag glyphs"
+    );
+
+    // A further word-jump leaves the tag and enters the styled word: column grows.
+    app.key_with(KeyCode::Right, KeyModifiers::CONTROL);
+    assert!(status_col(&mut app) > col_before);
+}
+
+#[test]
+fn reveal_codes_home_end_reach_boundary_tags() {
+    // A paragraph that starts and ends with a styled run renders `[Bold>` at the
+    // start and `<Bold]` at the end. Home must land on the leading tag; End must
+    // land behind the trailing tag.
+    let document = ftml! {
+        p { b { "lead" } " mid " i { "tail" } }
+    };
+    let mut app = TestApp::new(WIDTH, HEIGHT, document);
+    app.key_with(KeyCode::Char('v'), KeyModifiers::ALT);
+    app.key(KeyCode::Enter);
+
+    // End lands behind the trailing `<Italic]`: stepping left once moves the caret
+    // back onto the tag (column unchanged), proving End was past it.
+    app.key(KeyCode::End);
+    let x_end = app.cursor_position().expect("cursor").x;
+    let col_end = status_col(&mut app);
+    app.key(KeyCode::Left);
+    assert_eq!(status_col(&mut app), col_end, "stepping off the trailing tag keeps the column");
+    assert!(
+        x_end > app.cursor_position().expect("cursor").x,
+        "End must land behind the trailing tag, not before it"
+    );
+
+    // Home lands on the leading `[Bold>` (before it): column 1, at the left margin,
+    // and stepping right keeps the column while advancing past the tag.
+    app.key(KeyCode::Home);
+    let x_home = app.cursor_position().expect("cursor").x;
+    assert_eq!(status_col(&mut app), 1);
+    app.key(KeyCode::Right);
+    assert_eq!(status_col(&mut app), 1, "stepping onto the leading tag keeps column 1");
+    assert!(
+        app.cursor_position().expect("cursor").x > x_home,
+        "the leading tag sits at/after the Home position"
+    );
+}
+
+#[test]
+fn reveal_codes_backspace_on_link_tag_removes_link() {
+    // link_document() = "Read the [manual](…) carefully." — the link covers
+    // "manual" (offsets 9..15), shown as `[Link>manual<Link]` with reveal codes.
+    let mut app = TestApp::new(WIDTH, HEIGHT, link_document());
+    app.key_with(KeyCode::Char('v'), KeyModifiers::ALT);
+    app.key(KeyCode::Enter);
+    assert!(app.svg().contains("[Link&gt;"), "the link's reveal tag should be visible");
+
+    // Walk to the link start (9 chars) then one more step onto the `[Link>` tag,
+    // and backspace: the link is unwrapped, leaving its text as plain content.
+    for _ in 0..10 {
+        app.key(KeyCode::Right);
+    }
+    app.key(KeyCode::Backspace);
+
+    let svg = app.svg();
+    assert!(
+        !svg.contains("[Link&gt;") && !svg.contains("&lt;Link]"),
+        "the link tags must be gone after deleting the link"
+    );
+    assert!(svg.contains("manual"), "the link's text must remain as plain text");
+}
+
+#[test]
+fn reveal_codes_show_inline_styles_inside_a_link() {
+    // link_document(): "Read the manual carefully." link on "manual" (9..15).
+    let mut app = TestApp::new(WIDTH, HEIGHT, link_document());
+    // Select "anu" inside the link and bold it (styling inside a link must work).
+    for _ in 0..10 {
+        app.key(KeyCode::Right);
+    }
+    for _ in 0..3 {
+        app.key_with(KeyCode::Right, KeyModifiers::SHIFT);
+    }
+    app.key(KeyCode::Esc);
+    app.key(KeyCode::Char('b'));
+    assert!(
+        app.svg().contains("font-weight=\"bold\""),
+        "the style must actually apply inside the link"
+    );
+
+    // With reveal codes on, the bold tags appear *inside* the link tags:
+    // `[Link> … [Bold>anu<Bold] … <Link]`.
+    app.key_with(KeyCode::Char('v'), KeyModifiers::ALT);
+    app.key(KeyCode::Enter);
+    let svg = app.svg();
+    let link_open = svg.find("[Link&gt;").expect("[Link> tag");
+    let bold_open = svg.find("[Bold&gt;").expect("[Bold> tag inside the link");
+    let bold_close = svg.find("&lt;Bold]").expect("<Bold] tag inside the link");
+    let link_close = svg.find("&lt;Link]").expect("<Link] tag");
+    assert!(
+        link_open < bold_open && bold_open < bold_close && bold_close < link_close,
+        "inner style tags must nest within the link tags"
+    );
+}
+
+#[test]
+fn reveal_codes_backspace_removes_style_inside_a_link() {
+    // Bold "anu" inside link_document's "manual" link, then via reveal codes step
+    // onto the inner `<Bold]` tag and delete it: the bold is removed but the link
+    // (and its `[Link>`/`<Link]` tags) survive.
+    let mut app = TestApp::new(WIDTH, HEIGHT, link_document());
+    for _ in 0..10 {
+        app.key(KeyCode::Right);
+    }
+    for _ in 0..3 {
+        app.key_with(KeyCode::Right, KeyModifiers::SHIFT);
+    }
+    app.key(KeyCode::Esc);
+    app.key(KeyCode::Char('b'));
+
+    app.key_with(KeyCode::Char('v'), KeyModifiers::ALT);
+    app.key(KeyCode::Enter);
+    assert!(app.svg().contains("[Bold&gt;"), "bold tag should show inside the link");
+
+    // The caret is at the end of the bold span (before `<Bold]`); step onto the
+    // tag and backspace to remove the bold.
+    app.key(KeyCode::Right);
+    app.key(KeyCode::Backspace);
+    let svg = app.svg();
+    assert!(
+        !svg.contains("[Bold&gt;") && !svg.contains("&lt;Bold]"),
+        "the inner bold tag must be removed"
+    );
+    assert!(
+        svg.contains("[Link&gt;") && svg.contains("&lt;Link]"),
+        "the surrounding link must survive removing an inner style"
+    );
+}
+
+#[test]
+fn editing_keeps_reveal_codes_visible() {
+    let document = ftml! {
+        p { "Pure is a modern, " i { "terminal-based word processor" } "." }
+    };
+    let mut app = TestApp::new(WIDTH, HEIGHT, document);
+
+    // Enable reveal codes via the View menu.
+    app.key_with(KeyCode::Char('v'), KeyModifiers::ALT);
+    app.key(KeyCode::Enter);
+    assert!(
+        app.svg().contains("[Italic&gt;"),
+        "reveal tags should be visible after enabling reveal codes"
+    );
+
+    // Delete the space after "Pure" with backspace; the reveal tags later in
+    // the line must stay visible.
+    for _ in 0..5 {
+        app.key(KeyCode::Right);
+    }
+    app.key(KeyCode::Backspace);
+    assert!(
+        app.svg().contains("[Italic&gt;"),
+        "reveal tags must stay visible after deleting a character"
+    );
+
+    // Same when typing the space back in.
+    app.key(KeyCode::Char(' '));
+    assert!(
+        app.svg().contains("[Italic&gt;"),
+        "reveal tags must stay visible after inserting a character"
+    );
+    assert_svg("editing_keeps_reveal_codes_visible", &mut app);
+}
 
 #[test]
 fn menu_format_opens_formatting_menu() {

@@ -23,28 +23,36 @@
 <rect x="310" y="0" width="40" height="20" fill="#3b8eea"/>
 <text x="310" y="15" fill="#ffffff" textLength="40" lengthAdjust="spacingAndGlyphs" xml:space="preserve">iew </text>
 <rect x="350" y="0" width="370" height="20" fill="#2472c8"/>
-<rect x="290" y="20" width="200" height="20" fill="#000000"/>
-<text x="290" y="35" fill="#e5e5e5" textLength="200" lengthAdjust="spacingAndGlyphs" xml:space="preserve">┌──────────────────┐</text>
+<rect x="290" y="20" width="220" height="20" fill="#000000"/>
+<text x="290" y="35" fill="#e5e5e5" textLength="220" lengthAdjust="spacingAndGlyphs" xml:space="preserve">┌────────────────────┐</text>
 <rect x="290" y="40" width="10" height="20" fill="#000000"/>
 <text x="290" y="55" fill="#e5e5e5" textLength="10" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
-<rect x="300" y="40" width="180" height="20" fill="#3b8eea"/>
-<text x="300" y="55" fill="#ffffff" textLength="180" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> Reveal Codes  F9 </text>
-<rect x="480" y="40" width="10" height="20" fill="#000000"/>
-<text x="480" y="55" fill="#e5e5e5" textLength="10" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
-<rect x="290" y="60" width="200" height="20" fill="#000000"/>
-<text x="290" y="75" fill="#e5e5e5" textLength="200" lengthAdjust="spacingAndGlyphs" xml:space="preserve">└──────────────────┘</text>
+<rect x="300" y="40" width="200" height="20" fill="#3b8eea"/>
+<text x="300" y="55" fill="#ffffff" textLength="200" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> ✓ Reveal Codes  F9 </text>
+<rect x="500" y="40" width="10" height="20" fill="#000000"/>
+<text x="500" y="55" fill="#e5e5e5" textLength="10" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
+<rect x="290" y="60" width="220" height="20" fill="#000000"/>
+<text x="290" y="75" fill="#e5e5e5" textLength="220" lengthAdjust="spacingAndGlyphs" xml:space="preserve">└────────────────────┘</text>
 <text x="0" y="155" fill="#d8d8d8" textLength="110" lengthAdjust="spacingAndGlyphs" xml:space="preserve">  Pack the </text>
-<text x="110" y="155" fill="#d8d8d8" textLength="100" lengthAdjust="spacingAndGlyphs" xml:space="preserve" font-weight="bold">essentials</text>
-<text x="210" y="155" fill="#d8d8d8" textLength="120" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> before the </text>
-<text x="330" y="155" fill="#d8d8d8" textLength="40" lengthAdjust="spacingAndGlyphs" xml:space="preserve" font-style="italic">long</text>
-<text x="370" y="155" fill="#d8d8d8" textLength="350" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> trip.                             </text>
-<text x="20" y="195" fill="#e5e5e5" textLength="20" lengthAdjust="spacingAndGlyphs" xml:space="preserve" opacity="0.6">• </text>
-<text x="40" y="195" fill="#d8d8d8" textLength="680" lengthAdjust="spacingAndGlyphs" xml:space="preserve">Passport                                                            </text>
-<text x="20" y="235" fill="#e5e5e5" textLength="20" lengthAdjust="spacingAndGlyphs" xml:space="preserve" opacity="0.6">• </text>
-<text x="40" y="235" fill="#d8d8d8" textLength="680" lengthAdjust="spacingAndGlyphs" xml:space="preserve">Tickets                                                             </text>
-<text x="20" y="275" fill="#e5e5e5" textLength="10" lengthAdjust="spacingAndGlyphs" xml:space="preserve" opacity="0.6">|</text>
-<text x="30" y="275" fill="#d8d8d8" textLength="690" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> Travel light.                                                       </text>
+<rect x="110" y="140" width="60" height="20" fill="#e5e5e5"/>
+<text x="110" y="155" fill="#000000" textLength="60" lengthAdjust="spacingAndGlyphs" xml:space="preserve">[Bold&gt;</text>
+<text x="170" y="155" fill="#d8d8d8" textLength="100" lengthAdjust="spacingAndGlyphs" xml:space="preserve" font-weight="bold">essentials</text>
+<rect x="270" y="140" width="60" height="20" fill="#e5e5e5"/>
+<text x="270" y="155" fill="#000000" textLength="60" lengthAdjust="spacingAndGlyphs" xml:space="preserve">&lt;Bold]</text>
+<text x="330" y="155" fill="#d8d8d8" textLength="120" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> before the </text>
+<rect x="450" y="140" width="80" height="20" fill="#e5e5e5"/>
+<text x="450" y="155" fill="#000000" textLength="80" lengthAdjust="spacingAndGlyphs" xml:space="preserve">[Italic&gt;</text>
+<text x="530" y="155" fill="#d8d8d8" textLength="40" lengthAdjust="spacingAndGlyphs" xml:space="preserve" font-style="italic">long</text>
+<rect x="570" y="140" width="80" height="20" fill="#e5e5e5"/>
+<text x="570" y="155" fill="#000000" textLength="80" lengthAdjust="spacingAndGlyphs" xml:space="preserve">&lt;Italic]</text>
+<text x="0" y="175" fill="#d8d8d8" textLength="720" lengthAdjust="spacingAndGlyphs" xml:space="preserve">  trip.                                                                 </text>
+<text x="20" y="215" fill="#e5e5e5" textLength="20" lengthAdjust="spacingAndGlyphs" xml:space="preserve" opacity="0.6">• </text>
+<text x="40" y="215" fill="#d8d8d8" textLength="680" lengthAdjust="spacingAndGlyphs" xml:space="preserve">Passport                                                            </text>
+<text x="20" y="255" fill="#e5e5e5" textLength="20" lengthAdjust="spacingAndGlyphs" xml:space="preserve" opacity="0.6">• </text>
+<text x="40" y="255" fill="#d8d8d8" textLength="680" lengthAdjust="spacingAndGlyphs" xml:space="preserve">Tickets                                                             </text>
+<text x="20" y="295" fill="#e5e5e5" textLength="10" lengthAdjust="spacingAndGlyphs" xml:space="preserve" opacity="0.6">|</text>
+<text x="30" y="295" fill="#d8d8d8" textLength="690" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> Travel light.                                                       </text>
 <rect x="0" y="340" width="720" height="20" fill="#2472c8"/>
-<text x="0" y="355" fill="#ffffff" textLength="720" lengthAdjust="spacingAndGlyphs" xml:space="preserve">4:1 Reveal codes is not available in this build                         </text>
+<text x="0" y="355" fill="#ffffff" textLength="720" lengthAdjust="spacingAndGlyphs" xml:space="preserve">4:1 Reveal codes enabled                                                </text>
 <rect x="290" y="60" width="10" height="20" fill="#ffffff" fill-opacity="0.4"/>
 </svg>

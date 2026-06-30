@@ -651,6 +651,16 @@ impl App {
         self.after_edit(UndoKind::Other);
     }
 
+    fn toggle_reveal_codes(&mut self) {
+        let enabled = !self.display.reveal_codes();
+        self.display.set_reveal_codes(enabled);
+        self.status(if enabled {
+            "Reveal codes enabled"
+        } else {
+            "Reveal codes disabled"
+        });
+    }
+
     fn backspace(&mut self) {
         let _ = self.display.editor_mut().delete_backward();
         self.after_edit(UndoKind::Deleting);
@@ -684,6 +694,10 @@ impl App {
             InlineStyle::Link => Ok(()),
         };
         if result.is_ok() {
+            // Classic Pure collapsed the selection after applying a style (the
+            // caret stays at the styled run's active end), so a following style
+            // toggle starts from the caret rather than re-styling the old range.
+            self.display.editor_mut().clear_selection();
             self.after_edit(UndoKind::Other);
         }
     }
@@ -934,7 +948,14 @@ impl App {
             Some(LinkEdit::Selection) => {
                 if target.is_empty() {
                     Ok(())
+                } else if !text.is_empty()
+                    && text == self.display.editor().get_selection_text()
+                {
+                    // Label unchanged from the selection → keep the selected runs
+                    // (with their inline styling) and just wrap them in the link.
+                    self.display.editor_mut().wrap_selection_in_link(&target)
                 } else {
+                    // A custom (or empty) label can't carry the original styling.
                     let label = if text.is_empty() { target.clone() } else { text };
                     self.display.editor_mut().replace_selection_with_link(&target, &label)
                 }
@@ -1023,9 +1044,7 @@ impl App {
             AppAction::InsertLineBreak => self.insert_line_break(),
             AppAction::InsertSiblingParagraph => self.insert_paragraph_break(),
             AppAction::FormattingMenu => self.open_context_menu(),
-            AppAction::ToggleRevealCodes => {
-                self.status("Reveal codes is not available in this build");
-            }
+            AppAction::ToggleRevealCodes => self.toggle_reveal_codes(),
         }
         Ok(())
     }
@@ -1724,13 +1743,21 @@ impl App {
             return;
         }
         let menu = &MENU_BAR[menu_index];
+        // Resolve labels up front: checked toggles get a checkmark prefix.
         let rows: Vec<Option<(String, Option<&'static str>, bool)>> = menu
             .entries
             .iter()
             .map(|entry| match entry {
                 MenuBarEntry::Separator => None,
                 MenuBarEntry::Item(item) => {
-                    Some((item.label.to_string(), item.shortcut, item.action.is_some()))
+                    let checked = item.action == Some(AppAction::ToggleRevealCodes)
+                        && self.display.reveal_codes();
+                    let label = if checked {
+                        format!("✓ {}", item.label)
+                    } else {
+                        item.label.to_string()
+                    };
+                    Some((label, item.shortcut, item.action.is_some()))
                 }
             })
             .collect();
@@ -1998,6 +2025,8 @@ impl App {
             }
             (KeyCode::Char('v'), true, _) => self.paste_from_clipboard(),
             (KeyCode::Char('k'), true, _) => self.open_link_dialog(),
+            // Reveal codes (the View menu lists F9 as the accelerator).
+            (KeyCode::F(9), _, _) => self.toggle_reveal_codes(),
             // Esc and Ctrl+Space open the formatting/context menu.
             (KeyCode::Char(' '), true, _) => self.open_context_menu(),
             (KeyCode::Esc, _, _) => self.open_context_menu(),

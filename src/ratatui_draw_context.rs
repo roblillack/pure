@@ -94,6 +94,12 @@ pub fn terminal_theme() -> Theme {
         classic_block_spacing: true,
         // Classic Pure's quote bar was a literal `|`, not a box-drawing rule.
         quote_bar_as_text: true,
+        // Reveal-codes tags: black text on an ANSI-gray fill (classic Pure's
+        // `reveal_tag_style`). Only drawn while reveal codes is on.
+        reveal_tag_fg: TERMINAL_REVEAL_FG,
+        reveal_tag_bg: TERMINAL_REVEAL_BG,
+        // Highlighted text is black on ANSI light-yellow, like classic Pure.
+        highlight_color: TERMINAL_HIGHLIGHT,
         ..Theme::default()
     };
     for fs in [
@@ -141,6 +147,24 @@ pub const TERMINAL_GREEN: u32 = 0x00800001;
 /// [`Color::Blue`] (an ANSI color) rather than a fixed RGB, matching classic
 /// Pure (whose `link_color` was `Color::Blue`).
 pub const TERMINAL_BLUE: u32 = 0x0000FF01;
+
+/// Sentinel reveal-tag foreground: rendered as ratatui's [`Color::Black`],
+/// matching classic Pure's `reveal_tag_style` (black text). A plain black RGB
+/// would otherwise collapse to the terminal default foreground, so use a
+/// distinct sentinel that maps explicitly to ANSI black. The low alpha byte
+/// keeps it clear of any real `0xRRGGBBFF` theme color.
+pub const TERMINAL_REVEAL_FG: u32 = 0x00000001;
+
+/// Sentinel reveal-tag background: rendered as ratatui's themed [`Color::Gray`]
+/// (ANSI), matching classic Pure's `reveal_tag_style` (gray fill). Unlike
+/// [`TERMINAL_GRAY`] it adds no DIM — the tag fill is solid.
+pub const TERMINAL_REVEAL_BG: u32 = 0xE5E5E501;
+
+/// Sentinel highlight background: the cell backend fills highlighted text with
+/// ratatui's themed [`Color::LightYellow`] and forces its glyphs to
+/// [`Color::Black`], matching classic Pure (black-on-yellow `<mark>`). The low
+/// alpha byte keeps it clear of any real `0xRRGGBBFF` theme color.
+pub const TERMINAL_HIGHLIGHT: u32 = 0xFFFF0001;
 
 fn to_color(rgba: u32) -> Color {
     let r = ((rgba >> 24) & 0xFF) as u8;
@@ -214,6 +238,10 @@ impl<'a> RatatuiDrawContext<'a> {
             Color::Green
         } else if self.color == TERMINAL_BLUE {
             Color::Blue
+        } else if self.color == TERMINAL_REVEAL_FG {
+            Color::Black
+        } else if self.color == TERMINAL_REVEAL_BG {
+            Color::Gray
         } else if self.color == self.default_fg {
             Color::Reset
         } else {
@@ -260,15 +288,22 @@ impl<'a> RatatuiDrawContext<'a> {
                     Color::Reset
                 } else if self.color == TERMINAL_SELECTION {
                     Color::LightBlue
+                } else if self.color == TERMINAL_REVEAL_BG {
+                    Color::Gray
+                } else if self.color == TERMINAL_HIGHLIGHT {
+                    Color::LightYellow
                 } else {
                     to_color(self.color)
                 });
             } else if let Some(sym) = symbol {
                 // Glyphs drawn over the selection fill (painted just before, in
                 // the same run) are forced white, matching classic Pure's
-                // white-on-light-blue selection.
+                // white-on-light-blue selection; over a highlight fill they're
+                // forced black (black-on-yellow `<mark>`).
                 let fg = if cell.bg == Color::LightBlue {
                     Color::White
+                } else if cell.bg == Color::LightYellow {
+                    Color::Black
                 } else {
                     fg
                 };
