@@ -1026,8 +1026,8 @@ impl App {
             MenuAction::ToggleChecklistItem => self.toggle_checklist_item(),
             MenuAction::ApplyInlineStyle(style) => self.apply_inline_style(style),
             MenuAction::EditLink => {
+                // keep dialog open
                 self.open_link_dialog();
-                return; // keep dialog open
             }
             MenuAction::IndentMore => self.indent(),
             MenuAction::IndentLess => self.unindent(),
@@ -1438,11 +1438,7 @@ impl App {
         let knob_travel = viewport - knob_size;
         let max_scroll = total - viewport;
         let scroll = (self.display.scroll_offset().max(0) as usize).min(max_scroll);
-        let knob_start = if max_scroll == 0 {
-            0
-        } else {
-            scroll * knob_travel / max_scroll
-        };
+        let knob_start = (scroll * knob_travel).checked_div(max_scroll).unwrap_or(0);
         Some(ScrollbarGeometry {
             knob_start,
             knob_size,
@@ -2019,11 +2015,12 @@ impl App {
             self.menu_bar = Some(MenuBarState::new());
             return Ok(());
         }
-        if alt && let KeyCode::Char(ch) = code {
-            if let Some(index) = menu_with_accel(ch.to_ascii_lowercase()) {
-                self.menu_bar = Some(MenuBarState::open_at(index));
-                return Ok(());
-            }
+        if alt
+            && let KeyCode::Char(ch) = code
+            && let Some(index) = menu_with_accel(ch.to_ascii_lowercase())
+        {
+            self.menu_bar = Some(MenuBarState::open_at(index));
+            return Ok(());
         }
 
         match (code, ctrl, alt) {
@@ -2192,11 +2189,11 @@ impl App {
                 }
             }
             KeyCode::Char(ch) => {
-                if let Some(index) = menu_with_accel(ch.to_ascii_lowercase()) {
-                    if let Some(state) = &mut self.menu_bar {
-                        state.select_menu(index);
-                        state.open_dropdown();
-                    }
+                if let Some(index) = menu_with_accel(ch.to_ascii_lowercase())
+                    && let Some(state) = &mut self.menu_bar
+                {
+                    state.select_menu(index);
+                    state.open_dropdown();
                 }
             }
             _ => {}
