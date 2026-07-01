@@ -4,8 +4,8 @@
 //! drive the full application — key and mouse events through real event
 //! handling, rendered via `ratatui`'s `TestBackend` — without a terminal.
 //!
-//! Rendering and editing are delegated to the shared `tdoc-editor` crate
-//! ([`StructuredRichDisplay`] + [`StructuredEditor`]); this module is the
+//! Rendering and editing are delegated to the shared `rutle` crate
+//! ([`rutle::Renderer`] + [`rutle::Editor`]); this module is the
 //! terminal frontend: a [`RatatuiDrawContext`] backend, key/mouse mapping,
 //! window chrome (status bar, scrollbar, menus, dialogs), and file I/O.
 
@@ -35,9 +35,9 @@ use ratatui::{
 };
 use tdoc::ftml::{Writer, parse};
 use tdoc::{Document, InlineStyle, ParagraphType, gemini, html, markdown};
-use tdoc_editor::draw_context::DrawContext;
-use tdoc_editor::richtext::tree_path::TreePath;
-use tdoc_editor::{BlockType, DocumentPosition, StructuredRichDisplay, UndoKind};
+use rutle::render_context::RenderContext as DrawContext;
+use rutle::tree_path::TreePath;
+use rutle::{BlockType, DocumentPosition, Renderer as StructuredRichDisplay, UndoKind};
 
 use crate::file_dialog::{FileDialogKind, FileDialogResult, FileDialogState};
 use crate::link_dialog::{LinkDialogState, LinkField};
@@ -537,8 +537,7 @@ impl App {
         display.set_theme(terminal_theme());
         // The terminal draws its own hardware caret; don't double-render.
         display.set_cursor_visible(false);
-        display.editor_mut().set_tdoc(document);
-        display.editor_mut().reset_undo_history();
+        display.editor_mut().set_document(document);
 
         Self {
             display,
@@ -580,7 +579,7 @@ impl App {
         match self.word_count_cache {
             Some((cached_rev, words)) if cached_rev == rev => words,
             _ => {
-                let words = count_words(self.display.editor().tdoc());
+                let words = count_words(self.display.editor().document());
                 self.word_count_cache = Some((rev, words));
                 words
             }
@@ -1086,8 +1085,7 @@ impl App {
         path: Option<PathBuf>,
         format: DocumentFormat,
     ) {
-        self.display.editor_mut().set_tdoc(document);
-        self.display.editor_mut().reset_undo_history();
+        self.display.editor_mut().set_document(document);
         self.display.set_scroll(0);
         self.file_path = path;
         self.document_format = format;
@@ -1112,7 +1110,7 @@ impl App {
             self.open_file_dialog(FileDialogKind::SaveAs);
             return Ok(());
         };
-        let document = self.display.editor().tdoc();
+        let document = self.display.editor().document();
         let result: Result<()> = (|| {
             match self.document_format {
                 DocumentFormat::Ftml => {
@@ -1327,10 +1325,10 @@ impl App {
     /// top-level paragraph types.
     fn content_line_counts(&self) -> (usize, usize) {
         let metrics = self.display.content_line_metrics();
-        let doc = self.display.editor().tdoc();
+        let doc = self.display.editor().document();
 
         // Leading margin before each top-level paragraph (and the trailing one
-        // after the last), mirroring `tdoc_editor`'s classic spacing model.
+        // after the last), mirroring `rutle`'s classic spacing model.
         let mut leading: Vec<i32> = Vec::with_capacity(doc.paragraphs.len());
         let mut prev_bottom = 0i32;
         for (i, p) in doc.paragraphs.iter().enumerate() {
@@ -2516,7 +2514,7 @@ fn block_type_label(block: BlockType) -> &'static str {
 }
 
 /// Classic-Pure `(top, bottom)` block margins in line units (see
-/// `tdoc_editor`'s `classic_margins`). Used to count content lines the way the
+/// `rutle`'s `classic_margins`). Used to count content lines the way the
 /// old renderer did: only headings carry margins.
 fn classic_block_margins(pt: ParagraphType) -> (i32, i32) {
     match pt {

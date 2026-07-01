@@ -1,12 +1,26 @@
-//! Integration test: drive the *shared* `tdoc-editor` core from Pure and render
+//! Integration test: drive the *shared* `rutle` core from Pure and render
 //! it into a real Ratatui buffer via `RatatuiDrawContext`. This proves the shared
 //! crate is usable from the TUI side end-to-end (edit -> layout -> terminal cells).
 
 use pure_tui::ratatui_draw_context::{terminal_theme, RatatuiDrawContext};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use tdoc_editor::richtext::markdown_converter::markdown_to_document;
-use tdoc_editor::StructuredRichDisplay;
+use rutle::Renderer as StructuredRichDisplay;
+use std::io::Cursor;
+use tdoc::{markdown, Document};
+
+// rutle works on `tdoc::Document` directly and leaves (de)serialization to tdoc,
+// so these thin markdown round-trip helpers (formerly `tdoc_editor`'s
+// `markdown_converter`) live in the test.
+fn markdown_to_document(md: &str) -> Document {
+    markdown::parse(Cursor::new(md.as_bytes())).unwrap_or_else(|_| Document::new())
+}
+
+fn document_to_markdown(doc: &Document) -> String {
+    let mut buffer: Vec<u8> = Vec::new();
+    markdown::write(&mut buffer, doc).expect("serialize document to markdown");
+    String::from_utf8(buffer).unwrap_or_default()
+}
 
 /// Read a row of the buffer back as a trimmed string.
 fn row_text(buf: &Buffer, row: u16, width: u16) -> String {
@@ -40,7 +54,7 @@ fn shared_editor_lays_out_into_terminal_buffer() {
     display.set_theme(terminal_theme());
     display
         .editor_mut()
-        .set_tdoc(markdown_to_document("# Title\n\nHello world\n"));
+        .set_document(markdown_to_document("# Title\n\nHello world\n"));
 
     let buf = render(&mut display, area);
     let text = buffer_text(&buf, area);
@@ -56,7 +70,7 @@ fn shared_editor_reflects_edits() {
     display.set_theme(terminal_theme());
     display
         .editor_mut()
-        .set_tdoc(markdown_to_document("Hello world\n"));
+        .set_document(markdown_to_document("Hello world\n"));
 
     // Place the caret at the end of the line and type via the shared editor.
     {
@@ -81,7 +95,7 @@ fn shared_editor_renders_list_structure() {
     display.set_theme(terminal_theme());
     display
         .editor_mut()
-        .set_tdoc(markdown_to_document("- one\n- two\n"));
+        .set_document(markdown_to_document("- one\n- two\n"));
 
     let buf = render(&mut display, area);
     let text = buffer_text(&buf, area);
@@ -95,15 +109,15 @@ fn shared_editor_renders_list_structure() {
 /// `insert_document`) that Pure's app uses for Ctrl+C / Ctrl+V.
 #[test]
 fn shared_editor_paste_preserves_bold() {
-    use tdoc_editor::StructuredEditor;
-    let mut e = StructuredEditor::default();
-    e.load_markdown("Pack the **essentials** here\n");
+    use rutle::Editor;
+    let mut e = Editor::default();
+    e.set_document(markdown_to_document("Pack the **essentials** here\n"));
     e.select_all();
     let frag = e.get_selection_document().expect("fragment");
     e.clear_selection();
     e.move_cursor_to_line_end();
     let _ = e.insert_document(&frag);
-    let out = tdoc_editor::richtext::markdown_converter::document_to_markdown(e.tdoc());
+    let out = document_to_markdown(e.document());
     let bold = out.matches("**essentials**").count();
     assert_eq!(bold, 2, "expected 2 bold copies, got {bold}: {out}");
 }
@@ -113,10 +127,11 @@ fn shared_editor_paste_preserves_bold() {
 /// text — exercises `insert_document`'s non-top-level path.
 #[test]
 fn shared_editor_paste_into_quote_preserves_bold() {
-    use tdoc_editor::DocumentPosition;
-    use tdoc_editor::StructuredEditor;
-    let mut e = StructuredEditor::default();
-    e.load_markdown("Pack the **essentials** here\n\n> Travel light.\n");
+    use rutle::{DocumentPosition, Editor};
+    let mut e = Editor::default();
+    e.set_document(markdown_to_document(
+        "Pack the **essentials** here\n\n> Travel light.\n",
+    ));
     e.set_cursor(DocumentPosition::new(0, 0));
     e.move_cursor_to_line_end_extend();
     let frag = e.get_selection_document().expect("fragment");
@@ -124,7 +139,7 @@ fn shared_editor_paste_into_quote_preserves_bold() {
     e.move_cursor_down();
     e.move_cursor_to_line_end();
     let _ = e.insert_document(&frag);
-    let out = tdoc_editor::richtext::markdown_converter::document_to_markdown(e.tdoc());
+    let out = document_to_markdown(e.document());
     assert!(
         out.contains("**essentials**"),
         "bold lost when pasting into a quote: {out}"

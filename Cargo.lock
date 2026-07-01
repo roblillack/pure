@@ -1026,8 +1026,8 @@ dependencies = [
  "insta",
  "ratatui",
  "resvg",
+ "rutle",
  "tdoc",
- "tdoc-editor",
  "unicode-width 0.2.0",
 ]
 
@@ -1200,6 +1200,16 @@ dependencies = [
  "unicode-ccc",
  "unicode-properties",
  "unicode-script",
+]
+
+[[package]]
+name = "rutle"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "33d022c1d5ae2eeccaacf28982aba44e27ae95f78c0c97e686b3cc23929a67c1"
+dependencies = [
+ "tdoc",
+ "unicode-segmentation",
 ]
 
 [[package]]
@@ -1430,14 +1440,6 @@ dependencies = [
  "thiserror",
  "unicode-width 0.1.14",
  "url",
-]
-
-[[package]]
-name = "tdoc-editor"
-version = "0.1.0"
-dependencies = [
- "tdoc",
- "unicode-segmentation",
 ]
 
 [[package]]

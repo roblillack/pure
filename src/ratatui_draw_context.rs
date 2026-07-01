@@ -1,6 +1,6 @@
-//! A terminal/cell backend for `tdoc_editor`'s [`DrawContext`].
+//! A terminal/cell backend for `rutle`'s [`DrawContext`] (`rutle::RenderContext`).
 //!
-//! The shared layout engine in `tdoc-editor` is written against a pixel-oriented
+//! The shared layout engine in `rutle` is written against a pixel-oriented
 //! [`DrawContext`] (FLTK is the reference backend). A terminal works in character
 //! cells, not pixels, so this adapter collapses the pixel model onto a cell grid:
 //!
@@ -17,8 +17,8 @@
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
-use tdoc_editor::draw_context::{DrawContext, FontStyle, FontType};
-use tdoc_editor::theme::Theme;
+use rutle::render_context::{FontStyle, FontType, RenderContext as DrawContext};
+use rutle::theme::Theme;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 /// A [`Theme`] with terminal-cell metrics: one row per line and no oversized
