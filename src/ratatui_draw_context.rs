@@ -68,6 +68,9 @@ pub fn terminal_theme() -> Theme {
         code_block_padding: 1,
         quote_indent: 2,
         quote_bar_offset: 0,
+        // Fonts report `font_size == 0` on a cell grid, so give nested list items
+        // a real per-level indent (two columns) instead of collapsing them flat.
+        list_indent: 2,
         table_cell_padding_h: 1,
         table_cell_padding_v: 0,
         // Underline/strikethrough become cell attributes, not separate lines.

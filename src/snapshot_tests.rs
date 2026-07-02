@@ -72,15 +72,21 @@ fn markdown_table_renders_with_box_drawing_borders() {
         "expected vertical table borders"
     );
     assert!(
-        lines.iter().any(|l| l.contains('┌') && l.contains('┬') && l.contains('┐')),
+        lines
+            .iter()
+            .any(|l| l.contains('┌') && l.contains('┬') && l.contains('┐')),
         "expected a top border with corner and tee glyphs"
     );
     assert!(
-        lines.iter().any(|l| l.contains('└') && l.contains('┴') && l.contains('┘')),
+        lines
+            .iter()
+            .any(|l| l.contains('└') && l.contains('┴') && l.contains('┘')),
         "expected a bottom border with corner and tee glyphs"
     );
     assert!(
-        lines.iter().any(|l| l.contains('├') && l.contains('┼') && l.contains('┤')),
+        lines
+            .iter()
+            .any(|l| l.contains('├') && l.contains('┼') && l.contains('┤')),
         "expected an interior row separator with junction glyphs"
     );
 }
@@ -108,7 +114,10 @@ fn cursor_is_drawn_inside_the_table() {
             .map(|(i, _)| i)
             .collect()
     };
-    assert!(!table_rows(&app).is_empty(), "expected the table to be drawn");
+    assert!(
+        !table_rows(&app).is_empty(),
+        "expected the table to be drawn"
+    );
 
     // Walking down with the arrow keys should at some point place the visible
     // terminal cursor on one of the table's rows.
@@ -540,6 +549,68 @@ fn context_menu_opens() {
     assert_svg("context_menu", &mut app);
 }
 
+/// Esc then `.` opens the "wrap inside…" submenu of container types.
+#[test]
+fn wrap_submenu_opens() {
+    let mut app = sample_app();
+    app.key(KeyCode::Esc);
+    app.key(KeyCode::Char('.'));
+    assert_svg("wrap_submenu", &mut app);
+}
+
+/// Indenting a bullet (`Tab`, or the menu's "Indent more") nests it under the previous
+/// item and renders it visibly indented in the terminal (nested-list indent step).
+#[test]
+fn indent_nests_bullet_item() {
+    let doc = ftml! {
+        ul {
+            li { p { "alpha" } }
+            li { p { "beta" } }
+        }
+    };
+    let mut app = TestApp::new(WIDTH, HEIGHT, doc);
+    app.key(KeyCode::Down);
+    app.key(KeyCode::Tab);
+    assert_svg("indent_nests_bullet_item", &mut app);
+}
+
+/// Esc then `,` opens the "select parent" submenu targeting the enclosing container
+/// (here a multi-paragraph quote, so the leaf is not collapsed and `,` is available).
+#[test]
+fn parent_menu_opens() {
+    let doc = ftml! {
+        quote {
+            p { "first" }
+            p { "second" }
+        }
+    };
+    let mut app = TestApp::new(WIDTH, HEIGHT, doc);
+    app.key(KeyCode::Esc);
+    app.key(KeyCode::Char(','));
+    assert_svg("parent_menu", &mut app);
+}
+
+/// Esc then `5` converts the H1 to a plain quote (pseudo-leaf convert). The status-bar
+/// breadcrumb's rightmost crumb becomes "Quote".
+#[test]
+fn convert_heading_to_quote_renders_as_quote() {
+    let mut app = sample_app();
+    app.key(KeyCode::Esc);
+    app.key(KeyCode::Char('5'));
+    assert_svg("convert_heading_to_quote", &mut app);
+}
+
+/// Esc then `.` then `5` wraps the H1 inside a quote, preserving the heading
+/// (breadcrumb "Quote > Header Lvl 1").
+#[test]
+fn wrap_heading_in_quote_preserves_heading() {
+    let mut app = sample_app();
+    app.key(KeyCode::Esc);
+    app.key(KeyCode::Char('.'));
+    app.key(KeyCode::Char('5'));
+    assert_svg("wrap_heading_in_quote", &mut app);
+}
+
 #[test]
 fn click_positions_cursor() {
     let mut app = sample_app();
@@ -675,7 +746,13 @@ fn status_col(app: &mut TestApp) -> usize {
     let lines = app.buffer_lines();
     let status = lines.last().cloned().unwrap_or_default();
     let token = status.split_whitespace().next().unwrap_or("");
-    token.split(':').nth(1).unwrap_or("0").trim().parse().unwrap_or(0)
+    token
+        .split(':')
+        .nth(1)
+        .unwrap_or("0")
+        .trim()
+        .parse()
+        .unwrap_or(0)
 }
 
 #[test]
@@ -741,7 +818,11 @@ fn reveal_codes_cursor_sits_before_leading_start_tag() {
     // Step onto the tag: column stays 1, caret jumps past the `[Bold>` glyphs.
     app.key(KeyCode::Right);
     let x_on_tag = app.cursor_position().expect("cursor").x;
-    assert_eq!(status_col(&mut app), 1, "column must stay 1 on the leading tag");
+    assert_eq!(
+        status_col(&mut app),
+        1,
+        "column must stay 1 on the leading tag"
+    );
     assert!(
         x_on_tag > x_before + 1,
         "caret must advance past the leading tag (before={x_before}, on_tag={x_on_tag})"
@@ -811,7 +892,11 @@ fn reveal_codes_home_end_reach_boundary_tags() {
     let x_end = app.cursor_position().expect("cursor").x;
     let col_end = status_col(&mut app);
     app.key(KeyCode::Left);
-    assert_eq!(status_col(&mut app), col_end, "stepping off the trailing tag keeps the column");
+    assert_eq!(
+        status_col(&mut app),
+        col_end,
+        "stepping off the trailing tag keeps the column"
+    );
     assert!(
         x_end > app.cursor_position().expect("cursor").x,
         "End must land behind the trailing tag, not before it"
@@ -823,7 +908,11 @@ fn reveal_codes_home_end_reach_boundary_tags() {
     let x_home = app.cursor_position().expect("cursor").x;
     assert_eq!(status_col(&mut app), 1);
     app.key(KeyCode::Right);
-    assert_eq!(status_col(&mut app), 1, "stepping onto the leading tag keeps column 1");
+    assert_eq!(
+        status_col(&mut app),
+        1,
+        "stepping onto the leading tag keeps column 1"
+    );
     assert!(
         app.cursor_position().expect("cursor").x > x_home,
         "the leading tag sits at/after the Home position"
@@ -837,7 +926,10 @@ fn reveal_codes_backspace_on_link_tag_removes_link() {
     let mut app = TestApp::new(WIDTH, HEIGHT, link_document());
     app.key_with(KeyCode::Char('v'), KeyModifiers::ALT);
     app.key(KeyCode::Enter);
-    assert!(app.svg().contains("[Link&gt;"), "the link's reveal tag should be visible");
+    assert!(
+        app.svg().contains("[Link&gt;"),
+        "the link's reveal tag should be visible"
+    );
 
     // Walk to the link start (9 chars) then one more step onto the `[Link>` tag,
     // and backspace: the link is unwrapped, leaving its text as plain content.
@@ -851,7 +943,10 @@ fn reveal_codes_backspace_on_link_tag_removes_link() {
         !svg.contains("[Link&gt;") && !svg.contains("&lt;Link]"),
         "the link tags must be gone after deleting the link"
     );
-    assert!(svg.contains("manual"), "the link's text must remain as plain text");
+    assert!(
+        svg.contains("manual"),
+        "the link's text must remain as plain text"
+    );
 }
 
 #[test]
@@ -932,7 +1027,10 @@ fn reveal_codes_backspace_removes_style_inside_a_link() {
 
     app.key_with(KeyCode::Char('v'), KeyModifiers::ALT);
     app.key(KeyCode::Enter);
-    assert!(app.svg().contains("[Bold&gt;"), "bold tag should show inside the link");
+    assert!(
+        app.svg().contains("[Bold&gt;"),
+        "bold tag should show inside the link"
+    );
 
     // The caret is at the end of the bold span (before `<Bold]`); step onto the
     // tag and backspace to remove the bold.
@@ -1464,3 +1562,172 @@ fn space_on_open_button_keeps_dialog_and_reports_opening() {
     );
 }
 
+/// Tab is dedicated to structure: on a plain paragraph with nothing to indent it does
+/// nothing (no fallback whitespace insertion), so the cursor does not move.
+#[test]
+fn tab_on_plain_paragraph_does_not_insert_whitespace() {
+    let doc = ftml! { p { "hello" } };
+    let mut app = TestApp::new(WIDTH, HEIGHT, doc);
+    app.key(KeyCode::End);
+    app.draw();
+    let before = app.cursor_position();
+    app.key(KeyCode::Tab);
+    app.draw();
+    assert_eq!(
+        before,
+        app.cursor_position(),
+        "Tab must not insert spaces on a plain paragraph"
+    );
+}
+
+/// In an ordered list whose numbers reach two digits, a continuation paragraph aligns with
+/// the item's text (past the widest `N. ` marker), not a bullet-width indent.
+#[test]
+fn ordered_list_continuation_aligns_with_item_text() {
+    let doc = ftml! {
+        ol {
+            li { p { "one" } }
+            li { p { "two" } p { "cont" } }
+            li { p { "3" } } li { p { "4" } } li { p { "5" } }
+            li { p { "6" } } li { p { "7" } } li { p { "8" } }
+            li { p { "9" } } li { p { "ten" } }
+        }
+    };
+    let mut app = TestApp::new(WIDTH, HEIGHT, doc);
+    app.draw();
+    let lines = app.buffer_lines();
+    let col = |needle: &str| lines.iter().find_map(|l| l.find(needle));
+    assert_eq!(
+        col("two"),
+        col("cont"),
+        "the continuation paragraph aligns with its item's text"
+    );
+}
+
+/// Selecting multiple top-level paragraphs and pressing Tab nests them into the adjacent
+/// list (here, appended as new items after the list).
+#[test]
+fn tab_nests_selected_paragraphs_into_adjacent_list() {
+    let doc = ftml! { ul { li { p { "a" } } } p { "p1" } p { "p2" } };
+    let mut app = TestApp::new(WIDTH, HEIGHT, doc);
+    app.key(KeyCode::Down); // to p1
+    app.key_with(KeyCode::Down, KeyModifiers::SHIFT); // extend selection over p2
+    app.key(KeyCode::Tab);
+    let lines = app.buffer_lines();
+    for needle in ["• a", "• p1", "• p2"] {
+        assert!(
+            lines.iter().any(|l| l.contains(needle)),
+            "expected {needle:?} as a list item"
+        );
+    }
+}
+
+#[test]
+fn tab_nests_selected_checklist_items_under_preceding_bullet() {
+    // A bullet item followed by a checklist; selecting the checklist items and pressing Tab
+    // nests them under the bullet item as a sub-checklist (checkboxes preserved).
+    let doc = ftml! {
+        ul { li { p { "My bullet item" } } }
+        checklist {
+            todo { "Check 1" }
+            todo { "Check 2" }
+            todo { "Check 3" }
+        }
+    };
+    let mut app = TestApp::new(WIDTH, HEIGHT, doc);
+    app.key(KeyCode::Down); // into the checklist (Check 1)
+    app.key_with(KeyCode::Down, KeyModifiers::SHIFT); // extend to Check 2
+    app.key_with(KeyCode::Down, KeyModifiers::SHIFT); // extend to Check 3
+    app.key(KeyCode::Tab);
+    let lines = app.buffer_lines();
+    // The checkboxes survive and the items are indented past the bullet marker.
+    for needle in ["[ ] Check 1", "[ ] Check 2", "[ ] Check 3"] {
+        let line = lines
+            .iter()
+            .find(|l| l.contains(needle))
+            .unwrap_or_else(|| panic!("expected {needle:?} to still render as a checklist item"));
+        let bullet_col = lines
+            .iter()
+            .find(|l| l.contains("My bullet item"))
+            .and_then(|l| l.find('•'))
+            .expect("bullet marker present");
+        let item_col = line.find('[').expect("checkbox present");
+        assert!(
+            item_col > bullet_col,
+            "checklist item {needle:?} should be indented past the bullet marker"
+        );
+    }
+}
+
+#[test]
+fn shift_tab_lifts_nested_checklist_items_back_out() {
+    // Inverse of the above: after nesting checklist items under a bullet, Shift+Tab lifts
+    // them back out as a checklist (checkboxes intact), not as text paragraphs.
+    let doc = ftml! {
+        ul { li { p { "My bullet item" } } }
+        checklist {
+            todo { "Check 1" }
+            todo { "Check 2" }
+            todo { "Check 3" }
+        }
+    };
+    let mut app = TestApp::new(WIDTH, HEIGHT, doc);
+    app.key(KeyCode::Down); // into the checklist (Check 1)
+    app.key_with(KeyCode::Down, KeyModifiers::SHIFT); // extend to Check 2
+    app.key_with(KeyCode::Down, KeyModifiers::SHIFT); // extend to Check 3
+    app.key(KeyCode::Tab); // nest under the bullet
+    app.key(KeyCode::BackTab); // lift back out
+    let lines = app.buffer_lines();
+    let bullet_col = lines
+        .iter()
+        .find(|l| l.contains("My bullet item"))
+        .and_then(|l| l.find('•'))
+        .expect("bullet marker present");
+    for needle in ["[ ] Check 1", "[ ] Check 2", "[ ] Check 3"] {
+        let line = lines
+            .iter()
+            .find(|l| l.contains(needle))
+            .unwrap_or_else(|| panic!("expected {needle:?} to render as a checklist item again"));
+        let item_col = line.find('[').expect("checkbox present");
+        assert_eq!(
+            item_col, bullet_col,
+            "lifted checklist item {needle:?} should be back at the bullet's column, not text"
+        );
+    }
+}
+
+#[test]
+fn selecting_middle_list_items_and_changing_type_splits_the_list() {
+    // Select the middle two of four checklist items and convert to a numbered list (menu
+    // shortcut `7`): only those items change type, splitting the checklist into three.
+    let doc = ftml! {
+        checklist {
+            todo { "one" }
+            todo { "two" }
+            todo { "three" }
+            todo { "four" }
+        }
+    };
+    let mut app = TestApp::new(WIDTH, HEIGHT, doc);
+    app.key(KeyCode::Down); // to "two"
+    app.key_with(KeyCode::Down, KeyModifiers::SHIFT); // extend selection to "three"
+    app.key(KeyCode::Esc); // open the context menu
+    app.key(KeyCode::Char('7')); // Numbered List
+    let lines = app.buffer_lines();
+    let has = |needle: &str| lines.iter().any(|l| l.contains(needle));
+    // The unselected first/last items stay checkboxes; the middle two become numbered.
+    assert!(has("[ ] one"), "first item stays a checklist item");
+    assert!(has("[ ] four"), "last item stays a checklist item");
+    assert!(
+        has("1. two"),
+        "carved-out items become a numbered list starting at 1"
+    );
+    assert!(
+        has("2. three"),
+        "carved-out items are numbered contiguously"
+    );
+    assert!(
+        !has("[ ] two") && !has("[ ] three"),
+        "the carved-out items no longer render as checkboxes"
+    );
+}

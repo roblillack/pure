@@ -2,12 +2,12 @@
 //! it into a real Ratatui buffer via `RatatuiDrawContext`. This proves the shared
 //! crate is usable from the TUI side end-to-end (edit -> layout -> terminal cells).
 
-use pure_tui::ratatui_draw_context::{terminal_theme, RatatuiDrawContext};
+use pure_tui::ratatui_draw_context::{RatatuiDrawContext, terminal_theme};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use rutle::Renderer as StructuredRichDisplay;
 use std::io::Cursor;
-use tdoc::{markdown, Document};
+use tdoc::{Document, markdown};
 
 // rutle works on `tdoc::Document` directly and leaves (de)serialization to tdoc,
 // so these thin markdown round-trip helpers (formerly `tdoc_editor`'s

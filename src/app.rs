@@ -33,11 +33,12 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph},
 };
-use tdoc::ftml::{Writer, parse};
-use tdoc::{Document, InlineStyle, ParagraphType, gemini, html, markdown};
 use rutle::render_context::RenderContext as DrawContext;
+use rutle::tree_edit::ContainerKind;
 use rutle::tree_path::TreePath;
 use rutle::{BlockType, DocumentPosition, Renderer as StructuredRichDisplay, UndoKind};
+use tdoc::ftml::{Writer, parse};
+use tdoc::{Document, InlineStyle, ParagraphType, gemini, html, markdown};
 
 use crate::file_dialog::{FileDialogKind, FileDialogResult, FileDialogState};
 use crate::link_dialog::{LinkDialogState, LinkField};
@@ -139,6 +140,16 @@ enum MenuAction {
     EditLink,
     IndentMore,
     IndentLess,
+    /// Open the "wrap inside…" submenu (`.`).
+    WrapInSubmenu,
+    /// Wrap the current paragraph/selection in a new container, preserving inner types.
+    WrapInContainer(ContainerKind),
+    /// Open the "select parent" menu targeting the ancestor container at this path depth.
+    SelectParent(usize),
+    /// Convert the ancestor container at this depth to another kind.
+    ConvertContainer(ContainerKind, usize),
+    /// Dissolve (unwrap) the ancestor container at this depth.
+    DissolveContainer(usize),
     Cut,
     Copy,
     Paste,
@@ -297,10 +308,21 @@ impl ContextMenuState {
     }
 }
 
+struct StructureFlags {
+    /// Wrap the current paragraph/selection in a new container (`.`); top-level only.
+    wrap_available: bool,
+    /// Depth of the ancestor container the "select parent" (`,`) menu should target.
+    select_parent_depth: Option<usize>,
+    /// The cursor's item can be indented deeper (`]`): a list/checklist item.
+    can_indent: bool,
+    /// The cursor's paragraph can be lifted out of its container (`[`).
+    can_unnest: bool,
+}
+
 fn build_context_menu_entries(
     checklist_state: Option<bool>,
     has_selection: bool,
-    can_indent: bool,
+    structure: StructureFlags,
     allow_paragraph_change: bool,
     can_paste: bool,
 ) -> Vec<MenuEntry> {
@@ -319,18 +341,39 @@ fn build_context_menu_entries(
         entries.push(MenuEntry::Separator);
     }
 
-    if can_indent {
-        entries.push(MenuEntry::Section("Structure"));
-        entries.push(MenuEntry::Item(MenuItem::enabled_with_shortcut(
+    // Structure section: wrap / select-parent / indent / unnest.
+    let mut structure_items = Vec::new();
+    if structure.wrap_available {
+        structure_items.push(MenuEntry::Item(MenuItem::enabled_with_shortcut(
+            "Wrap inside…",
+            MenuAction::WrapInSubmenu,
+            MenuShortcut::new('.'),
+        )));
+    }
+    if let Some(depth) = structure.select_parent_depth {
+        structure_items.push(MenuEntry::Item(MenuItem::enabled_with_shortcut(
+            "Select parent",
+            MenuAction::SelectParent(depth),
+            MenuShortcut::new(','),
+        )));
+    }
+    if structure.can_indent {
+        structure_items.push(MenuEntry::Item(MenuItem::enabled_with_shortcut(
             "Indent more",
             MenuAction::IndentMore,
             MenuShortcut::new(']'),
         )));
-        entries.push(MenuEntry::Item(MenuItem::enabled_with_shortcut(
-            "Indent less",
+    }
+    if structure.can_unnest {
+        structure_items.push(MenuEntry::Item(MenuItem::enabled_with_shortcut(
+            "Unnest",
             MenuAction::IndentLess,
             MenuShortcut::new('['),
         )));
+    }
+    if !structure_items.is_empty() {
+        entries.push(MenuEntry::Section("Structure"));
+        entries.extend(structure_items);
         entries.push(MenuEntry::Separator);
     }
 
@@ -342,6 +385,82 @@ fn build_context_menu_entries(
     entries
 }
 
+/// The four convertible container kinds, with their menu labels and number shortcuts
+/// (matching the paragraph-type numbers so muscle memory carries over).
+const CONTAINER_KINDS: [(&str, ContainerKind, char); 4] = [
+    ("Quote", ContainerKind::Quote, '5'),
+    ("Numbered List", ContainerKind::Ordered, '7'),
+    ("Bullet List", ContainerKind::Unordered, '8'),
+    ("Checklist", ContainerKind::Checklist, '9'),
+];
+
+fn container_kind_of_block(block: &BlockType) -> Option<ContainerKind> {
+    match block {
+        BlockType::BlockQuote => Some(ContainerKind::Quote),
+        BlockType::ListItem {
+            checkbox: Some(_), ..
+        } => Some(ContainerKind::Checklist),
+        BlockType::ListItem { ordered: true, .. } => Some(ContainerKind::Ordered),
+        BlockType::ListItem { .. } => Some(ContainerKind::Unordered),
+        _ => None,
+    }
+}
+
+/// The "wrap inside…" submenu (opened via `.`): wrap the selection in a new container of
+/// the chosen kind, preserving inner types.
+fn build_wrap_menu_entries() -> Vec<MenuEntry> {
+    let mut entries = vec![MenuEntry::Section("Wrap inside…")];
+    for (label, kind, key) in CONTAINER_KINDS {
+        entries.push(MenuEntry::Item(MenuItem::enabled_with_shortcut(
+            label,
+            MenuAction::WrapInContainer(kind),
+            MenuShortcut::new(key),
+        )));
+    }
+    entries
+}
+
+/// The "select parent" submenu (opened via `,`): convert the targeted ancestor container
+/// to another kind, unwrap it, or climb another level up.
+fn build_parent_menu_entries(
+    current: Option<ContainerKind>,
+    depth: usize,
+    dissolvable: bool,
+    can_go_up: bool,
+) -> Vec<MenuEntry> {
+    let mut entries = vec![MenuEntry::Section("Convert container")];
+    for (label, kind, key) in CONTAINER_KINDS {
+        let entry = if Some(kind) == current {
+            MenuItem::disabled_with_shortcut(label, MenuShortcut::new(key))
+        } else {
+            MenuItem::enabled_with_shortcut(
+                label,
+                MenuAction::ConvertContainer(kind, depth),
+                MenuShortcut::new(key),
+            )
+        };
+        entries.push(MenuEntry::Item(entry));
+    }
+    if dissolvable || can_go_up {
+        entries.push(MenuEntry::Separator);
+    }
+    if dissolvable {
+        entries.push(MenuEntry::Item(MenuItem::enabled_with_shortcut(
+            "Unwrap",
+            MenuAction::DissolveContainer(depth),
+            MenuShortcut::new('['),
+        )));
+    }
+    if can_go_up {
+        entries.push(MenuEntry::Item(MenuItem::enabled_with_shortcut(
+            "Select parent",
+            MenuAction::SelectParent(depth - 1),
+            MenuShortcut::new(','),
+        )));
+    }
+    entries
+}
+
 fn paragraph_type_item(
     label: &'static str,
     pt: ParagraphType,
@@ -349,7 +468,11 @@ fn paragraph_type_item(
     allow: bool,
 ) -> MenuEntry {
     MenuEntry::Item(if allow {
-        MenuItem::enabled_with_shortcut(label, MenuAction::SetParagraphType(pt), MenuShortcut::new(key))
+        MenuItem::enabled_with_shortcut(
+            label,
+            MenuAction::SetParagraphType(pt),
+            MenuShortcut::new(key),
+        )
     } else {
         MenuItem::disabled_with_shortcut(label, MenuShortcut::new(key))
     })
@@ -387,18 +510,53 @@ fn default_context_menu_entries(
         paragraph_type_item("Checklist", ParagraphType::Checklist, '9', a),
         MenuEntry::Separator,
         MenuEntry::Section("Inline style"),
-        inline_style_item("Bold", InlineStyle::Bold, MenuShortcut::new('b'), has_selection),
-        inline_style_item("Italic", InlineStyle::Italic, MenuShortcut::new('i'), has_selection),
-        inline_style_item("Underline", InlineStyle::Underline, MenuShortcut::new('u'), has_selection),
-        inline_style_item("Code", InlineStyle::Code, MenuShortcut::with_shift('C'), has_selection),
-        inline_style_item("Highlight", InlineStyle::Highlight, MenuShortcut::with_shift('H'), has_selection),
-        inline_style_item("Strikethrough", InlineStyle::Strike, MenuShortcut::with_shift('X'), has_selection),
+        inline_style_item(
+            "Bold",
+            InlineStyle::Bold,
+            MenuShortcut::new('b'),
+            has_selection,
+        ),
+        inline_style_item(
+            "Italic",
+            InlineStyle::Italic,
+            MenuShortcut::new('i'),
+            has_selection,
+        ),
+        inline_style_item(
+            "Underline",
+            InlineStyle::Underline,
+            MenuShortcut::new('u'),
+            has_selection,
+        ),
+        inline_style_item(
+            "Code",
+            InlineStyle::Code,
+            MenuShortcut::with_shift('C'),
+            has_selection,
+        ),
+        inline_style_item(
+            "Highlight",
+            InlineStyle::Highlight,
+            MenuShortcut::with_shift('H'),
+            has_selection,
+        ),
+        inline_style_item(
+            "Strikethrough",
+            InlineStyle::Strike,
+            MenuShortcut::with_shift('X'),
+            has_selection,
+        ),
         MenuEntry::Item(MenuItem::enabled_with_shortcut(
             "Edit Link...",
             MenuAction::EditLink,
             MenuShortcut::new('k'),
         )),
-        inline_style_item("Clear Formatting", InlineStyle::None, MenuShortcut::new('\\'), has_selection),
+        inline_style_item(
+            "Clear Formatting",
+            InlineStyle::None,
+            MenuShortcut::new('\\'),
+            has_selection,
+        ),
         MenuEntry::Separator,
         MenuEntry::Section("Copy & paste"),
         MenuEntry::Item(if has_selection {
@@ -626,7 +784,10 @@ impl App {
     /// Run a closure with a throwaway [`DrawContext`] sized to the last editor
     /// viewport — needed by the engine's layout-dependent operations (visual
     /// cursor movement, ensure-visible) when no frame is being drawn.
-    fn with_ctx<R>(&mut self, f: impl FnOnce(&mut StructuredRichDisplay, &mut dyn DrawContext) -> R) -> R {
+    fn with_ctx<R>(
+        &mut self,
+        f: impl FnOnce(&mut StructuredRichDisplay, &mut dyn DrawContext) -> R,
+    ) -> R {
         let area = self.last_text_area;
         let (page_bg, default_fg) = self.palette();
         let mut buf = Buffer::empty(area);
@@ -642,7 +803,9 @@ impl App {
     }
 
     fn after_edit(&mut self, kind: UndoKind) {
-        self.display.editor_mut().commit_undo_step(kind, Instant::now());
+        self.display
+            .editor_mut()
+            .commit_undo_step(kind, Instant::now());
         self.mark_dirty();
         self.follow_cursor = true;
     }
@@ -654,11 +817,6 @@ impl App {
         self.after_edit(UndoKind::Typing);
     }
 
-    fn insert_str(&mut self, text: &str) {
-        let _ = self.display.editor_mut().insert_text(text);
-        self.after_edit(UndoKind::Typing);
-    }
-
     fn insert_paragraph_break(&mut self) {
         let _ = self.display.editor_mut().insert_newline();
         self.after_edit(UndoKind::Other);
@@ -666,6 +824,13 @@ impl App {
 
     fn insert_line_break(&mut self) {
         let _ = self.display.editor_mut().insert_hard_break();
+        self.after_edit(UndoKind::Other);
+    }
+
+    /// A continuation paragraph (Ctrl+P): another paragraph inside the current list item /
+    /// quote, rather than a new list item the way Enter would.
+    fn insert_continuation(&mut self) {
+        let _ = self.display.editor_mut().insert_continuation();
         self.after_edit(UndoKind::Other);
     }
 
@@ -754,7 +919,7 @@ impl App {
     }
 
     fn indent(&mut self) {
-        if self.display.editor_mut().indent_list_item().is_ok() {
+        if self.display.editor_mut().indent().is_ok() {
             self.after_edit(UndoKind::Other);
         }
     }
@@ -959,31 +1124,47 @@ impl App {
                 if target.is_empty() {
                     self.display.editor_mut().remove_link_at(path, index)
                 } else {
-                    let label = if text.is_empty() { target.clone() } else { text };
-                    self.display.editor_mut().edit_link_at(path, index, &target, &label)
+                    let label = if text.is_empty() {
+                        target.clone()
+                    } else {
+                        text
+                    };
+                    self.display
+                        .editor_mut()
+                        .edit_link_at(path, index, &target, &label)
                 }
             }
             Some(LinkEdit::Selection) => {
                 if target.is_empty() {
                     Ok(())
-                } else if !text.is_empty()
-                    && text == self.display.editor().get_selection_text()
-                {
+                } else if !text.is_empty() && text == self.display.editor().get_selection_text() {
                     // Label unchanged from the selection → keep the selected runs
                     // (with their inline styling) and just wrap them in the link.
                     self.display.editor_mut().wrap_selection_in_link(&target)
                 } else {
                     // A custom (or empty) label can't carry the original styling.
-                    let label = if text.is_empty() { target.clone() } else { text };
-                    self.display.editor_mut().replace_selection_with_link(&target, &label)
+                    let label = if text.is_empty() {
+                        target.clone()
+                    } else {
+                        text
+                    };
+                    self.display
+                        .editor_mut()
+                        .replace_selection_with_link(&target, &label)
                 }
             }
             Some(LinkEdit::Insert) | None => {
                 if target.is_empty() {
                     Ok(())
                 } else {
-                    let label = if text.is_empty() { target.clone() } else { text };
-                    self.display.editor_mut().insert_link_at_cursor(&target, &label)
+                    let label = if text.is_empty() {
+                        target.clone()
+                    } else {
+                        text
+                    };
+                    self.display
+                        .editor_mut()
+                        .insert_link_at_cursor(&target, &label)
                 }
             }
         };
@@ -1007,17 +1188,76 @@ impl App {
             } => Some(checked),
             _ => None,
         };
-        let block = self.display.editor().current_block_type();
-        let can_indent = matches!(block, BlockType::ListItem { .. });
+        let editor = self.display.editor();
+        let block = editor.current_block_type();
         let allow_paragraph_change = !matches!(block, BlockType::Table { .. });
+        // "Select parent" targets the parent of the *pseudo-leaf*: a collapsed single-text
+        // container is already acted on by ESC+number, so start one level above it.
+        let depth = editor.cursor_depth();
+        let step = if editor.cursor_in_collapsed_container() {
+            2
+        } else {
+            1
+        };
+        let parent_depth = depth.saturating_sub(step);
+        let select_parent_depth =
+            (parent_depth >= 1 && allow_paragraph_change).then_some(parent_depth);
+        let structure = StructureFlags {
+            wrap_available: allow_paragraph_change && depth == 1,
+            select_parent_depth,
+            can_indent: editor.cursor_can_indent(),
+            can_unnest: editor.cursor_can_unnest(),
+        };
         let entries = build_context_menu_entries(
             checklist_state,
             self.has_selection(),
-            can_indent,
+            structure,
             allow_paragraph_change,
             self.clipboard.is_some(),
         );
         self.context_menu = Some(ContextMenuState::new(entries));
+    }
+
+    /// Open the "wrap inside…" submenu (reassigns the context menu; see `execute_menu_action`).
+    fn open_wrap_menu(&mut self) {
+        self.context_menu = Some(ContextMenuState::new(build_wrap_menu_entries()));
+    }
+
+    /// Open the "select parent" submenu targeting the ancestor container at `depth`.
+    fn open_parent_menu(&mut self, depth: usize) {
+        let editor = self.display.editor();
+        let Some(block) = editor.container_block_at_depth(depth) else {
+            return;
+        };
+        let current = container_kind_of_block(&block);
+        let dissolvable = editor.container_dissolvable_at_depth(depth);
+        let can_go_up = depth >= 2;
+        let entries = build_parent_menu_entries(current, depth, dissolvable, can_go_up);
+        self.context_menu = Some(ContextMenuState::new(entries));
+    }
+
+    fn wrap_in_container(&mut self, kind: ContainerKind) {
+        let before = self.display.edit_revision();
+        let _ = self.display.editor_mut().wrap_selection(kind);
+        if self.display.edit_revision() != before {
+            self.after_edit(UndoKind::Other);
+        }
+    }
+
+    fn convert_container(&mut self, kind: ContainerKind, depth: usize) {
+        if self
+            .display
+            .editor_mut()
+            .convert_container_at_depth(depth, kind)
+        {
+            self.after_edit(UndoKind::Other);
+        }
+    }
+
+    fn dissolve_container(&mut self, depth: usize) {
+        if self.display.editor_mut().dissolve_container_at_depth(depth) {
+            self.after_edit(UndoKind::Other);
+        }
     }
 
     fn execute_menu_action(&mut self, action: MenuAction) {
@@ -1031,6 +1271,12 @@ impl App {
             }
             MenuAction::IndentMore => self.indent(),
             MenuAction::IndentLess => self.unindent(),
+            // Submenu openers re-arm the context menu (the key handler clears it first).
+            MenuAction::WrapInSubmenu => self.open_wrap_menu(),
+            MenuAction::WrapInContainer(kind) => self.wrap_in_container(kind),
+            MenuAction::SelectParent(depth) => self.open_parent_menu(depth),
+            MenuAction::ConvertContainer(kind, depth) => self.convert_container(kind, depth),
+            MenuAction::DissolveContainer(depth) => self.dissolve_container(depth),
             MenuAction::Cut => {
                 self.cut_selection();
             }
@@ -1060,7 +1306,7 @@ impl App {
             }
             AppAction::Paste => self.paste_from_clipboard(),
             AppAction::InsertLineBreak => self.insert_line_break(),
-            AppAction::InsertSiblingParagraph => self.insert_paragraph_break(),
+            AppAction::InsertSiblingParagraph => self.insert_continuation(),
             AppAction::FormattingMenu => self.open_context_menu(),
             AppAction::ToggleRevealCodes => self.toggle_reveal_codes(),
         }
@@ -1357,7 +1603,10 @@ impl App {
         if let Some((message, _)) = &self.status_message {
             // Classic Pure kept the cursor position in front of a transient
             // message (e.g. "4:1 Copied to clipboard"), not just the message.
-            return Line::from(format!("{}:{} {message}", self.cursor_line, self.cursor_col));
+            return Line::from(format!(
+                "{}:{} {message}",
+                self.cursor_line, self.cursor_col
+            ));
         }
 
         // Classic Pure showed the path as given (with its directory), not just
@@ -1370,13 +1619,16 @@ impl App {
         let dirty = if self.dirty { "*" } else { "" };
         let lines = self.content_lines.max(1);
         let words = self.word_count();
-        // Breadcrumb: the block type (`Text`, `Header Lvl 1`, `Quote`, …) followed
-        // by the inline styles under the cursor (`Bold`, `Link`, …), joined with
-        // ` > ` — the way classic Pure showed `Text > Bold`.
+        // Breadcrumb: the block-type chain from outermost container to the pseudo-leaf
+        // (`Quote`, `Quote > Heading 2`, `Bullet List`, …) followed by the inline styles
+        // under the cursor (`Bold`, `Link`, …), joined with ` > `. The rightmost block
+        // crumb is the pseudo-leaf — the exact type the context menu's number keys change.
         let mut crumbs: Vec<&str> = Vec::new();
-        let block = block_type_label(self.display.editor().current_block_type());
-        if !block.is_empty() {
-            crumbs.push(block);
+        for block in self.display.editor().cursor_block_breadcrumb() {
+            let label = block_type_label(block);
+            if !label.is_empty() {
+                crumbs.push(label);
+            }
         }
         crumbs.extend(self.display.editor().cursor_inline_labels());
         let block_part = if crumbs.is_empty() {
@@ -1523,7 +1775,12 @@ impl App {
             Rect::new(inner.x, inner.y + 1, inner.width, 1),
         );
 
-        let list_area = Rect::new(inner.x, inner.y + 2, inner.width, inner.height.saturating_sub(3));
+        let list_area = Rect::new(
+            inner.x,
+            inner.y + 2,
+            inner.width,
+            inner.height.saturating_sub(3),
+        );
         if dialog.candidates().is_empty() {
             frame.render_widget(
                 Paragraph::new(" (no matching files)")
@@ -1596,7 +1853,11 @@ impl App {
             height,
         );
         frame.render_widget(Clear, popup_area);
-        let title = if dialog.editing() { "Edit Link" } else { "Insert Link" };
+        let title = if dialog.editing() {
+            "Edit Link"
+        } else {
+            "Insert Link"
+        };
         let block = Block::default()
             .title(title)
             .borders(Borders::ALL)
@@ -1619,14 +1880,25 @@ impl App {
         ];
         for (field, label, value, y) in fields {
             frame.render_widget(
-                Paragraph::new(Line::from(Span::styled(label, self.theme.menu_disabled_style())))
-                    .style(popup_style),
+                Paragraph::new(Line::from(Span::styled(
+                    label,
+                    self.theme.menu_disabled_style(),
+                )))
+                .style(popup_style),
                 Rect::new(inner.x, y, LABEL_WIDTH, 1),
             );
             let focused = dialog.focus() == field;
-            let caret = if focused { dialog.active_cursor().unwrap_or(0) } else { 0 };
+            let caret = if focused {
+                dialog.active_cursor().unwrap_or(0)
+            } else {
+                0
+            };
             let visible = field_width as usize;
-            let skip = if focused { (caret + 1).saturating_sub(visible) } else { 0 };
+            let skip = if focused {
+                (caret + 1).saturating_sub(visible)
+            } else {
+                0
+            };
             let shown: String = value.chars().skip(skip).take(visible).collect();
             frame.render_widget(
                 Paragraph::new(shown).style(popup_style),
@@ -1671,14 +1943,23 @@ impl App {
         let cancel_x = save_x.saturating_sub(cancel_w + 1);
 
         let buttons = [
-            (LinkField::Open, open, open_x, open.chars().count() as u16, has_target),
+            (
+                LinkField::Open,
+                open,
+                open_x,
+                open.chars().count() as u16,
+                has_target,
+            ),
             (LinkField::Cancel, cancel, cancel_x, cancel_w, true),
             (LinkField::Save, save, save_x, save_w, true),
         ];
         for (field, label, x, w, enabled) in buttons {
             frame.render_widget(
-                Paragraph::new(Line::from(Span::styled(label, button_style(field, enabled))))
-                    .style(popup_style),
+                Paragraph::new(Line::from(Span::styled(
+                    label,
+                    button_style(field, enabled),
+                )))
+                .style(popup_style),
                 Rect::new(x, button_row, w, 1),
             );
             // Park the caret on the focused button so it doesn't show through at
@@ -1695,8 +1976,11 @@ impl App {
             "Enter: save   Esc: cancel   Tab: next"
         };
         frame.render_widget(
-            Paragraph::new(Line::from(Span::styled(hint, self.theme.menu_disabled_style())))
-                .style(popup_style),
+            Paragraph::new(Line::from(Span::styled(
+                hint,
+                self.theme.menu_disabled_style(),
+            )))
+            .style(popup_style),
             Rect::new(inner.x, inner.y + 4, inner.width, 1),
         );
     }
@@ -1873,7 +2157,11 @@ impl App {
         }
 
         let gap_width = if has_shortcuts { 2 } else { 0 };
-        let shortcut_width = if has_shortcuts { max_shortcut_width.max(1) } else { 0 };
+        let shortcut_width = if has_shortcuts {
+            max_shortcut_width.max(1)
+        } else {
+            0
+        };
         let item_width = if has_shortcuts {
             max_label_width + gap_width + shortcut_width
         } else {
@@ -1914,10 +2202,7 @@ impl App {
                 }
                 MenuEntry::Item(item) => {
                     let content = if has_shortcuts {
-                        let shortcut = item
-                            .shortcut
-                            .map(|s| s.key.to_string())
-                            .unwrap_or_default();
+                        let shortcut = item.shortcut.map(|s| s.key.to_string()).unwrap_or_default();
                         format!(
                             "{label:<label_width$}{gap}{shortcut:>shortcut_width$}",
                             label = item.label,
@@ -2044,7 +2329,7 @@ impl App {
             // Esc and Ctrl+Space open the formatting/context menu.
             (KeyCode::Char(' '), true, _) => self.open_context_menu(),
             (KeyCode::Esc, _, _) => self.open_context_menu(),
-            (KeyCode::Char('p'), true, _) => self.insert_paragraph_break(),
+            (KeyCode::Char('p'), true, _) => self.insert_continuation(),
             (KeyCode::Char('j'), true, _) => self.insert_line_break(),
 
             // Word delete
@@ -2093,18 +2378,16 @@ impl App {
     }
 
     fn tab(&mut self, back: bool) {
-        let in_list = matches!(
-            self.display.editor().current_block_type(),
-            BlockType::ListItem { .. }
-        );
-        if in_list {
-            if back {
+        // Tab is dedicated to list/paragraph structure — no fallback text insertion.
+        // Shift-Tab lifts a paragraph out of its container one level (list or quote);
+        // Tab nests a list item deeper or a paragraph into the container above it.
+        let editor = self.display.editor();
+        if back {
+            if editor.cursor_can_unnest() {
                 self.unindent();
-            } else {
-                self.indent();
             }
-        } else if !back {
-            self.insert_str("    ");
+        } else if editor.cursor_can_indent() {
+            self.indent();
         }
     }
 
@@ -2529,7 +2812,10 @@ fn count_words(doc: &Document) -> usize {
         spans
             .iter()
             .map(|span| {
-                span.text.split_whitespace().filter(|s| !s.is_empty()).count()
+                span.text
+                    .split_whitespace()
+                    .filter(|s| !s.is_empty())
+                    .count()
                     + words_in_spans(&span.children)
             })
             .sum()
