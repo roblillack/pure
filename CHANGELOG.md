@@ -38,6 +38,13 @@ While pre-1.0, the minor version is bumped for breaking changes.
 - **Ctrl+P** now inserts a *continuation paragraph* inside the current list item
   (another paragraph in the same item) instead of behaving like Enter and
   starting a new item.
+- Pressing **Enter** on an empty line nested inside a list item no longer
+  dissolves the whole item. When the item has other content, an empty trailing
+  line now becomes a new empty list item; pressing Enter again lifts that empty
+  item out of the list, and once more lifts it out of an enclosing quote — so
+  repeated Enter steps out one level at a time instead of flattening everything
+  at once. An empty line inside a quote likewise exits the quote on Enter rather
+  than adding another blank quoted line.
 - **Shift+Enter** and **Ctrl+Enter** insert a hard line break again: Pure now
   enables the terminal's keyboard-enhancement protocol where available, so these
   combinations are delivered as distinct keys instead of a plain Enter. (Ctrl+J
@@ -48,13 +55,24 @@ While pre-1.0, the minor version is bumped for breaking changes.
   item's text rather than a fixed bullet width — most visibly in numbered lists
   with two-digit numbers, where continuations were previously mis-indented and the
   number padding was inconsistent across items.
-- **Tab** / **Esc ]** ("Indent more") on a top-level paragraph that follows a
-  container now nests it into that container — as a new list item, a new checklist
-  item, or a child of the preceding quote — instead of just inserting spaces.
-  (Previously this only worked on existing list items.) A paragraph sandwiched
-  between two same-kind lists is joined into a single merged list. This also works
-  for a multi-paragraph selection, and for paragraphs *before* a list (they are
-  prepended to it) as well as after.
+- **Tab** / **Esc ]** ("Indent more") on a paragraph that follows a container now
+  nests it into that container — as a new list item, a new checklist item, or a
+  child of the preceding quote — instead of just inserting spaces. (Previously this
+  only worked on existing list items.) This now also works *inside a quote*: a plain
+  paragraph in a quote can be indented into a list that sits above it in the same
+  quote (previously it only worked at the top level of the document). A paragraph
+  sandwiched between two same-kind lists is joined into a single merged list. This
+  also works for a multi-paragraph selection, and for paragraphs *before* a list
+  (they are prepended to it) as well as after.
+- **Tab** on the first item of a list that directly follows a quote now pulls that
+  item **into** the quote while keeping it a list item — it becomes a list nested
+  inside the quote (bullet/number preserved), matching how a list item indents into
+  a preceding list. The emptied outer list is removed; later items stay behind in
+  the list.
+- **Shift+Tab** on a list item that sits inside a quote now lifts it **out** of the
+  quote while keeping it a list item (a bullet just below the quote), the exact
+  inverse of the Tab above — instead of converting it to a plain paragraph. (Enter
+  on an *empty* item, and toggling a list off, still turn it into a plain paragraph.)
 - Indenting a list item under a sibling that already contains a sublist now merges
   it into that sublist even when the kinds differ (a bullet indented under an item
   ending in a numbered sublist joins the numbered list, and vice versa), instead
