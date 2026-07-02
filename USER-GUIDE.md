@@ -1029,11 +1029,12 @@ Press **Shift+Enter** or **Ctrl+Enter**.
 
 This creates a new line within the current paragraph without starting a new paragraph.
 
-#### To insert a tab:
+#### To indent with Tab:
 
-Press **Tab**.
-
-A tab character is inserted at the cursor position.
+**Tab** and **Shift+Tab** are dedicated to list and paragraph structure — they do
+not insert whitespace. **Tab** nests a list item one level deeper, or nests a
+paragraph into the container above it; **Shift+Tab** lifts a paragraph out of its
+container one level. See “Indent and Unindent Paragraphs” and “Lists”.
 
 #### To insert a paragraph break:
 
@@ -1068,14 +1069,44 @@ The paragraph is moved under the preceding container. Quotes receive the paragra
 #### To unindent a paragraph:
 
 1. Position the cursor anywhere inside the paragraph you want to lift out.
-2. Press **Esc**, then **[**, or use **Ctrl+[**.
+2. Press **Esc**, then **[**, or use **Shift+Tab**.
 
-The paragraph is taken out of its parent container and inserted as a sibling immediately after that container.
+The paragraph is taken out of its parent container and inserted as a sibling immediately after that container. This works for list items **and** for paragraphs inside a quote.
 
 #### Additional Information
 
 - The indent options only appear when the action is structurally valid.
 - Indent and unindent work at any nesting depth, making it easy to reorganize complex hierarchies of quotes and lists without cutting and pasting content.
+
+---
+
+### Wrapping and Nesting
+
+**Purpose:** Wrap paragraphs inside a container, or change/unwrap the container around them.
+
+Pure distinguishes **leaf** paragraphs (text, headings, code) from **container**
+paragraphs (quotes and lists). Two context-menu actions manage containers:
+
+**Wrap inside… (Esc, then .)**
+
+Wraps the current paragraph — or the whole selection — inside a **new** container
+you pick from a short submenu (Quote, Numbered List, Bullet List, Checklist). The
+inner paragraphs keep their types, so wrapping a heading in a quote gives you a
+quoted heading, and wrapping several paragraphs gives you one quote (or one list
+item) that holds them all.
+
+**Select parent (Esc, then ,)**
+
+When the cursor is inside a container, this opens a short menu that acts on the
+**enclosing container** rather than the paragraph: convert it to another kind
+(for example, turn a quote into a bullet list), **Unwrap** it (dissolve the
+container, lifting its contents up one level), or press **,** again to target the
+next container further out.
+
+#### Additional Information
+
+- A container that holds a single line of text behaves like a leaf when you press a paragraph-type number: the type shown at the right of the status-bar breadcrumb is the one those shortcuts change.
+- To take a single paragraph back out of its container one level at a time, use **[** (or **Shift+Tab**); to change or dissolve the whole container, use **Select parent**.
 
 ---
 
@@ -1505,7 +1536,15 @@ Changing from a list type to a non-list type (like text or heading) may restruct
 
 2. Press **Esc**, then press **5**.
 
-The paragraph becomes a block quote.
+The paragraph becomes a quote. Converting a heading this way turns it into a
+plain quote (the heading style is dropped), the same way converting to a list
+turns a heading into a plain list item. If you instead want to keep the heading
+and place it *inside* a quote, use **Wrap inside…** (see “Wrapping and Nesting”).
+
+A quote that holds a single line of text behaves like an ordinary paragraph when
+you change its type: on such a quote, **Esc 0** turns it back into plain text,
+**Esc 2** into a heading, and **Esc 8** into a bullet — so the paragraph-type
+shortcuts round-trip cleanly.
 
 #### Additional Information:
 
@@ -1656,9 +1695,11 @@ There are no automatic saves or backup copies. Remember to save frequently (Ctrl
 
 **Ctrl+J** - Insert newline character
 
-**Ctrl+P** - Insert paragraph break as sibling
+**Ctrl+P** - Insert a continuation paragraph in the current list item / quote
 
-**Tab** - Insert tab character
+**Tab** - Indent (nest a list item deeper, or a paragraph into the container above)
+
+**Shift+Tab** - Unindent (lift a paragraph out of its container one level)
 
 **Backspace** - Delete character before cursor
 

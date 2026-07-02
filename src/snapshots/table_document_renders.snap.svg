@@ -19,18 +19,12 @@
 <text x="120" y="215" fill="#d8d8d8" textLength="40" lengthAdjust="spacingAndGlyphs" xml:space="preserve" font-weight="bold">Role</text>
 <text x="160" y="215" fill="#d8d8d8" textLength="80" lengthAdjust="spacingAndGlyphs" xml:space="preserve">      │ </text>
 <text x="240" y="215" fill="#d8d8d8" textLength="50" lengthAdjust="spacingAndGlyphs" xml:space="preserve" font-weight="bold">Notes</text>
-<text x="290" y="215" fill="#d8d8d8" textLength="420" lengthAdjust="spacingAndGlyphs" xml:space="preserve">                                │         </text>
-<rect x="710" y="200" width="10" height="20" fill="#e5e5e5"/>
-<text x="0" y="235" fill="#d8d8d8" textLength="710" lengthAdjust="spacingAndGlyphs" xml:space="preserve">  ├───────┼───────────┼──────────────────────────────────────┤         </text>
-<rect x="710" y="220" width="10" height="20" fill="#e5e5e5"/>
-<text x="0" y="255" fill="#d8d8d8" textLength="710" lengthAdjust="spacingAndGlyphs" xml:space="preserve">  │ Alice │ Developer │ Works on the parser and the renderer │         </text>
-<rect x="710" y="240" width="10" height="20" fill="#e5e5e5"/>
-<text x="0" y="275" fill="#d8d8d8" textLength="710" lengthAdjust="spacingAndGlyphs" xml:space="preserve">  ├───────┼───────────┼──────────────────────────────────────┤         </text>
-<rect x="710" y="260" width="10" height="20" fill="#e5e5e5"/>
-<text x="0" y="295" fill="#d8d8d8" textLength="710" lengthAdjust="spacingAndGlyphs" xml:space="preserve">  │ Bob   │ Designer  │ UI                                   │         </text>
-<rect x="710" y="280" width="10" height="20" fill="#e5e5e5"/>
-<text x="0" y="315" fill="#d8d8d8" textLength="710" lengthAdjust="spacingAndGlyphs" xml:space="preserve">  └───────┴───────────┴──────────────────────────────────────┘         </text>
-<rect x="710" y="300" width="10" height="20" fill="#e5e5e5"/>
+<text x="290" y="215" fill="#d8d8d8" textLength="430" lengthAdjust="spacingAndGlyphs" xml:space="preserve">                                │          </text>
+<text x="0" y="235" fill="#d8d8d8" textLength="720" lengthAdjust="spacingAndGlyphs" xml:space="preserve">  ├───────┼───────────┼──────────────────────────────────────┤          </text>
+<text x="0" y="255" fill="#d8d8d8" textLength="720" lengthAdjust="spacingAndGlyphs" xml:space="preserve">  │ Alice │ Developer │ Works on the parser and the renderer │          </text>
+<text x="0" y="275" fill="#d8d8d8" textLength="720" lengthAdjust="spacingAndGlyphs" xml:space="preserve">  ├───────┼───────────┼──────────────────────────────────────┤          </text>
+<text x="0" y="295" fill="#d8d8d8" textLength="720" lengthAdjust="spacingAndGlyphs" xml:space="preserve">  │ Bob   │ Designer  │ UI                                   │          </text>
+<text x="0" y="315" fill="#d8d8d8" textLength="720" lengthAdjust="spacingAndGlyphs" xml:space="preserve">  └───────┴───────────┴──────────────────────────────────────┘          </text>
 <rect x="0" y="340" width="40" height="20" fill="#2472c8"/>
 <text x="0" y="355" fill="#ffffff" textLength="40" lengthAdjust="spacingAndGlyphs" xml:space="preserve">4:1 </text>
 <rect x="40" y="340" width="90" height="20" fill="#2472c8"/>

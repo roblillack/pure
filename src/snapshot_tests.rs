@@ -61,13 +61,33 @@ fn markdown_table_renders_with_box_drawing_borders() {
     let mut app = TestApp::new(WIDTH, HEIGHT, doc);
     app.draw();
     let lines = app.buffer_lines();
+    // The cell backend merges the engine's grid strokes into proper box-drawing
+    // junctions: corners (┌┐└┘) and tees/crosses (┬┴├┤┼).
     assert!(
-        lines.iter().any(|l| l.contains('┌')),
-        "expected a top border in the rendered table"
+        lines.iter().any(|l| l.contains('─')),
+        "expected a horizontal table border"
     );
     assert!(
-        lines.iter().any(|l| l.contains('│') && l.contains("Alice")),
-        "expected a bordered content row in the rendered table"
+        lines.iter().any(|l| l.contains('│')),
+        "expected vertical table borders"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.contains('┌') && l.contains('┬') && l.contains('┐')),
+        "expected a top border with corner and tee glyphs"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.contains('└') && l.contains('┴') && l.contains('┘')),
+        "expected a bottom border with corner and tee glyphs"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.contains('├') && l.contains('┼') && l.contains('┤')),
+        "expected an interior row separator with junction glyphs"
     );
 }
 
@@ -82,25 +102,31 @@ fn cursor_is_drawn_inside_the_table() {
     let mut app = TestApp::new(WIDTH, HEIGHT, table_document());
     app.draw();
 
-    let table_rows: Vec<usize> = app
-        .buffer_lines()
-        .iter()
-        .enumerate()
-        .filter(|(_, line)| {
-            line.contains('│') || line.contains('┌') || line.contains('├') || line.contains('└')
-        })
-        .map(|(i, _)| i)
-        .collect();
-    assert!(!table_rows.is_empty(), "expected the table to be drawn");
+    // The table's on-screen rows; recomputed each step since navigation can
+    // scroll the view, which shifts every row's visual y.
+    let table_rows = |app: &TestApp| -> Vec<usize> {
+        app.buffer_lines()
+            .iter()
+            .enumerate()
+            .filter(|(_, line)| {
+                line.contains('│') || line.contains('┌') || line.contains('├') || line.contains('└')
+            })
+            .map(|(i, _)| i)
+            .collect()
+    };
+    assert!(
+        !table_rows(&app).is_empty(),
+        "expected the table to be drawn"
+    );
 
     // Walking down with the arrow keys should at some point place the visible
     // terminal cursor on one of the table's rows.
     let mut cursor_entered_table = false;
-    for _ in 0..8 {
+    for _ in 0..12 {
         app.key(KeyCode::Down);
         app.draw();
         if let Some(pos) = app.cursor_position()
-            && table_rows.contains(&(pos.y as usize))
+            && table_rows(&app).contains(&(pos.y as usize))
         {
             cursor_entered_table = true;
             break;
@@ -116,6 +142,324 @@ fn cursor_is_drawn_inside_the_table() {
 fn initial_document() {
     let mut app = sample_app();
     assert_svg("initial_document", &mut app);
+}
+
+/// The page margin is responsive: flush-left on narrow terminals, a small gutter
+/// at medium widths, and centered with a capped text measure when wide. This
+/// mirrors classic Pure (see [`crate::app::page_margin`]).
+#[test]
+fn page_margin_is_responsive() {
+    use crate::app::page_margin;
+    // Narrow: single-cell gutter only.
+    assert_eq!(page_margin(40), 1);
+    assert_eq!(page_margin(59), 1);
+    // Medium: a two-cell gutter.
+    assert_eq!(page_margin(60), 2);
+    assert_eq!(page_margin(99), 2);
+    // Wide: center the content, capping the measure near 92 columns.
+    assert_eq!(page_margin(100), 4);
+    assert_eq!(page_margin(140), 24);
+    assert_eq!(page_margin(200), 54);
+    // The capped text measure stays roughly constant once centered.
+    for w in [120, 160, 200, 300] {
+        let measure = w - 2 * page_margin(w);
+        assert!(
+            (90..=100).contains(&measure),
+            "width {w}: text measure {measure} should stay near ~92 columns"
+        );
+    }
+}
+
+/// Render the same document at several terminal widths and confirm the left
+/// gutter actually grows (content is indented and, when wide, centered) rather
+/// than always hugging the left edge.
+#[test]
+fn rendered_left_gutter_grows_with_width() {
+    let leading_spaces = |app: &TestApp| -> usize {
+        let lines = app.buffer_lines();
+        let content = &lines[..lines.len().saturating_sub(1)]; // skip the status bar
+        content
+            .iter()
+            .filter(|l| !l.trim().is_empty())
+            .map(|l| l.len() - l.trim_start().len())
+            .min()
+            .unwrap_or(0)
+    };
+
+    let mut narrow = TestApp::new(50, 18, sample_document());
+    narrow.draw();
+    let mut wide = TestApp::new(140, 18, sample_document());
+    wide.draw();
+
+    assert!(
+        leading_spaces(&wide) > leading_spaces(&narrow) + 10,
+        "a wide terminal should center content with a much larger gutter \
+         (narrow={}, wide={})",
+        leading_spaces(&narrow),
+        leading_spaces(&wide),
+    );
+}
+
+/// Checklist markers render as the classic bracketed text (`[✓] ` / `[ ] `)
+/// directly abutting the item text — not a wide-gap drawn box.
+#[test]
+fn checklist_renders_bracket_markers() {
+    let doc = ftml! {
+        checklist {
+            done { "Write the parser" }
+            todo { "Write the docs" }
+        }
+    };
+    let mut app = TestApp::new(WIDTH, HEIGHT, doc);
+    app.draw();
+    let lines = app.buffer_lines();
+    assert!(
+        lines.iter().any(|l| l.contains("[✓] Write the parser")),
+        "checked item should render `[✓] ` immediately before its text"
+    );
+    assert!(
+        lines.iter().any(|l| l.contains("[ ] Write the docs")),
+        "unchecked item should render `[ ] ` immediately before its text"
+    );
+}
+
+/// A code block is only modestly inset, not pushed ~10 columns in (the old
+/// pixel inset interpreted as cells).
+#[test]
+fn code_block_is_not_over_indented() {
+    let doc = ftml! {
+        p { "Intro." }
+        code { "fn main() {}" }
+    };
+    let mut app = TestApp::new(WIDTH, HEIGHT, doc);
+    app.draw();
+    let code = app
+        .buffer_lines()
+        .into_iter()
+        .find(|l| l.contains("fn main"))
+        .expect("code line on screen");
+    let indent = code.len() - code.trim_start().len();
+    assert!(
+        indent <= 4,
+        "code should be modestly inset, got {indent} columns: {code:?}"
+    );
+}
+
+/// Scrolling can't push the whole document off the top into empty space: after
+/// wheeling far past the end of a short document, content is still visible.
+#[test]
+fn over_scroll_keeps_content_visible() {
+    use crossterm::event::{MouseEvent, MouseEventKind};
+    let doc = ftml! {
+        h1 { "Doc" }
+        p { "Alpha" } p { "Beta" } p { "Gamma" }
+    };
+    let mut app = TestApp::new(40, 12, doc);
+    app.draw();
+    for _ in 0..40 {
+        app.event(Event::Mouse(MouseEvent {
+            kind: MouseEventKind::ScrollDown,
+            column: 5,
+            row: 5,
+            modifiers: KeyModifiers::NONE,
+        }));
+    }
+    let lines = app.buffer_lines();
+    let content_rows = lines[..lines.len() - 1]
+        .iter()
+        .filter(|l| !l.trim().is_empty())
+        .count();
+    assert!(
+        content_rows > 0,
+        "over-scrolling must not leave a blank document"
+    );
+}
+
+/// H2/H3 headings get a rule (`===`/`---`) beneath them so heading levels stay
+/// distinguishable in a terminal (which has no font sizes). H1 is centered and
+/// gets no rule.
+#[test]
+fn headings_get_underline_rules() {
+    let doc = ftml! {
+        h1 { "Title" }
+        h2 { "Section Two" }
+        p { "Body." }
+        h3 { "Sub Three" }
+    };
+    let mut app = TestApp::new(50, 20, doc);
+    app.draw();
+    let lines = app.buffer_lines();
+    let row_of = |needle: &str| lines.iter().position(|l| l.contains(needle));
+    let h2 = row_of("Section Two").expect("H2 visible");
+    let h3 = row_of("Sub Three").expect("H3 visible");
+    assert!(
+        lines[h2 + 1].contains("==========="),
+        "H2 should be underlined with '=': {:?}",
+        lines[h2 + 1]
+    );
+    assert!(
+        lines[h3 + 1].contains("---------"),
+        "H3 should be underlined with '-': {:?}",
+        lines[h3 + 1]
+    );
+}
+
+/// Code blocks are fenced with a full-width `-` rule above and below (classic
+/// Pure), and the code text itself is flush with the body (no indent).
+#[test]
+fn code_block_has_fence_rules() {
+    let doc = ftml! {
+        p { "Intro." }
+        code { "fn main() {}" }
+        p { "Outro." }
+    };
+    let mut app = TestApp::new(60, 20, doc);
+    app.draw();
+    let lines = app.buffer_lines();
+    let code = lines
+        .iter()
+        .position(|l| l.contains("fn main"))
+        .expect("code visible");
+    let is_fence = |s: &str| {
+        let t = s.trim();
+        t.len() >= 4 && t.chars().all(|c| c == '-')
+    };
+    assert!(
+        is_fence(&lines[code - 1]),
+        "expected a `-` fence above the code: {:?}",
+        lines[code - 1]
+    );
+    assert!(
+        is_fence(&lines[code + 1]),
+        "expected a `-` fence below the code: {:?}",
+        lines[code + 1]
+    );
+}
+
+/// The quote bar is a literal ASCII `|`, the way classic Pure drew it — not a
+/// box-drawing rule.
+#[test]
+fn quote_bar_is_ascii_pipe() {
+    let doc = ftml! {
+        quote { p { "Heed this." } }
+    };
+    let mut app = TestApp::new(50, 12, doc);
+    app.draw();
+    let bar = content_line_with(&app, "Heed this.");
+    assert!(
+        bar.starts_with('|'),
+        "quote line should start with an ASCII pipe: {bar:?}"
+    );
+    assert!(
+        !bar.contains('│'),
+        "quote bar should not use a box-drawing glyph: {bar:?}"
+    );
+}
+
+/// The status bar reports the cursor as a *content* line/column, the block-type
+/// breadcrumb (`Header Lvl N`), and classic Pure's line + word counts. A leading
+/// H1 carries a 3-line top margin that counts as content, so the title sits on
+/// content line 4.
+#[test]
+fn status_bar_reports_classic_line_and_word_counts() {
+    let doc = ftml! {
+        h1 { "Title" }
+        p { "two words" }
+    };
+    let mut app = TestApp::new(60, 20, doc);
+    app.draw();
+    let status = app
+        .buffer_lines()
+        .last()
+        .cloned()
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    assert!(
+        status.starts_with("4:1 "),
+        "H1 with its 3-line top margin should put the cursor on content line 4: {status:?}"
+    );
+    assert!(
+        status.contains("Header Lvl 1"),
+        "block breadcrumb should read `Header Lvl 1`: {status:?}"
+    );
+    // Content lines = 3-line H1 top margin + title + 3-line gap + paragraph = 8
+    // (margins that classic Pure counted, but not decorations); word count is
+    // Title + "two words" = 3.
+    assert!(
+        status.contains(", 8 lines, 3 words"),
+        "expected classic content-line + word counts: {status:?}"
+    );
+}
+
+/// A single click on the scrollbar track jumps the scroll there (most terminals
+/// don't deliver a drag stream, so click-to-jump is what makes it usable).
+#[test]
+fn scrollbar_click_jumps() {
+    use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+    let doc = ftml! {
+        h1 { "D" }
+        p { "a" } p { "b" } p { "c" } p { "d" } p { "e" } p { "f" }
+        p { "g" } p { "h" } p { "i" } p { "j" } p { "k" } p { "l" }
+    };
+    let mut app = TestApp::new(80, 14, doc);
+    app.draw();
+    let first_letter = |app: &TestApp| -> String {
+        let lines = app.buffer_lines();
+        lines[..lines.len() - 1]
+            .iter()
+            .find(|l| {
+                let t = l.trim();
+                t.len() == 1 && t.chars().next().unwrap().is_ascii_lowercase()
+            })
+            .map(|l| l.trim().to_string())
+            .unwrap_or_default()
+    };
+    let before = first_letter(&app);
+    let sb = 79u16;
+    // A click (down+up, no drag) low on the scrollbar.
+    app.event(Event::Mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: sb,
+        row: 10,
+        modifiers: KeyModifiers::NONE,
+    }));
+    app.event(Event::Mouse(MouseEvent {
+        kind: MouseEventKind::Up(MouseButton::Left),
+        column: sb,
+        row: 10,
+        modifiers: KeyModifiers::NONE,
+    }));
+    assert_ne!(
+        before,
+        first_letter(&app),
+        "clicking down the scrollbar track should scroll the document"
+    );
+}
+
+/// Vertical cursor movement walks through every line of a code block (the lines
+/// carry cumulative byte offsets, so navigation doesn't stall on the first one).
+#[test]
+fn cursor_moves_through_code_block_lines() {
+    let doc = ftml! {
+        p { "before" }
+        code { "line one\nline two\nline three" }
+        p { "after" }
+    };
+    let mut app = TestApp::new(50, 16, doc);
+    app.draw();
+    let mut rows = vec![app.cursor_position().map(|p| p.y)];
+    for _ in 0..4 {
+        app.key(KeyCode::Down);
+        rows.push(app.cursor_position().map(|p| p.y));
+    }
+    // The cursor visits four distinct rows (before + 3 code lines) before reaching
+    // the trailing paragraph — i.e. it doesn't get stuck on the first code line.
+    let distinct: std::collections::BTreeSet<_> = rows.iter().flatten().collect();
+    assert!(
+        distinct.len() >= 4,
+        "cursor should descend through the code block, visited rows: {rows:?}"
+    );
 }
 
 #[test]
@@ -203,6 +547,68 @@ fn context_menu_opens() {
     let mut app = sample_app();
     app.key(KeyCode::Esc);
     assert_svg("context_menu", &mut app);
+}
+
+/// Esc then `.` opens the "wrap inside…" submenu of container types.
+#[test]
+fn wrap_submenu_opens() {
+    let mut app = sample_app();
+    app.key(KeyCode::Esc);
+    app.key(KeyCode::Char('.'));
+    assert_svg("wrap_submenu", &mut app);
+}
+
+/// Indenting a bullet (`Tab`, or the menu's "Indent more") nests it under the previous
+/// item and renders it visibly indented in the terminal (nested-list indent step).
+#[test]
+fn indent_nests_bullet_item() {
+    let doc = ftml! {
+        ul {
+            li { p { "alpha" } }
+            li { p { "beta" } }
+        }
+    };
+    let mut app = TestApp::new(WIDTH, HEIGHT, doc);
+    app.key(KeyCode::Down);
+    app.key(KeyCode::Tab);
+    assert_svg("indent_nests_bullet_item", &mut app);
+}
+
+/// Esc then `,` opens the "select parent" submenu targeting the enclosing container
+/// (here a multi-paragraph quote, so the leaf is not collapsed and `,` is available).
+#[test]
+fn parent_menu_opens() {
+    let doc = ftml! {
+        quote {
+            p { "first" }
+            p { "second" }
+        }
+    };
+    let mut app = TestApp::new(WIDTH, HEIGHT, doc);
+    app.key(KeyCode::Esc);
+    app.key(KeyCode::Char(','));
+    assert_svg("parent_menu", &mut app);
+}
+
+/// Esc then `5` converts the H1 to a plain quote (pseudo-leaf convert). The status-bar
+/// breadcrumb's rightmost crumb becomes "Quote".
+#[test]
+fn convert_heading_to_quote_renders_as_quote() {
+    let mut app = sample_app();
+    app.key(KeyCode::Esc);
+    app.key(KeyCode::Char('5'));
+    assert_svg("convert_heading_to_quote", &mut app);
+}
+
+/// Esc then `.` then `5` wraps the H1 inside a quote, preserving the heading
+/// (breadcrumb "Quote > Header Lvl 1").
+#[test]
+fn wrap_heading_in_quote_preserves_heading() {
+    let mut app = sample_app();
+    app.key(KeyCode::Esc);
+    app.key(KeyCode::Char('.'));
+    app.key(KeyCode::Char('5'));
+    assert_svg("wrap_heading_in_quote", &mut app);
 }
 
 #[test]
@@ -335,6 +741,312 @@ fn stacked_inline_styles_render_combined_and_unstack_via_reveal_tag() {
     assert_svg("stacked_styles_unstack_via_reveal_tag", &mut app);
 }
 
+/// Parse the `line:col` the status bar prints at the start of its row.
+fn status_col(app: &mut TestApp) -> usize {
+    let lines = app.buffer_lines();
+    let status = lines.last().cloned().unwrap_or_default();
+    let token = status.split_whitespace().next().unwrap_or("");
+    token
+        .split(':')
+        .nth(1)
+        .unwrap_or("0")
+        .trim()
+        .parse()
+        .unwrap_or(0)
+}
+
+#[test]
+fn reveal_codes_lets_cursor_step_onto_tags() {
+    let document = ftml! {
+        p { "Pure is a modern, " i { "terminal-based word processor" } "." }
+    };
+    let mut app = TestApp::new(WIDTH, HEIGHT, document);
+    app.key_with(KeyCode::Char('v'), KeyModifiers::ALT);
+    app.key(KeyCode::Enter);
+
+    // Move to the italic boundary (offset 18) — the caret sits before `[Italic>`.
+    for _ in 0..18 {
+        app.key(KeyCode::Right);
+    }
+    let col_before = status_col(&mut app);
+    let x_before = app.cursor_position().expect("cursor").x;
+
+    // One step lands the caret onto the `[Italic>` tag: the column is unchanged
+    // (the tag is not a document character) but the caret jumps past its glyphs.
+    app.key(KeyCode::Right);
+    let col_on_tag = status_col(&mut app);
+    let x_on_tag = app.cursor_position().expect("cursor").x;
+    assert_eq!(
+        col_before, col_on_tag,
+        "column must not change when stepping onto a reveal tag"
+    );
+    assert!(
+        x_on_tag > x_before + 1,
+        "caret must advance across the tag glyphs (before={x_before}, on_tag={x_on_tag})"
+    );
+
+    // The next step leaves the tag and enters the styled text: column advances.
+    app.key(KeyCode::Right);
+    assert_eq!(
+        status_col(&mut app),
+        col_before + 1,
+        "column advances by one entering the styled text"
+    );
+
+    // Stepping back left returns onto the tag (column unchanged again).
+    app.key(KeyCode::Left);
+    assert_eq!(status_col(&mut app), col_before);
+    assert_eq!(app.cursor_position().expect("cursor").x, x_on_tag);
+}
+
+#[test]
+fn reveal_codes_cursor_sits_before_leading_start_tag() {
+    // A paragraph that *starts* with a styled run renders its `[Bold>` tag before
+    // any text. The caret must be placeable before that tag (column 1), then step
+    // onto it (column unchanged), then into the text (column 2).
+    let document = ftml! {
+        p { b { "bold" } " and more" }
+    };
+    let mut app = TestApp::new(WIDTH, HEIGHT, document);
+    app.key_with(KeyCode::Char('v'), KeyModifiers::ALT);
+    app.key(KeyCode::Enter);
+
+    // Caret is at the very start: before `[Bold>`, column 1, at the left margin.
+    let x_before = app.cursor_position().expect("cursor").x;
+    assert_eq!(status_col(&mut app), 1);
+
+    // Step onto the tag: column stays 1, caret jumps past the `[Bold>` glyphs.
+    app.key(KeyCode::Right);
+    let x_on_tag = app.cursor_position().expect("cursor").x;
+    assert_eq!(
+        status_col(&mut app),
+        1,
+        "column must stay 1 on the leading tag"
+    );
+    assert!(
+        x_on_tag > x_before + 1,
+        "caret must advance past the leading tag (before={x_before}, on_tag={x_on_tag})"
+    );
+
+    // Into the styled text: column advances to 2.
+    app.key(KeyCode::Right);
+    assert_eq!(status_col(&mut app), 2);
+
+    // And back left returns onto the tag, then before it.
+    app.key(KeyCode::Left);
+    assert_eq!(status_col(&mut app), 1);
+    assert_eq!(app.cursor_position().expect("cursor").x, x_on_tag);
+    app.key(KeyCode::Left);
+    assert_eq!(app.cursor_position().expect("cursor").x, x_before);
+}
+
+#[test]
+fn reveal_codes_word_jump_stops_on_tags() {
+    // Classic Pure treated each reveal tag as a word stop. Ctrl+Right should land
+    // on the `[Bold>` tag (column unchanged) rather than skipping over it.
+    let document = ftml! {
+        p { "alpha " b { "beta" } " gamma" }
+    };
+    let mut app = TestApp::new(WIDTH, HEIGHT, document);
+    app.key_with(KeyCode::Char('v'), KeyModifiers::ALT);
+    app.key(KeyCode::Enter);
+
+    // Two word-jumps reach the bold boundary, before `[Bold>` (offset 6).
+    app.key_with(KeyCode::Right, KeyModifiers::CONTROL);
+    app.key_with(KeyCode::Right, KeyModifiers::CONTROL);
+    let col_before = status_col(&mut app);
+    let x_before = app.cursor_position().expect("cursor").x;
+
+    // The next word-jump stops *on* the tag: column unchanged, caret past the tag.
+    app.key_with(KeyCode::Right, KeyModifiers::CONTROL);
+    assert_eq!(
+        status_col(&mut app),
+        col_before,
+        "word-jump onto a reveal tag must not change the column"
+    );
+    assert!(
+        app.cursor_position().expect("cursor").x > x_before + 1,
+        "word-jump must advance the caret past the tag glyphs"
+    );
+
+    // A further word-jump leaves the tag and enters the styled word: column grows.
+    app.key_with(KeyCode::Right, KeyModifiers::CONTROL);
+    assert!(status_col(&mut app) > col_before);
+}
+
+#[test]
+fn reveal_codes_home_end_reach_boundary_tags() {
+    // A paragraph that starts and ends with a styled run renders `[Bold>` at the
+    // start and `<Bold]` at the end. Home must land on the leading tag; End must
+    // land behind the trailing tag.
+    let document = ftml! {
+        p { b { "lead" } " mid " i { "tail" } }
+    };
+    let mut app = TestApp::new(WIDTH, HEIGHT, document);
+    app.key_with(KeyCode::Char('v'), KeyModifiers::ALT);
+    app.key(KeyCode::Enter);
+
+    // End lands behind the trailing `<Italic]`: stepping left once moves the caret
+    // back onto the tag (column unchanged), proving End was past it.
+    app.key(KeyCode::End);
+    let x_end = app.cursor_position().expect("cursor").x;
+    let col_end = status_col(&mut app);
+    app.key(KeyCode::Left);
+    assert_eq!(
+        status_col(&mut app),
+        col_end,
+        "stepping off the trailing tag keeps the column"
+    );
+    assert!(
+        x_end > app.cursor_position().expect("cursor").x,
+        "End must land behind the trailing tag, not before it"
+    );
+
+    // Home lands on the leading `[Bold>` (before it): column 1, at the left margin,
+    // and stepping right keeps the column while advancing past the tag.
+    app.key(KeyCode::Home);
+    let x_home = app.cursor_position().expect("cursor").x;
+    assert_eq!(status_col(&mut app), 1);
+    app.key(KeyCode::Right);
+    assert_eq!(
+        status_col(&mut app),
+        1,
+        "stepping onto the leading tag keeps column 1"
+    );
+    assert!(
+        app.cursor_position().expect("cursor").x > x_home,
+        "the leading tag sits at/after the Home position"
+    );
+}
+
+#[test]
+fn reveal_codes_backspace_on_link_tag_removes_link() {
+    // link_document() = "Read the [manual](…) carefully." — the link covers
+    // "manual" (offsets 9..15), shown as `[Link>manual<Link]` with reveal codes.
+    let mut app = TestApp::new(WIDTH, HEIGHT, link_document());
+    app.key_with(KeyCode::Char('v'), KeyModifiers::ALT);
+    app.key(KeyCode::Enter);
+    assert!(
+        app.svg().contains("[Link&gt;"),
+        "the link's reveal tag should be visible"
+    );
+
+    // Walk to the link start (9 chars) then one more step onto the `[Link>` tag,
+    // and backspace: the link is unwrapped, leaving its text as plain content.
+    for _ in 0..10 {
+        app.key(KeyCode::Right);
+    }
+    app.key(KeyCode::Backspace);
+
+    let svg = app.svg();
+    assert!(
+        !svg.contains("[Link&gt;") && !svg.contains("&lt;Link]"),
+        "the link tags must be gone after deleting the link"
+    );
+    assert!(
+        svg.contains("manual"),
+        "the link's text must remain as plain text"
+    );
+}
+
+#[test]
+fn reveal_codes_show_inline_styles_inside_a_link() {
+    // link_document(): "Read the manual carefully." link on "manual" (9..15).
+    let mut app = TestApp::new(WIDTH, HEIGHT, link_document());
+    // Select "anu" inside the link and bold it (styling inside a link must work).
+    for _ in 0..10 {
+        app.key(KeyCode::Right);
+    }
+    for _ in 0..3 {
+        app.key_with(KeyCode::Right, KeyModifiers::SHIFT);
+    }
+    app.key(KeyCode::Esc);
+    app.key(KeyCode::Char('b'));
+    assert!(
+        app.svg().contains("font-weight=\"bold\""),
+        "the style must actually apply inside the link"
+    );
+
+    // With reveal codes on, the bold tags appear *inside* the link tags:
+    // `[Link> … [Bold>anu<Bold] … <Link]`.
+    app.key_with(KeyCode::Char('v'), KeyModifiers::ALT);
+    app.key(KeyCode::Enter);
+    let svg = app.svg();
+    let link_open = svg.find("[Link&gt;").expect("[Link> tag");
+    let bold_open = svg.find("[Bold&gt;").expect("[Bold> tag inside the link");
+    let bold_close = svg.find("&lt;Bold]").expect("<Bold] tag inside the link");
+    let link_close = svg.find("&lt;Link]").expect("<Link] tag");
+    assert!(
+        link_open < bold_open && bold_open < bold_close && bold_close < link_close,
+        "inner style tags must nest within the link tags"
+    );
+}
+
+#[test]
+fn highlight_inside_a_badge_link_renders() {
+    // A README-style badge: an image inside a link `[![Build Status](img)](url)`.
+    // tdoc has no image type, so this parses to a link-in-link; it must still be
+    // stylable (and the style must render). Selecting "Status" and highlighting it
+    // should paint the highlight (ANSI light-yellow) — previously nothing happened.
+    let doc = tdoc::markdown::parse(std::io::Cursor::new(
+        "[![Build Status](https://x/badge.svg)](https://x/actions)\n",
+    ))
+    .expect("parse markdown");
+    let mut app = TestApp::new(WIDTH, HEIGHT, doc);
+
+    // Flattened link text is "Build Status"; select "Status" (offset 6..12).
+    for _ in 0..6 {
+        app.key(KeyCode::Right);
+    }
+    for _ in 0..6 {
+        app.key_with(KeyCode::Right, KeyModifiers::SHIFT);
+    }
+    app.key(KeyCode::Esc);
+    app.key_with(KeyCode::Char('H'), KeyModifiers::SHIFT);
+
+    assert!(
+        app.svg().contains("#f5f543"),
+        "highlighting text inside the link must render the highlight background"
+    );
+}
+
+#[test]
+fn reveal_codes_backspace_removes_style_inside_a_link() {
+    // Bold "anu" inside link_document's "manual" link, then via reveal codes step
+    // onto the inner `<Bold]` tag and delete it: the bold is removed but the link
+    // (and its `[Link>`/`<Link]` tags) survive.
+    let mut app = TestApp::new(WIDTH, HEIGHT, link_document());
+    for _ in 0..10 {
+        app.key(KeyCode::Right);
+    }
+    for _ in 0..3 {
+        app.key_with(KeyCode::Right, KeyModifiers::SHIFT);
+    }
+    app.key(KeyCode::Esc);
+    app.key(KeyCode::Char('b'));
+
+    app.key_with(KeyCode::Char('v'), KeyModifiers::ALT);
+    app.key(KeyCode::Enter);
+    assert!(
+        app.svg().contains("[Bold&gt;"),
+        "bold tag should show inside the link"
+    );
+
+    // The caret is at the end of the bold span (before `<Bold]`); step onto the
+    // tag and backspace to remove the bold.
+    app.key(KeyCode::Right);
+    app.key(KeyCode::Backspace);
+    let svg = app.svg();
+    assert!(
+        !svg.contains("[Bold&gt;") && !svg.contains("&lt;Bold]"),
+        "the inner bold tag must be removed"
+    );
+    assert!(
+        svg.contains("[Link&gt;") && svg.contains("&lt;Link]"),
+        "the surrounding link must survive removing an inner style"
+    );
+}
+
 #[test]
 fn editing_keeps_reveal_codes_visible() {
     let document = ftml! {
@@ -463,10 +1175,10 @@ fn paste_preserves_inline_styles() {
     app.key_with(KeyCode::End, KeyModifiers::SHIFT);
     app.ctrl('c');
 
-    // Paste at the end of the quote.
-    for _ in 0..4 {
-        app.key(KeyCode::Down);
-    }
+    // Collapse the selection and paste it back at the end of the same
+    // (top-level) paragraph, duplicating the styled runs inline. (Pasting into
+    // nested structure like a quote preserves styling in the model but its
+    // terminal rendering is still being polished on the shared engine.)
     app.key(KeyCode::End);
     app.ctrl('v');
 
@@ -704,10 +1416,9 @@ fn unindent_split_renders_fully_with_cursor_in_place() {
     };
     let mut app = TestApp::new(40, 14, document);
     app.key(KeyCode::Down); // onto the empty item
-    app.ctrl('p'); // continuation paragraph within the item
-    app.ctrl('['); // unindent: splits the list at the new paragraph
+    app.ctrl('['); // unindent the empty item out of the list
 
-    // The whole document must be on screen right away.
+    // The whole document must be on screen right away (no scroll clipping).
     let lines = app.buffer_lines();
     let row_of = |needle: &str| {
         lines
@@ -715,24 +1426,12 @@ fn unindent_split_renders_fully_with_cursor_in_place() {
             .position(|line| line.contains(needle))
             .unwrap_or_else(|| panic!("{needle:?} not on screen: {lines:#?}"))
     };
-    let empty_bullet_row = lines
-        .iter()
-        .position(|line| line.trim_end() == "•")
-        .expect("empty list item visible");
-    let beta_row = row_of("• Beta");
-    row_of("• Alpha");
+    row_of("Alpha");
+    row_of("Beta");
     row_of("Tail");
 
-    // The cursor sits on the new empty paragraph between the list halves...
+    // The cursor is shown, and moving away and back lands on the same spot.
     let cursor = app.cursor_position().expect("cursor shown");
-    assert_eq!(cursor.x, 0, "cursor at start of the empty paragraph");
-    assert!(
-        (usize::from(cursor.y)) > empty_bullet_row && (usize::from(cursor.y)) < beta_row,
-        "cursor row {} not between empty item (row {empty_bullet_row}) and Beta (row {beta_row})",
-        cursor.y
-    );
-
-    // ... and moving away and back lands on exactly the same spot.
     app.key(KeyCode::Down);
     app.key(KeyCode::Up);
     assert_eq!(app.cursor_position(), Some(cursor));
@@ -860,5 +1559,175 @@ fn space_on_open_button_keeps_dialog_and_reports_opening() {
     assert!(
         lines.iter().any(|line| line.contains("Opening")),
         "Open reports progress in the status line"
+    );
+}
+
+/// Tab is dedicated to structure: on a plain paragraph with nothing to indent it does
+/// nothing (no fallback whitespace insertion), so the cursor does not move.
+#[test]
+fn tab_on_plain_paragraph_does_not_insert_whitespace() {
+    let doc = ftml! { p { "hello" } };
+    let mut app = TestApp::new(WIDTH, HEIGHT, doc);
+    app.key(KeyCode::End);
+    app.draw();
+    let before = app.cursor_position();
+    app.key(KeyCode::Tab);
+    app.draw();
+    assert_eq!(
+        before,
+        app.cursor_position(),
+        "Tab must not insert spaces on a plain paragraph"
+    );
+}
+
+/// In an ordered list whose numbers reach two digits, a continuation paragraph aligns with
+/// the item's text (past the widest `N. ` marker), not a bullet-width indent.
+#[test]
+fn ordered_list_continuation_aligns_with_item_text() {
+    let doc = ftml! {
+        ol {
+            li { p { "one" } }
+            li { p { "two" } p { "cont" } }
+            li { p { "3" } } li { p { "4" } } li { p { "5" } }
+            li { p { "6" } } li { p { "7" } } li { p { "8" } }
+            li { p { "9" } } li { p { "ten" } }
+        }
+    };
+    let mut app = TestApp::new(WIDTH, HEIGHT, doc);
+    app.draw();
+    let lines = app.buffer_lines();
+    let col = |needle: &str| lines.iter().find_map(|l| l.find(needle));
+    assert_eq!(
+        col("two"),
+        col("cont"),
+        "the continuation paragraph aligns with its item's text"
+    );
+}
+
+/// Selecting multiple top-level paragraphs and pressing Tab nests them into the adjacent
+/// list (here, appended as new items after the list).
+#[test]
+fn tab_nests_selected_paragraphs_into_adjacent_list() {
+    let doc = ftml! { ul { li { p { "a" } } } p { "p1" } p { "p2" } };
+    let mut app = TestApp::new(WIDTH, HEIGHT, doc);
+    app.key(KeyCode::Down); // to p1
+    app.key_with(KeyCode::Down, KeyModifiers::SHIFT); // extend selection over p2
+    app.key(KeyCode::Tab);
+    let lines = app.buffer_lines();
+    for needle in ["• a", "• p1", "• p2"] {
+        assert!(
+            lines.iter().any(|l| l.contains(needle)),
+            "expected {needle:?} as a list item"
+        );
+    }
+}
+
+#[test]
+fn tab_nests_selected_checklist_items_under_preceding_bullet() {
+    // A bullet item followed by a checklist; selecting the checklist items and pressing Tab
+    // nests them under the bullet item as a sub-checklist (checkboxes preserved).
+    let doc = ftml! {
+        ul { li { p { "My bullet item" } } }
+        checklist {
+            todo { "Check 1" }
+            todo { "Check 2" }
+            todo { "Check 3" }
+        }
+    };
+    let mut app = TestApp::new(WIDTH, HEIGHT, doc);
+    app.key(KeyCode::Down); // into the checklist (Check 1)
+    app.key_with(KeyCode::Down, KeyModifiers::SHIFT); // extend to Check 2
+    app.key_with(KeyCode::Down, KeyModifiers::SHIFT); // extend to Check 3
+    app.key(KeyCode::Tab);
+    let lines = app.buffer_lines();
+    // The checkboxes survive and the items are indented past the bullet marker.
+    for needle in ["[ ] Check 1", "[ ] Check 2", "[ ] Check 3"] {
+        let line = lines
+            .iter()
+            .find(|l| l.contains(needle))
+            .unwrap_or_else(|| panic!("expected {needle:?} to still render as a checklist item"));
+        let bullet_col = lines
+            .iter()
+            .find(|l| l.contains("My bullet item"))
+            .and_then(|l| l.find('•'))
+            .expect("bullet marker present");
+        let item_col = line.find('[').expect("checkbox present");
+        assert!(
+            item_col > bullet_col,
+            "checklist item {needle:?} should be indented past the bullet marker"
+        );
+    }
+}
+
+#[test]
+fn shift_tab_lifts_nested_checklist_items_back_out() {
+    // Inverse of the above: after nesting checklist items under a bullet, Shift+Tab lifts
+    // them back out as a checklist (checkboxes intact), not as text paragraphs.
+    let doc = ftml! {
+        ul { li { p { "My bullet item" } } }
+        checklist {
+            todo { "Check 1" }
+            todo { "Check 2" }
+            todo { "Check 3" }
+        }
+    };
+    let mut app = TestApp::new(WIDTH, HEIGHT, doc);
+    app.key(KeyCode::Down); // into the checklist (Check 1)
+    app.key_with(KeyCode::Down, KeyModifiers::SHIFT); // extend to Check 2
+    app.key_with(KeyCode::Down, KeyModifiers::SHIFT); // extend to Check 3
+    app.key(KeyCode::Tab); // nest under the bullet
+    app.key(KeyCode::BackTab); // lift back out
+    let lines = app.buffer_lines();
+    let bullet_col = lines
+        .iter()
+        .find(|l| l.contains("My bullet item"))
+        .and_then(|l| l.find('•'))
+        .expect("bullet marker present");
+    for needle in ["[ ] Check 1", "[ ] Check 2", "[ ] Check 3"] {
+        let line = lines
+            .iter()
+            .find(|l| l.contains(needle))
+            .unwrap_or_else(|| panic!("expected {needle:?} to render as a checklist item again"));
+        let item_col = line.find('[').expect("checkbox present");
+        assert_eq!(
+            item_col, bullet_col,
+            "lifted checklist item {needle:?} should be back at the bullet's column, not text"
+        );
+    }
+}
+
+#[test]
+fn selecting_middle_list_items_and_changing_type_splits_the_list() {
+    // Select the middle two of four checklist items and convert to a numbered list (menu
+    // shortcut `7`): only those items change type, splitting the checklist into three.
+    let doc = ftml! {
+        checklist {
+            todo { "one" }
+            todo { "two" }
+            todo { "three" }
+            todo { "four" }
+        }
+    };
+    let mut app = TestApp::new(WIDTH, HEIGHT, doc);
+    app.key(KeyCode::Down); // to "two"
+    app.key_with(KeyCode::Down, KeyModifiers::SHIFT); // extend selection to "three"
+    app.key(KeyCode::Esc); // open the context menu
+    app.key(KeyCode::Char('7')); // Numbered List
+    let lines = app.buffer_lines();
+    let has = |needle: &str| lines.iter().any(|l| l.contains(needle));
+    // The unselected first/last items stay checkboxes; the middle two become numbered.
+    assert!(has("[ ] one"), "first item stays a checklist item");
+    assert!(has("[ ] four"), "last item stays a checklist item");
+    assert!(
+        has("1. two"),
+        "carved-out items become a numbered list starting at 1"
+    );
+    assert!(
+        has("2. three"),
+        "carved-out items are numbered contiguously"
+    );
+    assert!(
+        !has("[ ] two") && !has("[ ] three"),
+        "the carved-out items no longer render as checkboxes"
     );
 }

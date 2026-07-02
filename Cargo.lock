@@ -1026,6 +1026,7 @@ dependencies = [
  "insta",
  "ratatui",
  "resvg",
+ "rutle",
  "tdoc",
  "unicode-width 0.2.0",
 ]
@@ -1199,6 +1200,14 @@ dependencies = [
  "unicode-ccc",
  "unicode-properties",
  "unicode-script",
+]
+
+[[package]]
+name = "rutle"
+version = "0.1.0"
+dependencies = [
+ "tdoc",
+ "unicode-segmentation",
 ]
 
 [[package]]
