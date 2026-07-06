@@ -20,6 +20,7 @@ use crossterm::{
 use ratatui::{Terminal, backend::CrosstermBackend};
 
 use pure_tui::app::{App, DocumentFormat, load_document};
+use pure_tui::config::Config;
 use tdoc::Document;
 
 fn main() -> Result<()> {
@@ -39,6 +40,7 @@ fn run() -> Result<()> {
         ),
     };
     let mut app = App::new(document, path, format, initial_status);
+    app.set_config(Config::load());
 
     enable_raw_mode().context("failed to enable raw mode")?;
     let mut stdout = io::stdout();

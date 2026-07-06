@@ -40,6 +40,7 @@ use rutle::{BlockType, DocumentPosition, Renderer as StructuredRichDisplay, Undo
 use tdoc::ftml::{Writer, parse};
 use tdoc::{Document, InlineStyle, ParagraphType, gemini, html, markdown};
 
+use crate::config::Config;
 use crate::file_dialog::{FileDialogKind, FileDialogResult, FileDialogState};
 use crate::link_dialog::{LinkDialogState, LinkField};
 use crate::menu_bar::{
@@ -682,6 +683,9 @@ pub struct App {
     /// revision changes (i.e. after an edit), not on every cursor move/redraw.
     word_count_cache: Option<(u64, usize)>,
     interactive: bool,
+    /// User configuration (loaded from the TOML config file at startup;
+    /// defaults until [`App::set_config`] is called).
+    config: Config,
 }
 
 impl App {
@@ -727,7 +731,14 @@ impl App {
             content_lines: 1,
             word_count_cache: None,
             interactive: true,
+            config: Config::default(),
         }
+    }
+
+    /// Apply user configuration loaded from disk. Call once after [`App::new`],
+    /// before the first draw; tests keep the defaults.
+    pub fn set_config(&mut self, config: Config) {
+        self.config = config;
     }
 
     /// Status-bar word count, memoized on the editor's revision so the
@@ -791,7 +802,9 @@ impl App {
         let area = self.last_text_area;
         let (page_bg, default_fg) = self.palette();
         let mut buf = Buffer::empty(area);
-        let mut ctx = RatatuiDrawContext::new(&mut buf, area).with_palette(page_bg, default_fg);
+        let mut ctx = RatatuiDrawContext::new(&mut buf, area)
+            .with_palette(page_bg, default_fg)
+            .with_caret_affinity(self.config.caret_affinity);
         f(&mut self.display, &mut ctx)
     }
 
@@ -1498,7 +1511,9 @@ impl App {
         let cursor_col: Option<usize>;
         {
             let buf = frame.buffer_mut();
-            let mut ctx = RatatuiDrawContext::new(buf, area).with_palette(page_bg, default_fg);
+            let mut ctx = RatatuiDrawContext::new(buf, area)
+                .with_palette(page_bg, default_fg)
+                .with_caret_affinity(self.config.caret_affinity);
             if follow {
                 self.display.ensure_cursor_visible(&mut ctx);
             }

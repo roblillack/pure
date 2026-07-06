@@ -200,6 +200,10 @@ pub struct RatatuiDrawContext<'a> {
     /// Clip regions (engine coordinates); effective clip is their intersection.
     clip: Vec<(i32, i32, i32, i32)>,
     focus: bool,
+    /// Whether to report caret-affinity support to the engine (see
+    /// [`DrawContext::supports_caret_affinity`]). Driven by the user's config;
+    /// defaults to on.
+    caret_affinity: bool,
 }
 
 impl<'a> RatatuiDrawContext<'a> {
@@ -215,11 +219,19 @@ impl<'a> RatatuiDrawContext<'a> {
             default_fg: theme.plain_text.font_color,
             clip: Vec::new(),
             focus: true,
+            caret_affinity: true,
         }
     }
 
     pub fn with_focus(mut self, focus: bool) -> Self {
         self.focus = focus;
+        self
+    }
+
+    /// Enable or disable reporting caret-affinity support to the engine (from
+    /// the user's [`crate::config::Config::caret_affinity`]).
+    pub fn with_caret_affinity(mut self, enabled: bool) -> Self {
+        self.caret_affinity = enabled;
         self
     }
 
@@ -487,6 +499,17 @@ impl DrawContext for RatatuiDrawContext<'_> {
 
     fn set_strikethrough(&mut self, on: bool) {
         self.deco.set(Modifier::CROSSED_OUT, on);
+    }
+
+    fn supports_caret_affinity(&self) -> bool {
+        // A terminal cell is indivisible and we drive the hardware caret via
+        // `set_cursor_position`, so we can't render an affinity *lean*. But the
+        // affinity *stop* still controls insertion at inline boundaries, which
+        // is useful, so we expose it as a user setting (`caret_affinity`)
+        // rather than force it off. When the config disables it, returning
+        // `false` makes the engine collapse the two stops into one, keeping
+        // Left/Right a plain grapheme step.
+        self.caret_affinity
     }
 
     fn draw_checkbox(&mut self, x: i32, y: i32, _size: i32, checked: bool) {

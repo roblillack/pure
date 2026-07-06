@@ -12,6 +12,13 @@ While pre-1.0, the minor version is bumped for breaking changes.
 
 ### Added
 
+- A TOML **configuration file** at `~/.config/pure/config.toml` on all platforms
+  (honoring `XDG_CONFIG_HOME`. It's optional — a missing, unreadable, or invalid
+  file falls back to defaults. The first setting is `caret_affinity` (default
+  `true`): whether the caret takes an extra stop at inline-style/link boundaries
+  so you can place it just inside vs. just outside a run and control whether
+  typed text joins it. Set `caret_affinity = false` to make Left/Right step
+  across such boundaries in a single press.
 - A general block model for containers (quotes and lists). The context menu gains
   a **Wrap inside…** entry (`Esc .`) that wraps the current paragraph or selection
   in a new container of your choice (Quote, Numbered/Bullet List, Checklist)

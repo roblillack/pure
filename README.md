@@ -178,6 +178,24 @@ pure webpage.html
 - F10 - Menu bar (Alt+F/E/I/O/V open a menu directly)
 - F9 - Reveal codes mode
 
+## Configuration
+
+Pure reads an optional TOML configuration file on startup, at
+`~/.config/pure/config.toml` on every platform (Linux, macOS, and Windows). If
+`XDG_CONFIG_HOME` is set, that directory is used instead.
+
+The file is entirely optional — if it is missing, unreadable, or contains an
+invalid setting, Pure falls back to its defaults and starts normally. Every
+setting has a default, so you only need to list the ones you want to change.
+
+```toml
+# Pause the caret at inline-style and link boundaries so you can place it just
+# inside vs. just outside a run — controlling whether text you type there joins
+# the run. Enabled by default. Set to false to make Left/Right step across such
+# boundaries in a single press instead.
+caret_affinity = true
+```
+
 ## What is FTML?
 
 **FTML (Formatted Text Markup Language)** is Pure's native document format — the one it round-trips losslessly. It's a strict subset of HTML5, designed for simplicity and ease of processing, so every FTML file is also valid HTML that opens in any web browser.

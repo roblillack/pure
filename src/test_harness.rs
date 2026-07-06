@@ -31,6 +31,7 @@ use ratatui::{
 use tdoc::Document;
 
 use crate::app::{App, DocumentFormat};
+use crate::config::Config;
 
 const FONT_SIZE: usize = 16;
 const DEFAULT_FG: &str = "#d8d8d8";
@@ -76,17 +77,37 @@ impl TestApp {
     /// Like [`TestApp::new`], but with a custom file path (shown in the
     /// status bar).
     pub fn with_path(width: u16, height: u16, document: Document, path: PathBuf) -> Self {
-        Self::build(width, height, document, Some(path))
+        Self::build(width, height, document, Some(path), Config::default())
     }
 
     /// Like [`TestApp::new`], but untitled — no backing file, as when Pure
     /// is started without an argument.
     pub fn untitled(width: u16, height: u16, document: Document) -> Self {
-        Self::build(width, height, document, None)
+        Self::build(width, height, document, None, Config::default())
     }
 
-    fn build(width: u16, height: u16, document: Document, path: Option<PathBuf>) -> Self {
+    /// Like [`TestApp::new`], but with an explicit [`Config`] applied before the
+    /// first draw (for exercising non-default settings such as disabled caret
+    /// affinity).
+    pub fn with_config(width: u16, height: u16, document: Document, config: Config) -> Self {
+        Self::build(
+            width,
+            height,
+            document,
+            Some(PathBuf::from("test.ftml")),
+            config,
+        )
+    }
+
+    fn build(
+        width: u16,
+        height: u16,
+        document: Document,
+        path: Option<PathBuf>,
+        config: Config,
+    ) -> Self {
         let mut app = App::new(document, path, DocumentFormat::Ftml, None);
+        app.set_config(config);
         app.set_interactive(false);
         let terminal = Terminal::new(TestBackend::new(width, height)).expect("test terminal");
         let mut test_app = Self { app, terminal };

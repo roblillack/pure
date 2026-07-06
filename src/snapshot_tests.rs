@@ -9,6 +9,7 @@ use crossterm::event::{Event, KeyCode, KeyModifiers};
 use tdoc::{Document, ftml};
 
 use super::TestApp;
+use crate::config::Config;
 
 const WIDTH: u16 = 72;
 const HEIGHT: u16 = 18;
@@ -1513,6 +1514,39 @@ fn link_dialog_focuses_save_button() {
         app.key(KeyCode::Tab);
     }
     assert_svg("link_dialog_save_focused", &mut app);
+}
+
+#[test]
+fn caret_affinity_setting_controls_the_boundary_stop() {
+    // The default (affinity on) pauses at the link boundary: after 11 Right
+    // presses one press has flipped affinity in place, so the caret is at
+    // column 11.
+    let mut on = TestApp::new(WIDTH, HEIGHT, link_document());
+    for _ in 0..11 {
+        on.key(KeyCode::Right);
+    }
+    assert!(
+        on.buffer_lines().iter().any(|line| line.contains("1:11")),
+        "affinity-on caret should pause at the link boundary (column 11)"
+    );
+
+    // Disabling it collapses the two stops, so the same 11 presses step 11 plain
+    // graphemes and reach column 12.
+    let mut off = TestApp::with_config(
+        WIDTH,
+        HEIGHT,
+        link_document(),
+        Config {
+            caret_affinity: false,
+        },
+    );
+    for _ in 0..11 {
+        off.key(KeyCode::Right);
+    }
+    assert!(
+        off.buffer_lines().iter().any(|line| line.contains("1:12")),
+        "affinity-off caret should cross the boundary in one step (column 12)"
+    );
 }
 
 #[test]
