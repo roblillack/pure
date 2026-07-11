@@ -56,7 +56,7 @@ toml = "0.8"
 # rendering). Switch back to a published version once tables ship in a release.
 tdoc = { version = "0.11.0", default-features = false }
 # Shared structured-editor/layout core (rutle).
-rutle = "0.3.0"
+rutle = "0.5.0"
 unicode-width = "0.2.0"
 
 [dev-dependencies]

@@ -1265,9 +1265,9 @@ dependencies = [
 
 [[package]]
 name = "rutle"
-version = "0.3.0"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e328ea0bdb3c60836e9e0a08759855f090589774936ad7708c2759815f6c8e2b"
+checksum = "1531044b3b721bc088150b669df06f56c1fbc38921f8bd415e37f1e8df4da417"
 dependencies = [
  "tdoc",
  "unicode-segmentation",
@@ -1493,9 +1493,9 @@ dependencies = [
 
 [[package]]
 name = "tdoc"
-version = "0.11.0"
+version = "0.11.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "63729d85e41d192a48b1c7c0ff9e1ad6501b320f01c6b1f8391c934a60fb26d9"
+checksum = "c5848e16c181f71224efacd083b87f4e6d23095bfa5b582d970c39b20a14a180"
 dependencies = [
  "atty",
  "clap",
