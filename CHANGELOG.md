@@ -12,127 +12,84 @@ While pre-1.0, the minor version is bumped for breaking changes.
 
 ### Added
 
-- A TOML **configuration file** at `~/.config/pure/config.toml` on all platforms
-  (honoring `XDG_CONFIG_HOME`. It's optional — a missing, unreadable, or invalid
-  file falls back to defaults. The first setting is `caret_affinity` (default
-  `true`): whether the caret takes an extra stop at inline-style/link boundaries
-  so you can place it just inside vs. just outside a run and control whether
-  typed text joins it. Set `caret_affinity = false` to make Left/Right step
-  across such boundaries in a single press.
-- A general block model for containers (quotes and lists). The context menu gains
-  a **Wrap inside…** entry (`Esc .`) that wraps the current paragraph or selection
-  in a new container of your choice (Quote, Numbered/Bullet List, Checklist)
-  while **preserving** the inner paragraph types — so you can, for example, nest a
-  heading inside a quote on purpose. Its counterpart, **Select parent** (`Esc ,`),
-  retargets a short menu at the enclosing container so you can convert it to
-  another kind, unwrap it, or climb another level up. `[` (and `Shift+Tab`) now
-  also lifts a paragraph out of a quote, not just out of a list.
-
-### Fixed
-
-- Converting a paragraph to a quote (`Esc 5`) now **converts** it — turning a
-  heading into a plain quote — instead of nesting the heading inside the quote,
-  matching how lists already behave. A container that holds a single text
-  paragraph now behaves like a leaf of the container's type for block-type
-  changes, so `Esc 5` (quote), `Esc 8` (bullet), `Esc 0` (text) round-trip
-  cleanly, and the status-bar breadcrumb's rightmost entry shows that effective
-  type. Converting a paragraph to a list now merges it with adjacent same-kind
-  lists into one list.
-- Changing the list type with a **selection spanning two or more items of one
-  list** now carves just those items out into a list of the chosen kind, splitting
-  the original list into two or three, instead of converting the whole list. (A
-  plain cursor still converts the whole list.)
-- **Ctrl+P** now inserts a *continuation paragraph* inside the current list item
-  (another paragraph in the same item) instead of behaving like Enter and
-  starting a new item.
-- Pressing **Enter** on an empty line nested inside a list item no longer
-  dissolves the whole item. When the item has other content, an empty trailing
-  line now becomes a new empty list item; pressing Enter again lifts that empty
-  item out of the list, and once more lifts it out of an enclosing quote — so
-  repeated Enter steps out one level at a time instead of flattening everything
-  at once. An empty line inside a quote likewise exits the quote on Enter rather
-  than adding another blank quoted line.
-- **Shift+Enter** and **Ctrl+Enter** insert a hard line break again: Pure now
-  enables the terminal's keyboard-enhancement protocol where available, so these
-  combinations are delivered as distinct keys instead of a plain Enter. (Ctrl+J
-  remains a fallback for terminals without the protocol.)
-- Nested list items now render with the proper per-level indentation in the
-  terminal (the cell backend previously collapsed all nesting to a flat indent).
-- Content inside a list (continuation paragraphs, code blocks) now aligns with the
-  item's text rather than a fixed bullet width — most visibly in numbered lists
-  with two-digit numbers, where continuations were previously mis-indented and the
-  number padding was inconsistent across items.
-- **Tab** / **Esc ]** ("Indent more") on a paragraph that follows a container now
-  nests it into that container — as a new list item, a new checklist item, or a
-  child of the preceding quote — instead of just inserting spaces. (Previously this
-  only worked on existing list items.) This now also works *inside a quote*: a plain
-  paragraph in a quote can be indented into a list that sits above it in the same
-  quote (previously it only worked at the top level of the document). A paragraph
-  sandwiched between two same-kind lists is joined into a single merged list. This
-  also works for a multi-paragraph selection, and for paragraphs *before* a list
-  (they are prepended to it) as well as after.
-- **Tab** on the first item of a list that directly follows a quote now pulls that
-  item **into** the quote while keeping it a list item — it becomes a list nested
-  inside the quote (bullet/number preserved), matching how a list item indents into
-  a preceding list. The emptied outer list is removed; later items stay behind in
-  the list.
-- **Shift+Tab** on a list item that sits inside a quote now lifts it **out** of the
-  quote while keeping it a list item (a bullet just below the quote), the exact
-  inverse of the Tab above — instead of converting it to a plain paragraph. (Enter
-  on an *empty* item, and toggling a list off, still turn it into a plain paragraph.)
-- Indenting a list item under a sibling that already contains a sublist now merges
-  it into that sublist even when the kinds differ (a bullet indented under an item
-  ending in a numbered sublist joins the numbered list, and vice versa), instead
-  of creating a second sublist next to it. The first item of a list that directly
-  follows another list can now be indented (Tab) straight into that preceding
-  list, merging under its last item. This includes selecting one or more items of
-  a checklist that follows a bullet/numbered list and pressing Tab: they nest
-  under that list's last item as a sub-checklist, keeping their checkboxes.
-  **Shift+Tab** on such nested checklist items reverses this, lifting them back
-  out to a top-level checklist (rather than converting them into text paragraphs).
-
-### Removed
-
-- **Tab** no longer inserts whitespace as a fallback. It is now dedicated to list
-  and paragraph structure (Tab indents / Shift+Tab unindents); with nothing to
-  indent it does nothing rather than inserting spaces.
+- **Configuration file** — an optional TOML config at `~/.config/pure/config.toml`
+  (honoring `XDG_CONFIG_HOME`); a missing, unreadable, or invalid file falls back
+  to defaults. First setting: `caret_affinity` (default `true`) — an extra caret
+  stop at inline-style/link boundaries that controls whether text you type there
+  joins the run; set `false` to step across such boundaries in a single press. (#40)
+- **Block model for containers** (quotes and lists): **Wrap inside…** (`Esc .`)
+  wraps the paragraph or selection in a new container (Quote, Numbered/Bullet
+  List, Checklist) while preserving the inner paragraph types; **Select parent**
+  (`Esc ,`) targets the enclosing container to convert it, unwrap it, or climb a
+  level. `[` / `Shift+Tab` now also lifts a paragraph out of a quote, not just a list. (#40)
 
 ### Changed
 
-- The document layout and editing engine has been carved out of Pure into a new
-  shared crate, `rutle` (`rutle = "0.1.0"` on crates.io), replacing Pure's
-  homegrown layouter. Pure and its sibling editor Piki now build on the same
-  structured-editor/layout core; both resolve the identical crates.io
-  `tdoc 0.11.0`, so `tdoc::Document` values cross the crate boundary unchanged.
-  On the Pure side this retires roughly 26,000 lines of bespoke editor code —
-  the entire `src/editor/` module, `editor_display.rs`, and `render.rs`, along
-  with their test suites — replaced by a thin ratatui adapter
-  (`ratatui_draw_context.rs`) that paints rutle's layout into the terminal.
-  Rendering, cursor movement, selection, reveal codes, and table display were
-  brought back to visual parity with the previous implementation, and all SVG
-  snapshots updated to match. (#40)
-- Cursor navigation and redraw are substantially faster. Measured with a new
-  end-to-end benchmark (`examples/bench_cursor.rs`) that drives the real
-  application headlessly — pressing Down from the top to the bottom of a
-  document, each press a full `handle_event` plus redraw, timing the median
-  per-keystroke cost — the shared core is ~2.3–2.9x faster per keystroke than
-  the old layouter across every document and reveal-codes combination (e.g.
-  USER-GUIDE.md at 1098 lines: 1.76 ms/key vs. 5.09 ms/key; README.md at 262
-  lines: 0.46 ms/key vs. 1.06 ms/key). Two follow-up optimizations cut the cost
-  much further — making rutle's `resize()`/horizontal-padding updates idempotent
-  so an unchanged frame no longer throws away the layout cache, and memoizing
-  the status-bar word count so it is no longer recomputed over the whole
-  document every frame — bringing every tested case under 300 µs per keystroke
-  (down from up to ~1.95 ms): USER-GUIDE.md 257 µs, ARCHITECTURE.md 227 µs,
-  README.md 173 µs, each a touch faster again with reveal codes on. (#40)
+- **Editor/layout engine carved out to the shared `rutle` crate** (`rutle 0.5.0`),
+  replacing Pure's homegrown layouter. Pure and its sibling editor Piki now share
+  one structured-editor/layout core, and both resolve `tdoc 0.11.0` so
+  `tdoc::Document` crosses the crate boundary unchanged. Retires ~26,000 lines
+  (`src/editor/`, `editor_display.rs`, `render.rs`, and their tests), replaced by
+  a thin ratatui adapter (`ratatui_draw_context.rs`). Rendering, cursor movement,
+  selection, reveal codes, and tables are at visual parity; SVG snapshots updated.
+  (#40)
+- **Cursor navigation and redraw are much faster** — ~2.3–2.9× per keystroke
+  versus the old layouter (e.g. USER-GUIDE.md: 1.76 vs. 5.09 ms/key). Two
+  follow-ups — making `resize()`/padding updates idempotent so an unchanged frame
+  keeps the layout cache, and memoizing the status-bar word count — bring every
+  tested case under 300 µs/key (down from up to ~1.95 ms). Measured by the new
+  end-to-end `examples/bench_cursor.rs`. (#40)
+
+### Fixed
+
+- Converting a paragraph to a quote (`Esc 5`) now **converts** it (a heading
+  becomes a plain quote) instead of nesting it, matching lists. A single-text
+  container acts as a leaf, so `Esc 5`/`8`/`0` round-trip and the breadcrumb shows
+  the effective type. Converting to a list merges with an adjacent same-kind list. (#40)
+- Changing list type over a **selection spanning two or more items** carves just
+  those items out into a new list (splitting the original) instead of converting
+  the whole list; a plain cursor still converts the whole list. (#40)
+- **Ctrl+P** now inserts a *continuation paragraph* in the current item instead of
+  starting a new item. (#40)
+- **Enter** on an empty nested line no longer dissolves the item: an empty trailing
+  line becomes a new empty item, and repeated Enter steps out one level at a time
+  (out of the list, then out of an enclosing quote). An empty line in a quote exits
+  the quote instead of adding another blank quoted line. (#40)
+- **Shift+Enter** / **Ctrl+Enter** insert a hard line break again — Pure enables
+  the terminal's keyboard-enhancement protocol where available (Ctrl+J remains a
+  fallback). (#40)
+- Nested list items now use proper per-level indentation in the terminal
+  (previously collapsed to a flat indent). (#40)
+- List content (continuation paragraphs, code blocks) aligns with the item's text
+  rather than a fixed bullet width — fixing misindented continuations and
+  inconsistent number padding in two-digit numbered lists. (#40)
+- **Tab** / **Esc ]** on a paragraph that follows a container now nests it into
+  that container (list item, checklist item, or quote child) instead of inserting
+  spaces — including inside a quote, for multi-paragraph selections, and for
+  paragraphs *before* a list (prepended); a paragraph between two same-kind lists
+  is merged into one. (#40)
+- **Tab** on the first item of a list directly after a quote pulls it **into** the
+  quote as a nested list (bullet/number preserved), removing the emptied outer
+  list; **Shift+Tab** on a list item inside a quote reverses this, lifting it out
+  while keeping it a list item. (Enter on an empty item, and toggling a list off,
+  still produce a plain paragraph.) (#40)
+- Indenting a list item under a sibling that already has a sublist merges into it
+  even across kinds; the first item of a list following another list can Tab
+  straight into that list; checklist items after a bullet/numbered list nest as a
+  sub-checklist (checkboxes kept), and **Shift+Tab** lifts them back to a
+  top-level checklist rather than to text. (#40)
+
+### Removed
+
+- **Tab** no longer inserts whitespace as a fallback — it is dedicated to structure
+  (indent / Shift+Tab unindent) and does nothing when there is nothing to indent. (#40)
 
 ### Misc
 
-- Replaced the old Criterion micro-benchmark harness (`benches/performance`)
-  with `examples/bench_cursor.rs`, which measures cursor responsiveness through
-  the public `App` API over a headless `TestBackend`. Because it touches only
-  public API, it also compiles unchanged on the pre-rutle codebase, so the two
-  implementations can be benchmarked head-to-head in a `git worktree`. (#40)
+- Replaced the Criterion micro-benchmark harness (`benches/performance`) with
+  `examples/bench_cursor.rs`, which drives the public `App` API over a headless
+  `TestBackend` — so it also builds on the pre-rutle codebase for head-to-head
+  comparison in a `git worktree`. (#40)
 
 ## [0.6.0] - 2026-06-24
 
