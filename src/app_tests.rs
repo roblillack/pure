@@ -95,8 +95,5 @@ fn gemini_round_trips_through_save_and_load() {
     assert_eq!(format, DocumentFormat::Gemini);
     let text = doc_text(&reloaded);
     assert!(text.contains("Title"), "heading survived: {text:?}");
-    assert!(
-        text.contains("plain paragraph"),
-        "body survived: {text:?}"
-    );
+    assert!(text.contains("plain paragraph"), "body survived: {text:?}");
 }

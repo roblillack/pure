@@ -50,8 +50,8 @@
 <text x="40" y="215" fill="#d8d8d8" textLength="680" lengthAdjust="spacingAndGlyphs" xml:space="preserve">Passport                                                            </text>
 <text x="20" y="255" fill="#e5e5e5" textLength="20" lengthAdjust="spacingAndGlyphs" xml:space="preserve" opacity="0.6">• </text>
 <text x="40" y="255" fill="#d8d8d8" textLength="680" lengthAdjust="spacingAndGlyphs" xml:space="preserve">Tickets                                                             </text>
-<text x="20" y="295" fill="#e5e5e5" textLength="20" lengthAdjust="spacingAndGlyphs" xml:space="preserve" opacity="0.6">| </text>
-<text x="40" y="295" fill="#d8d8d8" textLength="680" lengthAdjust="spacingAndGlyphs" xml:space="preserve">Travel light.                                                       </text>
+<text x="20" y="295" fill="#e5e5e5" textLength="10" lengthAdjust="spacingAndGlyphs" xml:space="preserve" opacity="0.6">|</text>
+<text x="30" y="295" fill="#d8d8d8" textLength="690" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> Travel light.                                                       </text>
 <rect x="0" y="340" width="720" height="20" fill="#2472c8"/>
 <text x="0" y="355" fill="#ffffff" textLength="720" lengthAdjust="spacingAndGlyphs" xml:space="preserve">4:1 Reveal codes enabled                                                </text>
 <rect x="290" y="60" width="10" height="20" fill="#ffffff" fill-opacity="0.4"/>

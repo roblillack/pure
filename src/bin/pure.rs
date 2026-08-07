@@ -9,14 +9,18 @@ use crossterm::{
     cursor::SetCursorStyle,
     event::{
         self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
-        Event,
+        Event, KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
     },
     execute,
-    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
+    terminal::{
+        EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
+        supports_keyboard_enhancement,
+    },
 };
 use ratatui::{Terminal, backend::CrosstermBackend};
 
 use pure_tui::app::{App, DocumentFormat, load_document};
+use pure_tui::config::Config;
 use tdoc::Document;
 
 fn main() -> Result<()> {
@@ -36,6 +40,7 @@ fn run() -> Result<()> {
         ),
     };
     let mut app = App::new(document, path, format, initial_status);
+    app.set_config(Config::load());
 
     enable_raw_mode().context("failed to enable raw mode")?;
     let mut stdout = io::stdout();
@@ -46,6 +51,17 @@ fn run() -> Result<()> {
         EnableBracketedPaste
     )
     .context("failed to initialize terminal")?;
+    // Ask the terminal (when it supports the Kitty keyboard protocol) to disambiguate
+    // modified keys, so Shift+Enter / Ctrl+Enter arrive as distinct events (an ordinary
+    // terminal reports them all as plain Enter). Popped on exit.
+    let keyboard_enhanced = matches!(supports_keyboard_enhancement(), Ok(true));
+    if keyboard_enhanced {
+        execute!(
+            stdout,
+            PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
+        )
+        .ok();
+    }
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend).context("failed to create terminal backend")?;
     terminal.clear().ok();
@@ -53,6 +69,9 @@ fn run() -> Result<()> {
     let res = run_app(&mut terminal, &mut app).context("application error");
 
     disable_raw_mode().ok();
+    if keyboard_enhanced {
+        execute!(terminal.backend_mut(), PopKeyboardEnhancementFlags).ok();
+    }
     execute!(
         terminal.backend_mut(),
         LeaveAlternateScreen,
