@@ -39,6 +39,7 @@ use rutle::tree_path::TreePath;
 use rutle::{BlockType, DocumentPosition, Renderer as StructuredRichDisplay, UndoKind};
 use tdoc::ftml::{Writer, parse};
 use tdoc::{Document, InlineStyle, ParagraphType, gemini, html, markdown};
+use unicode_width::UnicodeWidthStr;
 
 use crate::config::Config;
 use crate::file_dialog::{FileDialogKind, FileDialogResult, FileDialogState};
@@ -47,11 +48,21 @@ use crate::menu_bar::{
     AppAction, MENU_BAR, MenuBarEntry, MenuBarState, menu_title_offset, menu_with_accel,
 };
 use crate::ratatui_draw_context::{RatatuiDrawContext, terminal_theme};
+use crate::spell::{self, Misspelling, SpellChecker};
+use crate::spell_dialog::{SpellControl, SpellDialogState};
 use crate::theme::Theme;
 
 const STATUS_TIMEOUT: Duration = Duration::from_secs(4);
 const DOUBLE_CLICK_TIMEOUT: Duration = Duration::from_millis(400);
 const MOUSE_SCROLL_LINES: i32 = 3;
+
+/// Outer width of the spell-check dialog, in cells.
+const SPELL_DIALOG_WIDTH: u16 = 60;
+/// How many suggestions the spell-check dialog lists at most.
+const SPELL_SUGGESTION_ROWS: u16 = 4;
+/// Columns available to the dialog's context excerpt (the dialog's inner width
+/// minus the two-column indent).
+const SPELL_CONTEXT_WIDTH: usize = SPELL_DIALOG_WIDTH as usize - 4;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DocumentFormat {
@@ -657,6 +668,11 @@ pub struct App {
     file_dialog: Option<FileDialogState>,
     link_dialog: Option<LinkDialogState>,
     link_edit: Option<LinkEdit>,
+    /// The spelling dictionary, loaded the first time a spell check is started
+    /// (parsing it costs a moment, and most sessions never ask for it).
+    spell: Option<SpellChecker>,
+    /// The modal spell-check dialog, while a pass is running.
+    spell_dialog: Option<SpellDialogState>,
     /// Whether the next New command may discard unsaved changes.
     confirm_new: bool,
     /// Whether the viewport should keep the cursor visible (false after a
@@ -715,6 +731,8 @@ impl App {
             file_dialog: None,
             link_dialog: None,
             link_edit: None,
+            spell: None,
+            spell_dialog: None,
             confirm_new: false,
             follow_cursor: true,
             last_click_instant: None,
@@ -1191,6 +1209,245 @@ impl App {
         self.link_edit = None;
     }
 
+    // ----- spell checking --------------------------------------------------
+
+    /// F7: start a spell-check pass at the top of the document, loading the
+    /// dictionary on first use.
+    fn start_spell_check(&mut self) {
+        if self.spell.is_none() {
+            match SpellChecker::load(&self.config) {
+                Ok(checker) => self.spell = Some(checker),
+                Err(err) => {
+                    self.status(err.to_string());
+                    return;
+                }
+            }
+        }
+        self.spell_show_next(None);
+    }
+
+    /// Review the first misspelling at or after `from` — the document start when
+    /// `None`. The document is rescanned every time, because a replacement, an
+    /// added word, or an ignored word all change what is left to find (and shift
+    /// the offsets of everything after an edit).
+    fn spell_show_next(&mut self, from: Option<DocumentPosition>) {
+        let misspellings = self.spell_scan();
+        let next = match &from {
+            Some(from) => misspellings.iter().position(|m| m.position() >= *from),
+            None => (!misspellings.is_empty()).then_some(0),
+        };
+        let Some(index) = next else {
+            self.spell_end(true);
+            return;
+        };
+
+        let current = misspellings[index].clone();
+        let remaining = misspellings.len() - index;
+        let context = spell::document_context(
+            self.display.editor().document(),
+            &current,
+            SPELL_CONTEXT_WIDTH,
+        );
+        let suggestions = self
+            .spell
+            .as_ref()
+            .map(|checker| checker.suggest(&current.word))
+            .unwrap_or_default();
+
+        // Select the word so it stays visible (and highlighted) behind the dialog.
+        let editor = self.display.editor_mut();
+        editor.set_cursor(current.position());
+        editor.extend_selection_to(current.end_position());
+        self.follow_cursor = true;
+
+        match &mut self.spell_dialog {
+            Some(dialog) => dialog.show(current, context, suggestions, remaining),
+            None => {
+                self.spell_dialog = Some(SpellDialogState::new(
+                    current,
+                    context,
+                    suggestions,
+                    remaining,
+                ))
+            }
+        }
+    }
+
+    /// Every misspelling in the document, in document order.
+    fn spell_scan(&self) -> Vec<Misspelling> {
+        match &self.spell {
+            Some(checker) => checker.check_document(self.display.editor().document()),
+            None => Vec::new(),
+        }
+    }
+
+    /// Close the dialog and report what the pass did. `complete` distinguishes
+    /// reaching the end of the document from stopping early (Esc / Close).
+    fn spell_end(&mut self, complete: bool) {
+        let tally = self
+            .spell_dialog
+            .take()
+            .map(|dialog| dialog.tally())
+            .unwrap_or_default();
+        self.display.editor_mut().clear_selection();
+        let summary = tally.summary();
+        match (complete, summary.is_empty()) {
+            (true, true) => self.status("Spell check complete — no misspellings found"),
+            (true, false) => self.status(format!("Spell check complete — {summary}")),
+            (false, true) => self.status("Spell check stopped"),
+            (false, false) => self.status(format!("Spell check stopped — {summary}")),
+        }
+    }
+
+    /// Replace the misspelling under review with the dialog's replacement text.
+    ///
+    /// `all` extends that to every later occurrence of the same word. Earlier
+    /// occurrences are left alone: the pass is a forward walk, so anything
+    /// before the current word has already been reviewed and kept.
+    fn spell_replace(&mut self, all: bool) {
+        let Some(dialog) = &self.spell_dialog else {
+            return;
+        };
+        if !dialog.can_replace() {
+            self.status("Type a replacement first");
+            return;
+        }
+        let current = dialog.current().clone();
+        let replacement = dialog.replacement().trim().to_string();
+
+        let targets: Vec<Misspelling> = if all {
+            self.spell_scan()
+                .into_iter()
+                .filter(|m| m.word == current.word && m.position() >= current.position())
+                .collect()
+        } else {
+            vec![current.clone()]
+        };
+
+        // Apply back to front: replacing an earlier occurrence would shift the
+        // offsets of every later one in the same paragraph.
+        for target in targets.iter().rev() {
+            self.spell_swap_word(target, &replacement);
+        }
+        // One undo step for the whole command, so a single Ctrl+Z takes back a
+        // Replace — or a Replace All, however many words it touched.
+        self.after_edit(UndoKind::Other);
+
+        if let Some(dialog) = &mut self.spell_dialog {
+            dialog.count_replaced(targets.len());
+        }
+        let resume = DocumentPosition::at(current.path.clone(), current.start + replacement.len());
+        self.spell_show_next(Some(resume));
+    }
+
+    /// Swap the word at `target` for `replacement`, keeping whatever inline
+    /// styling the word carried.
+    ///
+    /// Selecting the word and typing over it would empty the run that holds it,
+    /// and an emptied run takes its bold, italic, or link with it. So the new
+    /// text goes in *after the word's first character* — an offset unambiguously
+    /// inside that run — and the two leftovers of the old word are deleted around
+    /// it. Every reported misspelling is at least two characters long, so such an
+    /// interior offset always exists.
+    fn spell_swap_word(&mut self, target: &Misspelling, replacement: &str) {
+        let Some(first) = target.word.chars().next() else {
+            return;
+        };
+        let mid = target.start + first.len_utf8();
+        let path = &target.path;
+        let editor = self.display.editor_mut();
+
+        editor.set_cursor(DocumentPosition::at(path.clone(), mid));
+        let _ = editor.insert_text(replacement);
+
+        // Delete the old word's tail, then its head — back to front, so the
+        // head's offsets are still the ones we started with.
+        editor.set_cursor(DocumentPosition::at(path.clone(), mid + replacement.len()));
+        editor.extend_selection_to(DocumentPosition::at(
+            path.clone(),
+            target.end + replacement.len(),
+        ));
+        let _ = editor.delete_selection();
+
+        editor.set_cursor(target.position());
+        editor.extend_selection_to(DocumentPosition::at(path.clone(), mid));
+        let _ = editor.delete_selection();
+
+        // Leave the caret just past the correction — where the deleted head
+        // would have put it, and where typing on would continue.
+        editor.set_cursor(DocumentPosition::at(
+            path.clone(),
+            target.start + replacement.len(),
+        ));
+    }
+
+    /// Leave the misspelling as it is. `all` also skips every further occurrence
+    /// of the word for the rest of the session.
+    fn spell_ignore(&mut self, all: bool) {
+        let Some(dialog) = &self.spell_dialog else {
+            return;
+        };
+        let current = dialog.current().clone();
+        let mut skipped = 1;
+        if all {
+            skipped = self
+                .spell_scan()
+                .iter()
+                .filter(|m| m.word == current.word && m.position() >= current.position())
+                .count()
+                .max(1);
+            if let Some(checker) = &mut self.spell {
+                checker.ignore_word(&current.word);
+            }
+        }
+        if let Some(dialog) = &mut self.spell_dialog {
+            dialog.count_ignored(skipped);
+        }
+        self.spell_show_next(Some(current.end_position()));
+    }
+
+    /// Teach the dictionary the misspelled word, saving it to the personal word
+    /// list so later sessions accept it too.
+    fn spell_add(&mut self) {
+        let Some(dialog) = &self.spell_dialog else {
+            return;
+        };
+        let current = dialog.current().clone();
+        let Some(checker) = &mut self.spell else {
+            return;
+        };
+        let saved = checker.add_word(&current.word);
+        if let Some(dialog) = &mut self.spell_dialog {
+            dialog.count_added();
+        }
+        self.spell_show_next(Some(current.end_position()));
+        // Reported after moving on, so a failed save isn't hidden by the
+        // pass-finished message: the word still counts for this session, it just
+        // won't be remembered next time.
+        if let Err(err) = saved {
+            self.status(format!(
+                "Added {} for this session only — {err}",
+                current.word
+            ));
+        }
+    }
+
+    /// Run the focused control's action (Enter, or Space on a button). The
+    /// replacement field's default action is Replace.
+    fn activate_spell_control(&mut self) {
+        let Some(focus) = self.spell_dialog.as_ref().map(|dialog| dialog.focus()) else {
+            return;
+        };
+        match focus {
+            SpellControl::ChangeTo | SpellControl::Replace => self.spell_replace(false),
+            SpellControl::ReplaceAll => self.spell_replace(true),
+            SpellControl::Add => self.spell_add(),
+            SpellControl::Ignore => self.spell_ignore(false),
+            SpellControl::IgnoreAll => self.spell_ignore(true),
+            SpellControl::Close => self.spell_end(false),
+        }
+    }
+
     // ----- context menu ----------------------------------------------------
 
     fn open_context_menu(&mut self) {
@@ -1322,6 +1579,7 @@ impl App {
             AppAction::InsertSiblingParagraph => self.insert_continuation(),
             AppAction::FormattingMenu => self.open_context_menu(),
             AppAction::ToggleRevealCodes => self.toggle_reveal_codes(),
+            AppAction::CheckSpelling => self.start_spell_check(),
         }
         Ok(())
     }
@@ -1543,7 +1801,8 @@ impl App {
         let overlay_active = self.context_menu.is_some()
             || self.menu_bar.is_some()
             || self.file_dialog.is_some()
-            || self.link_dialog.is_some();
+            || self.link_dialog.is_some()
+            || self.spell_dialog.is_some();
 
         if !overlay_active
             && let Some((x, y)) = cursor_pos
@@ -1576,6 +1835,9 @@ impl App {
         }
         if self.link_dialog.is_some() {
             self.render_link_dialog(frame, area);
+        }
+        if self.spell_dialog.is_some() {
+            self.render_spell_dialog(frame, area);
         }
     }
 
@@ -2000,6 +2262,176 @@ impl App {
         );
     }
 
+    /// The modal spell-check dialog: the misspelled word and its context, the
+    /// editable replacement with the dictionary's suggestions, and the commands.
+    fn render_spell_dialog(&self, frame: &mut Frame, area: Rect) {
+        let Some(dialog) = &self.spell_dialog else {
+            return;
+        };
+        if area.width < 32 || area.height < 8 {
+            return;
+        }
+        let popup_style = self.theme.menu_style();
+        let dim = self.theme.menu_disabled_style();
+        let flagged = Style::default().fg(Color::LightRed);
+
+        let width = SPELL_DIALOG_WIDTH.min(area.width.saturating_sub(4));
+        // The word, its context, a rule, the replacement field, a rule, two
+        // button rows, and the key hints — the suggestion list is what flexes.
+        const FIXED_ROWS: u16 = 8;
+        let max_height = area.height.saturating_sub(2);
+        let suggestion_rows = SPELL_SUGGESTION_ROWS
+            .min(dialog.suggestions().len().max(1) as u16)
+            .min(max_height.saturating_sub(FIXED_ROWS));
+        let height = (FIXED_ROWS + suggestion_rows + 2).min(max_height);
+        let popup_area = Rect::new(
+            area.x + (area.width.saturating_sub(width)) / 2,
+            area.y + (area.height.saturating_sub(height)) / 2,
+            width,
+            height,
+        );
+        frame.render_widget(Clear, popup_area);
+        let block = Block::default()
+            .title(format!("Check Spelling — {} remaining", dialog.remaining()))
+            .borders(Borders::ALL)
+            .style(popup_style)
+            .border_style(Style::default().fg(Color::Gray));
+        let inner = block.inner(popup_area);
+        frame.render_widget(block, popup_area);
+        if inner.width < 20 || inner.height < 4 {
+            return;
+        }
+        let inner_width = inner.width as usize;
+
+        let mut lines: Vec<Line> = Vec::new();
+
+        // The word itself, then a one-line excerpt with the word marked.
+        lines.push(Line::from(vec![
+            Span::styled("Not in dictionary: ", dim),
+            Span::styled(
+                dialog.current().word.clone(),
+                flagged.add_modifier(Modifier::BOLD),
+            ),
+        ]));
+        let (before, word, after) = dialog.context().parts();
+        lines.push(Line::from(vec![
+            Span::raw("  "),
+            Span::styled(before.to_string(), dim),
+            Span::styled(word.to_string(), flagged.add_modifier(Modifier::UNDERLINED)),
+            Span::styled(after.to_string(), dim),
+        ]));
+        lines.push(rule_line(inner_width));
+
+        // The replacement field, scrolled to keep its caret visible.
+        const CHANGE_TO: &str = "Change to: ";
+        let field_width = inner_width.saturating_sub(CHANGE_TO.len()).max(1);
+        let caret = dialog.cursor().unwrap_or(0);
+        let field_skip = (caret + 1).saturating_sub(field_width);
+        let shown: String = dialog
+            .replacement()
+            .chars()
+            .skip(field_skip)
+            .take(field_width)
+            .collect();
+        lines.push(Line::from(vec![
+            Span::styled(CHANGE_TO, dim),
+            Span::raw(shown),
+        ]));
+
+        // The suggestions, scrolled so the selected one stays in view.
+        let rows = suggestion_rows as usize;
+        if dialog.suggestions().is_empty() {
+            if rows > 0 {
+                lines.push(Line::from(Span::styled("  (no suggestions)", dim)));
+            }
+        } else {
+            let selected = dialog.selected().unwrap_or(0);
+            let first = selected.saturating_sub(rows.saturating_sub(1));
+            for (index, suggestion) in dialog
+                .suggestions()
+                .iter()
+                .enumerate()
+                .skip(first)
+                .take(rows)
+            {
+                let style = if Some(index) == dialog.selected() {
+                    self.theme.menu_selected_style()
+                } else {
+                    popup_style
+                };
+                // Pad the row so a selected suggestion highlights edge to edge.
+                let label = format!("  {suggestion}");
+                let padding = inner_width.saturating_sub(UnicodeWidthStr::width(label.as_str()));
+                lines.push(Line::from(vec![
+                    Span::styled(label, style),
+                    Span::styled(" ".repeat(padding), style),
+                ]));
+            }
+        }
+        lines.push(rule_line(inner_width));
+
+        // Two rows of buttons, in a grid whose columns fit the widest label.
+        let button_grid = spell_button_grid();
+        let columns: Vec<usize> = (0..button_grid[0].len())
+            .map(|column| {
+                button_grid
+                    .iter()
+                    .map(|row| row[column].1.chars().count())
+                    .max()
+                    .unwrap_or(0)
+            })
+            .collect();
+        let mut button_positions: Vec<(SpellControl, u16, u16)> = Vec::new();
+        let buttons_top = inner.y + lines.len() as u16;
+        for (row_index, row) in button_grid.iter().enumerate() {
+            let mut spans: Vec<Span> = Vec::new();
+            let mut column_x = 0usize;
+            for (column_index, (control, label)) in row.iter().enumerate() {
+                let enabled = spell_control_enabled(*control, dialog);
+                let style = if dialog.focus() == *control {
+                    self.theme.menu_selected_style()
+                } else if enabled {
+                    popup_style
+                } else {
+                    popup_style.patch(dim)
+                };
+                button_positions.push((
+                    *control,
+                    inner.x + column_x as u16,
+                    buttons_top + row_index as u16,
+                ));
+                spans.push(Span::styled(*label, style));
+                // Pad to the column width, plus a two-cell gutter.
+                let gap = columns[column_index].saturating_sub(label.chars().count()) + 2;
+                spans.push(Span::raw(" ".repeat(gap)));
+                column_x += columns[column_index] + 2;
+            }
+            lines.push(Line::from(spans));
+        }
+
+        lines.push(Line::from(Span::styled(
+            "Enter: replace  Tab: next  ↑↓: pick  Esc: close",
+            dim,
+        )));
+
+        frame.render_widget(Paragraph::new(lines).style(popup_style), inner);
+
+        // Park the caret in the replacement field, or on the focused button so
+        // it doesn't show through at the document cursor's position.
+        if dialog.focus() == SpellControl::ChangeTo {
+            frame.set_cursor_position(Position::new(
+                inner.x + (CHANGE_TO.len() + caret - field_skip) as u16,
+                inner.y + 3,
+            ));
+        } else if let Some((_, x, y)) = button_positions
+            .iter()
+            .find(|(control, _, _)| *control == dialog.focus())
+            .filter(|(_, _, y)| *y < inner.y + inner.height)
+        {
+            frame.set_cursor_position(Position::new(*x, *y));
+        }
+    }
+
     fn render_menu_bar(&self, frame: &mut Frame, area: Rect) {
         let Some(state) = &self.menu_bar else {
             return;
@@ -2296,6 +2728,10 @@ impl App {
             self.handle_link_dialog_key(key);
             return Ok(());
         }
+        if self.spell_dialog.is_some() {
+            self.handle_spell_dialog_key(key);
+            return Ok(());
+        }
         if self.context_menu.is_some() {
             self.handle_context_menu_key(key);
             return Ok(());
@@ -2339,6 +2775,8 @@ impl App {
             }
             (KeyCode::Char('v'), true, _) => self.paste_from_clipboard(),
             (KeyCode::Char('k'), true, _) => self.open_link_dialog(),
+            // Spell check (the Tools menu lists F7 as the accelerator).
+            (KeyCode::F(7), _, _) => self.start_spell_check(),
             // Reveal codes (the View menu lists F9 as the accelerator).
             (KeyCode::F(9), _, _) => self.toggle_reveal_codes(),
             // Esc and Ctrl+Space open the formatting/context menu.
@@ -2636,6 +3074,47 @@ impl App {
         }
     }
 
+    fn handle_spell_dialog_key(&mut self, key: KeyEvent) {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        // Esc and a second F7 both leave the pass; every other key is either a
+        // dialog command or an edit of the replacement field.
+        match key.code {
+            KeyCode::Esc | KeyCode::F(7) => self.spell_end(false),
+            KeyCode::Enter => self.activate_spell_control(),
+            KeyCode::Char(' ') if self.spell_focus_is_button() => self.activate_spell_control(),
+            KeyCode::Tab => self.with_spell_dialog(SpellDialogState::focus_next),
+            KeyCode::BackTab => self.with_spell_dialog(SpellDialogState::focus_prev),
+            KeyCode::Up => self.with_spell_dialog(|dialog| dialog.select_suggestion(-1)),
+            KeyCode::Down => self.with_spell_dialog(|dialog| dialog.select_suggestion(1)),
+            KeyCode::Left => self.with_spell_dialog(SpellDialogState::move_cursor_left),
+            KeyCode::Right => self.with_spell_dialog(SpellDialogState::move_cursor_right),
+            KeyCode::Home => self.with_spell_dialog(SpellDialogState::move_cursor_start),
+            KeyCode::End => self.with_spell_dialog(SpellDialogState::move_cursor_end),
+            KeyCode::Char('a') if ctrl => {
+                self.with_spell_dialog(SpellDialogState::move_cursor_start)
+            }
+            KeyCode::Char('e') if ctrl => self.with_spell_dialog(SpellDialogState::move_cursor_end),
+            KeyCode::Backspace => self.with_spell_dialog(SpellDialogState::backspace),
+            KeyCode::Delete => self.with_spell_dialog(SpellDialogState::delete),
+            KeyCode::Char(ch) if !ctrl => self.with_spell_dialog(|dialog| dialog.insert_char(ch)),
+            _ => {}
+        }
+    }
+
+    /// Run `f` on the open spell-check dialog, if there is one.
+    fn with_spell_dialog(&mut self, f: impl FnOnce(&mut SpellDialogState)) {
+        if let Some(dialog) = &mut self.spell_dialog {
+            f(dialog);
+        }
+    }
+
+    fn spell_focus_is_button(&self) -> bool {
+        self.spell_dialog
+            .as_ref()
+            .map(|dialog| dialog.focus().is_button())
+            .unwrap_or(false)
+    }
+
     fn link_field_is_button(&self) -> bool {
         self.link_dialog
             .as_ref()
@@ -2669,7 +3148,7 @@ impl App {
 
     fn handle_mouse(&mut self, mouse: MouseEvent) {
         // Overlays ignore mouse for now.
-        if self.file_dialog.is_some() || self.link_dialog.is_some() {
+        if self.file_dialog.is_some() || self.link_dialog.is_some() || self.spell_dialog.is_some() {
             return;
         }
 
@@ -2786,6 +3265,40 @@ impl App {
         let y = (row - area.y) as i32;
         Some(self.display.xy_to_position(x, y))
     }
+}
+
+/// A dialog's horizontal rule, `width` cells wide.
+fn rule_line(width: usize) -> Line<'static> {
+    Line::from(Span::styled(
+        "─".repeat(width),
+        Style::default().fg(Color::DarkGray),
+    ))
+}
+
+/// Whether a spell-dialog button can act: replacing needs a replacement that
+/// differs from the flagged word; the other commands are always available.
+fn spell_control_enabled(control: SpellControl, dialog: &SpellDialogState) -> bool {
+    match control {
+        SpellControl::Replace | SpellControl::ReplaceAll => dialog.can_replace(),
+        _ => true,
+    }
+}
+
+/// The spell-check dialog's buttons, laid out as they're drawn: left to right,
+/// top row before bottom. Also the Tab order (see `spell_dialog::FOCUS_ORDER`).
+fn spell_button_grid() -> [[(SpellControl, &'static str); 3]; 2] {
+    [
+        [
+            (SpellControl::Replace, "[ Replace ]"),
+            (SpellControl::ReplaceAll, "[ Replace All ]"),
+            (SpellControl::Add, "[ Add to Dictionary ]"),
+        ],
+        [
+            (SpellControl::Ignore, "[ Ignore ]"),
+            (SpellControl::IgnoreAll, "[ Ignore All ]"),
+            (SpellControl::Close, "[ Close ]"),
+        ],
+    ]
 }
 
 /// Status-bar breadcrumb label for the block under the cursor, matching classic

@@ -25,12 +25,26 @@ pub struct Config {
     /// the hardware caret), so the only visible effect is that one Left/Right
     /// press at such a boundary flips affinity in place rather than moving.
     pub caret_affinity: bool,
+
+    /// Language tag of the dictionary used for spell checking (F7), e.g.
+    /// `en_US` or `de_DE`. Pure looks for `<tag>.aff` / `<tag>.dic` in
+    /// [`Config::dictionary_dir`] first, then falls back to the bundled en_US
+    /// dictionary and finally to `$DICPATH` and the system dictionary
+    /// directories.
+    pub spell_language: String,
+
+    /// Explicit path to a Hunspell `.dic` file, bypassing the dictionary
+    /// search. The matching `.aff` file is expected beside it under the same
+    /// stem (`/path/to/en_GB.dic` → `/path/to/en_GB.aff`).
+    pub spell_dictionary: Option<PathBuf>,
 }
 
 impl Default for Config {
     fn default() -> Self {
         Self {
             caret_affinity: true,
+            spell_language: "en_US".to_string(),
+            spell_dictionary: None,
         }
     }
 }
@@ -46,18 +60,35 @@ impl Config {
             .unwrap_or_default()
     }
 
-    /// The config file's path, `~/.config/pure/config.toml`. Honors an absolute
+    /// The config file's path, `~/.config/pure/config.toml`.
+    pub fn path() -> Option<PathBuf> {
+        Some(Self::dir()?.join("config.toml"))
+    }
+
+    /// Pure's configuration directory, `~/.config/pure`. Honors an absolute
     /// `XDG_CONFIG_HOME` (per the XDG spec, a relative value is ignored) and
     /// otherwise falls back to `~/.config` — on every platform, not just Linux,
     /// so macOS/Windows users get the same visible, hand-editable location.
     /// `None` when the home directory can't be determined (rare; then only
     /// defaults apply).
-    pub fn path() -> Option<PathBuf> {
+    pub fn dir() -> Option<PathBuf> {
         let base = env::var_os("XDG_CONFIG_HOME")
             .map(PathBuf::from)
             .filter(|dir| dir.is_absolute())
             .or_else(|| dirs::home_dir().map(|home| home.join(".config")))?;
-        Some(base.join("pure").join("config.toml"))
+        Some(base.join("pure"))
+    }
+
+    /// Where the user's own Hunspell dictionaries live,
+    /// `~/.config/pure/dictionaries`.
+    pub fn dictionary_dir() -> Option<PathBuf> {
+        Some(Self::dir()?.join("dictionaries"))
+    }
+
+    /// The personal word list that "Add to Dictionary" appends to,
+    /// `~/.config/pure/dictionary.txt` — one word per line.
+    pub fn personal_dictionary_path() -> Option<PathBuf> {
+        Some(Self::dir()?.join("dictionary.txt"))
     }
 }
 

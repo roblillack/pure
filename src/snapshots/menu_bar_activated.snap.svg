@@ -21,8 +21,12 @@
 <text x="240" y="15" fill="#ffffff" textLength="60" lengthAdjust="spacingAndGlyphs" xml:space="preserve">rmat  </text>
 <rect x="300" y="0" width="10" height="20" fill="#2472c8"/>
 <text x="300" y="15" fill="#f5f543" textLength="10" lengthAdjust="spacingAndGlyphs" xml:space="preserve" font-weight="bold">V</text>
-<rect x="310" y="0" width="410" height="20" fill="#2472c8"/>
-<text x="310" y="15" fill="#ffffff" textLength="410" lengthAdjust="spacingAndGlyphs" xml:space="preserve">iew                                      </text>
+<rect x="310" y="0" width="50" height="20" fill="#2472c8"/>
+<text x="310" y="15" fill="#ffffff" textLength="50" lengthAdjust="spacingAndGlyphs" xml:space="preserve">iew  </text>
+<rect x="360" y="0" width="10" height="20" fill="#2472c8"/>
+<text x="360" y="15" fill="#f5f543" textLength="10" lengthAdjust="spacingAndGlyphs" xml:space="preserve" font-weight="bold">T</text>
+<rect x="370" y="0" width="350" height="20" fill="#2472c8"/>
+<text x="370" y="15" fill="#ffffff" textLength="350" lengthAdjust="spacingAndGlyphs" xml:space="preserve">ools                               </text>
 <text x="290" y="75" fill="#d8d8d8" textLength="120" lengthAdjust="spacingAndGlyphs" xml:space="preserve" font-weight="bold">Packing List</text>
 <text x="0" y="155" fill="#d8d8d8" textLength="110" lengthAdjust="spacingAndGlyphs" xml:space="preserve">  Pack the </text>
 <text x="110" y="155" fill="#d8d8d8" textLength="100" lengthAdjust="spacingAndGlyphs" xml:space="preserve" font-weight="bold">essentials</text>

@@ -12,6 +12,22 @@ While pre-1.0, the minor version is bumped for breaking changes.
 
 ### Added
 
+- **Spell checking** (`F7`, or **Tools → Check Spelling…**) — walks the document
+  from the top and stops at each word the dictionary doesn't know, showing it in
+  context with suggested corrections in a modal dialog: **Replace** (Enter),
+  **Replace All**, **Ignore**, **Ignore All**, and **Add to Dictionary** (saved to
+  `~/.config/pure/dictionary.txt`). The replacement is an editable field, so a
+  word the dictionary can't guess can still be fixed there. Corrections keep the
+  word's inline styling (bold stays bold, a link stays a link), and each Replace
+  or Replace All is one undo step. Code blocks, inline code, tables, URLs, e-mail
+  addresses, file names, acronyms, and `camelCase` identifiers are skipped.
+  Checking is done by [`spellbook`](https://github.com/helix-editor/spellbook) (a
+  pure-Rust Hunspell-compatible checker — no C library, no system dependency);
+  the SCOWL-derived en_US dictionary is embedded in the binary behind the default
+  `bundled-dictionary` feature, and other languages come from
+  `~/.config/pure/dictionaries`, `$DICPATH`, or the system dictionary
+  directories. New settings: `spell_language` (default `en_US`) and
+  `spell_dictionary` (an explicit `.dic` path).
 - **Configuration file** — an optional TOML config at `~/.config/pure/config.toml`
   (honoring `XDG_CONFIG_HOME`); a missing, unreadable, or invalid file falls back
   to defaults. First setting: `caret_affinity` (default `true`) — an extra caret
