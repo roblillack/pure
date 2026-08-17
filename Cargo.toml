@@ -51,12 +51,14 @@ dirs = "6.0"
 ratatui = "0.29"
 serde = { version = "1.0", features = ["derive"] }
 toml = "0.8"
-# Pointed at the local dev tree for preliminary table support: the crates.io
-# 0.10.0 release predates the table API (Paragraph::Table, formatter table
-# rendering). Switch back to a published version once tables ship in a release.
-tdoc = { version = "0.11.0", default-features = false }
+tdoc = { version = "0.12.0", default-features = false }
 # Shared structured-editor/layout core (rutle).
-rutle = "0.5.0"
+#
+# TEMPORARILY pointed at the local dev tree: horizontal rules and definition
+# lists landed after 0.5.0 and are not published yet. `cargo publish` rejects a
+# bare path dependency, so this is a deliberate tripwire — swap it back to a
+# plain `rutle = "0.6"` once that release is out.
+rutle = { path = "../rutle" }
 unicode-width = "0.2.0"
 
 [dev-dependencies]

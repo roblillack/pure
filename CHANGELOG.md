@@ -22,6 +22,62 @@ While pre-1.0, the minor version is bumped for breaking changes.
   List, Checklist) while preserving the inner paragraph types; **Select parent**
   (`Esc ,`) targets the enclosing container to convert it, unwrap it, or climb a
   level. `[` / `Shift+Tab` now also lifts a paragraph out of a quote, not just a list. (#40)
+- **Horizontal rules** — a thematic break, via **Insert > Horizontal Rule** (no
+  keyboard shortcut). The rule is always placed at the top level: inserting one
+  mid-paragraph splits the paragraph around it, and from inside a list or quote
+  it follows that whole block. The caret continues below the rule. Backspace or
+  Delete removes it — on the rule itself, and from the edge of the block below or
+  above it. A rule holds no text, so the context menu's paragraph types are
+  disabled while the caret rests on one, and the status bar names it
+  "Horizontal Rule". The terminal draws tdoc's centered `───── • ─────` ornament,
+  since a cell grid cannot draw a sub-cell line.
+- **Definition lists** — terms paired with their definitions, via the context
+  menu's **Definition List** entry, below Checklist. It deliberately carries no
+  number shortcut: `0`–`9` are fully spoken for by the existing types, and
+  renumbering them would cost more muscle memory than it buys. Both halves are
+  fully editable, and a definition holds whole paragraphs, so anything can go
+  inside one. Terms render bold and their definitions indent beneath them (a term
+  has no marker of its own, so weight and indent are what set the halves apart).
+  Round-trips through HTML (`<dl>`/`<dt>`/`<dd>`) and Markdown.
+
+  **Enter** alternates between the two halves, so a glossary is typed straight
+  through: at the end of a term it opens that term's definition, and at the end of
+  a definition it starts the next term. Enter twice ends the list — the first ends
+  the definition and leaves you on an empty term, the second drops out into an
+  ordinary paragraph below the list. **Ctrl+P** adds another paragraph to the
+  *current* definition, matching what it already does inside a list item.
+
+  **Tab / Shift+Tab** move a line between the two halves: Tab makes a term the
+  last paragraph of the definition above it, Shift+Tab makes a definition the next
+  term. They are exact opposites, and both take the lines below along, so the list
+  is never shuffled — Shift+Tab hands the paragraphs under a definition to the new
+  term, and Tab folds a term's own definition into the one above with it.
+
+  Picking any **other paragraph type** takes that one line out of the list rather
+  than converting the list in place — a term and a definition are the two halves of
+  an entry, not blocks that can become a heading where they stand. Everything
+  around it keeps its place: on a **term**, the terms beside it and the definition
+  they head stay a list, and the definition comes out only when no term is left to
+  head it (so a plain one-term entry becomes its term and its definition as two
+  separate paragraphs). On a **definition**, only that content leaves, as a new
+  paragraph below the list, and the term stays a term with an empty definition to
+  type into. Picking **Definition List** again still dissolves the whole list.
+  Previously a term ignored the menu entirely and a definition changed type in
+  place, staying inside the list.
+
+  Definition lists **split and rejoin themselves** as this happens: taking a line
+  out splits the list around it, and turning a paragraph back into a definition
+  list — or deleting the paragraph that was separating two of them — joins the
+  pieces up again. Two adjacent lists look identical to one on screen but are
+  written to file with a separator between them, so without this a line that left
+  the list and came back would leave a permanent seam.
+
+  **Known limitation:** FTML — Pure's own format, and the fallback for an unknown
+  extension — has neither a thematic-break nor a definition-list element, so
+  `tdoc`'s strict-FTML writer drops a rule outright and flattens a definition list
+  into ordinary paragraphs. Saving as `.ftml` therefore loses both structures
+  (their *text* survives); `.html` and `.md` keep them. Pure does not warn about
+  this yet.
 
 ### Changed
 
@@ -39,9 +95,26 @@ While pre-1.0, the minor version is bumped for breaking changes.
   keeps the layout cache, and memoizing the status-bar word count — bring every
   tested case under 300 µs/key (down from up to ~1.95 ms). Measured by the new
   end-to-end `examples/bench_cursor.rs`. (#40)
+- **`tdoc` bumped to `0.12`** for `Paragraph::HorizontalRule` and
+  `Paragraph::DefinitionList`. `rutle` is **temporarily a path dependency** on the
+  local dev tree — the engine support for both types landed after `rutle 0.5.0`
+  and is not published yet. `cargo publish` rejects a bare path dependency, so
+  this is a deliberate tripwire: swap it back to a plain version before releasing.
 
 ### Fixed
 
+- The status bar's **word count** now reaches into every place a paragraph can
+  hold text. It previously counted only `content`, `children`, list entries and
+  one level of checklist nesting, so **table cells counted as zero words** and a
+  checklist nested more than one deep stopped being counted partway down.
+  Definition-list terms and definitions are counted too, at any nesting. (A
+  definition holds whole paragraphs, which is what made the table gap reachable
+  in the middle of ordinary prose.)
+- The status bar's **line count** accounts for the blank rows a horizontal rule
+  reserves, keeping its line numbers in step with what the engine laid out.
+- `save_then_load` in the format tests used one fixed temp path per extension, so
+  two tests round-tripping the same extension could race. Each call now gets its
+  own file.
 - Converting a paragraph to a quote (`Esc 5`) now **converts** it (a heading
   becomes a plain quote) instead of nesting it, matching lists. A single-text
   container acts as a leaf, so `Esc 5`/`8`/`0` round-trip and the breadcrumb shows

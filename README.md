@@ -42,6 +42,8 @@ Pure documents are made up of **paragraphs**, each with a specific type:
 - **Numbered List** - Ordered list items
 - **Bullet List** - Unordered list items
 - **Checklist** - Task items with checkboxes (`[ ]` and `[x]`)
+- **Definition List** - Terms paired with their definitions
+- **Horizontal Rule** - A thematic break between sections
 
 **Inline Styles:**
 
@@ -242,6 +244,8 @@ Pure is under active development. Current status:
 - [x] Checklists with checkboxes
 - [x] Block quotes with nesting
 - [x] Code blocks
+- [x] Definition lists (not representable in FTML — save as HTML/Markdown)
+- [x] Horizontal rules (not representable in FTML — save as HTML/Markdown)
 
 **Inline Styles:**
 
