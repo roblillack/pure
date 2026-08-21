@@ -7,6 +7,8 @@ pub mod file_dialog;
 pub mod link_dialog;
 pub mod menu_bar;
 pub mod ratatui_draw_context;
+pub mod spell;
+pub mod spell_dialog;
 pub mod theme;
 
 #[cfg(any(test, feature = "recorder"))]

@@ -1255,6 +1255,7 @@ The menu bar stays hidden while you write. When activated, it appears at the top
 - **Insert** - Line Break (Ctrl+J), Sibling Paragraph (Ctrl+P)
 - **Format** - Formatting Menu (Esc or Ctrl+Space)
 - **View** - Reveal Codes (F9)
+- **Tools** - Check Spelling... (F7)
 
 #### To open the menu bar:
 
@@ -1669,6 +1670,116 @@ There are no automatic saves or backup copies. Remember to save frequently (Ctrl
 
 ---
 
+### Spell Checking
+
+**Purpose:** Find and correct misspelled words in your document.
+
+**Keyboard Shortcut:** F7
+
+Pure checks your document against a spelling dictionary and walks you through
+every word it doesn't recognize, one at a time, from the top of the document.
+American English is built in — nothing to install.
+
+#### To check spelling:
+
+Press **F7** (or choose **Check Spelling...** from the **Tools** menu).
+
+Pure stops at the first word it doesn't know, selects it in your document, and
+opens the Check Spelling dialog:
+
+```
+┌Check Spelling — 2 remaining──────────────────────────────┐
+│Not in dictionary: essentails                             │
+│  Pack the essentails before the long trip …              │
+│──────────────────────────────────────────────────────────│
+│Change to: essentials                                     │
+│  essentials                                              │
+│  essential                                               │
+│  entails                                                 │
+│  entrails                                                │
+│──────────────────────────────────────────────────────────│
+│[ Replace ]  [ Replace All ]  [ Add to Dictionary ]       │
+│[ Ignore ]   [ Ignore All ]   [ Close ]                   │
+│Enter: replace  Tab: next  ↑↓: pick  Esc: close           │
+└──────────────────────────────────────────────────────────┘
+```
+
+The title tells you how many flagged words are left, the second line shows the
+word in its sentence, and **Change to** holds the correction that Replace will
+insert — the best suggestion, preselected.
+
+#### To choose a correction:
+
+Press **Up** or **Down** to pick a different suggestion; the Change to field
+follows your choice. To use a word the dictionary didn't suggest, simply type
+it: the field is a text field, with Left/Right, Home/End, Backspace, and Delete
+all working as usual.
+
+Then press **Enter** to replace the word and move on to the next one.
+
+#### The commands:
+
+**Replace** (Enter) - Correct this occurrence with the text in Change to.
+
+**Replace All** - Correct this occurrence and every later one of the same word in
+the document. Words you have already passed are left alone.
+
+**Ignore** - Leave the word as it is and move on.
+
+**Ignore All** - Leave this word alone for the rest of the session; Pure stops
+flagging it until you quit.
+
+**Add to Dictionary** - Remember the word permanently. It is appended to your
+personal word list at `~/.config/pure/dictionary.txt` (one word per line, which
+you can edit by hand) and accepted in every future session.
+
+**Close** (Esc) - Stop the pass. Everything you already corrected stays
+corrected.
+
+Press **Tab** (or **Shift+Tab**) to move between the Change to field and the
+buttons; the highlighted button is the one Enter or Space activates.
+
+When the pass reaches the end of the document, the dialog closes and the status
+line reports what it did — for example `Spell check complete — 2 replaced,
+1 ignored`.
+
+#### What Pure does not check:
+
+To keep the pass focused on prose, Pure skips:
+
+- Code blocks and inline code
+- Tables (their text is read-only)
+- URLs, e-mail addresses, file names, paths, and version numbers
+- Words in ALL CAPS (acronyms such as FTML or TUI)
+- Identifiers with an interior capital, like `wrapWidth`
+- Single letters
+
+#### Additional Information:
+
+A correction keeps the formatting of the word it replaces: fixing a bold word
+leaves it bold, and fixing a word inside a link leaves the link intact.
+
+Each Replace — or Replace All, however many words it changed — is a single undo
+step, so **Ctrl+Z** takes back a correction you didn't mean to make.
+
+Checking another language means installing a dictionary. Pure reads Hunspell
+dictionaries (an `.aff` and a `.dic` file with the same name): put the pair in
+`~/.config/pure/dictionaries/` and name it after its language tag, for example
+`de_DE.aff` and `de_DE.dic`, then set the language in your configuration file at
+`~/.config/pure/config.toml`:
+
+```toml
+spell_language = "de_DE"
+```
+
+Pure also finds dictionaries in `$DICPATH` and in the usual system directories
+(`/usr/share/hunspell`, `/usr/share/myspell`, `/opt/homebrew/share/hunspell`,
+`~/Library/Spelling`, and similar), so a dictionary your package manager
+installed works too. If no dictionary for the configured language turns up, F7
+says so and tells you where to put one.
+
+---
+
 ## Keyboard Shortcuts Reference
 
 ### Navigation
@@ -1755,7 +1866,7 @@ There are no automatic saves or backup copies. Remember to save frequently (Ctrl
 
 **F10** - Open/close the menu bar
 
-**Alt+F / Alt+E / Alt+I / Alt+O / Alt+V** - Open the File, Edit, Insert, Format, or View menu
+**Alt+F / Alt+E / Alt+I / Alt+O / Alt+V / Alt+T** - Open the File, Edit, Insert, Format, View, or Tools menu
 
 **Left** / **Right** - Move between menus
 
@@ -1768,6 +1879,9 @@ There are no automatic saves or backup copies. Remember to save frequently (Ctrl
 ### Special Features
 
 **F9** - Toggle Reveal Codes
+
+**F7** - Check spelling (in the dialog: **Enter** replaces, **Up/Down** picks a
+suggestion, **Tab** moves between the field and the buttons, **Esc** stops)
 
 ---
 

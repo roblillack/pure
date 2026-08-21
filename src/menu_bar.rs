@@ -23,6 +23,7 @@ pub enum AppAction {
     InsertSiblingParagraph,
     FormattingMenu,
     ToggleRevealCodes,
+    CheckSpelling,
 }
 
 pub struct MenuBarItem {
@@ -121,6 +122,15 @@ pub const MENU_BAR: &[MenuDef] = &[
             "Reveal Codes",
             Some("F9"),
             AppAction::ToggleRevealCodes,
+        )],
+    },
+    MenuDef {
+        title: "Tools",
+        accel_index: 0,
+        entries: &[item(
+            "Check Spelling...",
+            Some("F7"),
+            AppAction::CheckSpelling,
         )],
     },
 ];

@@ -1538,6 +1538,7 @@ fn caret_affinity_setting_controls_the_boundary_stop() {
         link_document(),
         Config {
             caret_affinity: false,
+            ..Config::default()
         },
     );
     for _ in 0..11 {
@@ -1764,4 +1765,233 @@ fn selecting_middle_list_items_and_changing_type_splits_the_list() {
         !has("[ ] two") && !has("[ ] three"),
         "the carved-out items no longer render as checkboxes"
     );
+}
+
+// ----- spell checking (F7) -------------------------------------------------
+
+/// The spell-check pass needs a dictionary, so these tests run against the
+/// bundled en_US one (the default `bundled-dictionary` feature) — which also
+/// keeps the suggestions, and therefore the snapshots, identical everywhere.
+#[cfg(feature = "bundled-dictionary")]
+mod spell_check {
+    use super::*;
+
+    /// Two paragraphs sharing one misspelling, so a pass has somewhere to walk to
+    /// and "Replace All" has something to reach.
+    fn typo_document() -> Document {
+        ftml! {
+            h1 { "Packing List" }
+            p { "Pack the essentails before the long trip abroad." }
+            p { "Check the essentails twice." }
+        }
+    }
+
+    /// Lines of the rendered frame, for asserting on document text and the status
+    /// bar once the dialog has closed.
+    fn contains_line(app: &TestApp, needle: &str) -> bool {
+        app.buffer_lines().iter().any(|line| line.contains(needle))
+    }
+
+    #[test]
+    fn f7_opens_the_spell_dialog_on_the_first_misspelling() {
+        let mut app = TestApp::new(WIDTH, HEIGHT, typo_document());
+        app.key(KeyCode::F(7));
+        // The word, its context, the preselected best suggestion, and the buttons —
+        // with the word itself selected in the document behind the dialog.
+        assert_svg("spell_dialog_first_misspelling", &mut app);
+    }
+
+    #[test]
+    fn enter_replaces_the_word_and_walks_to_the_next_one() {
+        let mut app = TestApp::new(WIDTH, HEIGHT, typo_document());
+        app.key(KeyCode::F(7));
+        // The best suggestion is preselected, so Enter fixes this occurrence and
+        // the dialog moves on to the next one.
+        app.key(KeyCode::Enter);
+        assert_svg("spell_dialog_second_misspelling", &mut app);
+
+        app.key(KeyCode::Enter);
+        assert!(
+            contains_line(&app, "Spell check complete — 2 replaced"),
+            "the pass reports what it did: {:?}",
+            app.buffer_lines()
+        );
+        assert!(contains_line(&app, "Pack the essentials"));
+        assert!(contains_line(&app, "Check the essentials"));
+        assert_svg("spell_check_complete", &mut app);
+    }
+
+    #[test]
+    fn replace_all_fixes_every_later_occurrence() {
+        let mut app = TestApp::new(WIDTH, HEIGHT, typo_document());
+        app.key(KeyCode::F(7));
+        // Tab from the replacement field onto Replace All.
+        app.key(KeyCode::Tab);
+        app.key(KeyCode::Tab);
+        assert_svg("spell_dialog_replace_all_focused", &mut app);
+
+        app.key(KeyCode::Enter);
+        assert!(
+            contains_line(&app, "Spell check complete — 2 replaced"),
+            "both occurrences went in one step: {:?}",
+            app.buffer_lines()
+        );
+        assert!(contains_line(&app, "Pack the essentials"));
+        assert!(contains_line(&app, "Check the essentials"));
+    }
+
+    #[test]
+    fn ignore_leaves_the_word_alone_and_moves_on() {
+        let mut app = TestApp::new(WIDTH, HEIGHT, typo_document());
+        app.key(KeyCode::F(7));
+        // Tab onto Ignore: field, Replace, Replace All, Add, Ignore.
+        for _ in 0..4 {
+            app.key(KeyCode::Tab);
+        }
+        app.key(KeyCode::Enter);
+        // The focus stays put, so a second Enter ignores the next occurrence too.
+        app.key(KeyCode::Enter);
+        assert!(
+            contains_line(&app, "Spell check complete — 2 ignored"),
+            "{:?}",
+            app.buffer_lines()
+        );
+        assert!(
+            contains_line(&app, "Pack the essentails"),
+            "an ignored word is left as it was"
+        );
+    }
+
+    #[test]
+    fn ignore_all_skips_the_rest_of_the_documents_occurrences() {
+        let mut app = TestApp::new(WIDTH, HEIGHT, typo_document());
+        app.key(KeyCode::F(7));
+        // Tab onto Ignore All: field, Replace, Replace All, Add, Ignore, Ignore All.
+        for _ in 0..5 {
+            app.key(KeyCode::Tab);
+        }
+        app.key(KeyCode::Enter);
+        assert!(
+            contains_line(&app, "Spell check complete — 2 ignored"),
+            "one press covered both occurrences: {:?}",
+            app.buffer_lines()
+        );
+        assert!(contains_line(&app, "Pack the essentails"));
+    }
+
+    #[test]
+    fn a_typed_replacement_overrides_the_suggestions() {
+        let mut app = TestApp::new(WIDTH, HEIGHT, typo_document());
+        app.key(KeyCode::F(7));
+        // Clear the preselected suggestion and write a different word.
+        for _ in 0.."essentials".len() {
+            app.key(KeyCode::Backspace);
+        }
+        app.type_text("necessities");
+        assert_svg("spell_dialog_typed_replacement", &mut app);
+
+        app.key(KeyCode::Enter);
+        app.key(KeyCode::Esc);
+        assert!(contains_line(&app, "Pack the necessities"));
+        assert!(
+            contains_line(&app, "Spell check stopped — 1 replaced"),
+            "{:?}",
+            app.buffer_lines()
+        );
+    }
+
+    #[test]
+    fn undo_reverts_a_spelling_replacement() {
+        let mut app = TestApp::new(WIDTH, HEIGHT, typo_document());
+        app.key(KeyCode::F(7));
+        app.key(KeyCode::Enter);
+        app.key(KeyCode::Esc);
+        assert!(contains_line(&app, "Pack the essentials"));
+        app.ctrl('z');
+        assert!(
+            contains_line(&app, "Pack the essentails"),
+            "a replacement is one undo step"
+        );
+    }
+
+    #[test]
+    fn f7_on_a_clean_document_reports_that_there_is_nothing_to_fix() {
+        let document = ftml! {
+            p { "The quick brown fox jumps over the lazy dog." }
+        };
+        let mut app = TestApp::new(WIDTH, HEIGHT, document);
+        app.key(KeyCode::F(7));
+        assert!(
+            contains_line(&app, "no misspellings found"),
+            "{:?}",
+            app.buffer_lines()
+        );
+    }
+
+    #[test]
+    fn the_tools_menu_starts_a_spell_check() {
+        let mut app = TestApp::new(WIDTH, HEIGHT, typo_document());
+        app.key_with(KeyCode::Char('t'), KeyModifiers::ALT);
+        assert_svg("menu_bar_tools_menu", &mut app);
+        app.key(KeyCode::Enter);
+        assert!(contains_line(&app, "Check Spelling"));
+    }
+
+    #[test]
+    fn replacing_a_styled_word_keeps_its_formatting() {
+        let document = ftml! {
+            p { "Pack the " b { "essentails" } " right now." }
+            p { "Read the " link { "https://example.test" "manaul" } " first." }
+            ul {
+                li { p { "Bring a jaket" } }
+            }
+        };
+        let mut app = TestApp::new(WIDTH, HEIGHT, document);
+        app.key(KeyCode::F(7));
+        // The bold word, the link's label, then the word in the list item.
+        app.key(KeyCode::Enter);
+        app.key(KeyCode::Enter);
+        app.key(KeyCode::Enter);
+        assert!(
+            contains_line(&app, "Spell check complete — 3 replaced"),
+            "{:?}",
+            app.buffer_lines()
+        );
+        assert!(contains_line(&app, "Pack the essentials right now."));
+        assert!(contains_line(&app, "Read the manual first."));
+        assert!(contains_line(&app, "Bring a jacket"));
+        // The snapshot carries what the assertions above can't: the replacements
+        // are still bold and still a link. Replacing a word by selecting it and
+        // typing over it would empty its run and lose the styling with it.
+        assert_svg("spell_replacement_keeps_styling", &mut app);
+    }
+
+    #[test]
+    fn the_dialog_shrinks_to_fit_a_small_terminal() {
+        // A short terminal drops suggestion rows rather than overflowing, and a
+        // tiny one skips the dialog altogether — in both cases the pass is still
+        // running and drawing must not panic.
+        for (width, height) in [(72, 18), (44, 12), (40, 9), (24, 6)] {
+            let mut app = TestApp::new(width, height, typo_document());
+            app.key(KeyCode::F(7));
+            app.draw();
+            // Enter still replaces the word, whether or not the dialog is drawn.
+            app.key(KeyCode::Enter);
+            app.key(KeyCode::Esc);
+            // Check the status line rather than the document text: a 24-column
+            // viewport scrolls the corrected line out of sight. It gets
+            // truncated too, so only the part that always fits is matched here.
+            let text = app.buffer_lines().join(" ");
+            assert!(
+                text.contains("Spell check stopp"),
+                "{width}x{height}: the pass should have run, got {text:?}"
+            );
+            if width >= 44 {
+                assert!(
+                    text.contains("1 replaced"),
+                    "{width}x{height}: Enter should have replaced the word, got {text:?}"
+                );
+            }
+        }
+    }
 }

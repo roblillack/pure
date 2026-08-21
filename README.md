@@ -61,6 +61,7 @@ Pure provides an intuitive editing experience:
 - **Mouse Support**: Click to position cursor, drag to select, double-click to select words, triple-click for paragraphs
 - **Clipboard**: Cut, copy, and paste — within Pure with formatting preserved; copying reaches the system clipboard through the terminal (OSC 52), pasting from other applications works via the terminal's paste shortcut (bracketed paste)
 - **Reveal Codes**: Press F9 to see the underlying formatting structure (inspired by WordPerfect)
+- **Spell Checking**: Press F7 to walk the document misspelling by misspelling, with suggestions, Replace All, and a personal dictionary — American English is built in, other languages come from Hunspell dictionaries
 - **Menu Bar**: Press F10 (or an Alt accelerator like Alt+F) for a TurboVision-style menu bar
 - **Context Menu**: Press Esc to access all formatting options
 - **Real-time Rendering**: See your formatted document as you type
@@ -90,6 +91,7 @@ Pure is designed for efficiency with comprehensive keyboard shortcuts:
 - **Esc** - Open context menu
 - **F10** - Open the menu bar (Alt+F, Alt+E, ... open a menu directly)
 - **F9** - Toggle reveal codes
+- **F7** - Check spelling
 - **Ctrl+P** - Create new paragraph at same level
 - **Ctrl+J** - Insert line break within paragraph (useful for addresses, poetry, etc.)
 - **Arrow keys** - Navigate (Ctrl+Left/Right for word jumps)
@@ -175,8 +177,32 @@ pure webpage.html
 
 **Special Features:**
 
-- F10 - Menu bar (Alt+F/E/I/O/V open a menu directly)
+- F10 - Menu bar (Alt+F/E/I/O/V/T open a menu directly)
 - F9 - Reveal codes mode
+- F7 - Check spelling
+
+### Spell Checking
+
+Press **F7** (or pick **Tools → Check Spelling…**) to walk the document from the
+top, stopping at each word the dictionary doesn't know. The dialog shows the word
+in context and the suggested corrections; pick one with the arrow keys or type
+your own, then:
+
+- **Replace** (Enter) — correct this occurrence
+- **Replace All** — correct this and every later occurrence of the word
+- **Ignore** / **Ignore All** — leave it, once or for the rest of the session
+- **Add to Dictionary** — remember the word in `~/.config/pure/dictionary.txt`
+
+Tab moves between the replacement field and the buttons; Esc stops the pass. Code
+blocks, inline code, tables, URLs, e-mail addresses, file names, and acronyms are
+skipped, and a correction keeps the formatting of the word it replaces. Each
+Replace (or Replace All) is a single undo step.
+
+American English is compiled into the binary. To check another language, drop a
+Hunspell dictionary pair into `~/.config/pure/dictionaries/` (for example
+`de_DE.aff` and `de_DE.dic`) and set `spell_language` in the config file; Pure
+also finds dictionaries in `$DICPATH` and the usual system directories. See
+[`dictionaries/README.md`](dictionaries/README.md) for details.
 
 ## Configuration
 
@@ -194,6 +220,16 @@ setting has a default, so you only need to list the ones you want to change.
 # the run. Enabled by default. Set to false to make Left/Right step across such
 # boundaries in a single press instead.
 caret_affinity = true
+
+# Language of the dictionary used for spell checking (F7). Pure looks for
+# `<tag>.aff`/`<tag>.dic` in ~/.config/pure/dictionaries, falls back to the
+# bundled en_US dictionary, and finally searches $DICPATH and the system
+# dictionary directories. Defaults to "en_US".
+spell_language = "en_US"
+
+# Explicit path to a Hunspell .dic file, skipping the search above. The matching
+# .aff file is expected beside it under the same stem. Unset by default.
+# spell_dictionary = "/usr/share/hunspell/en_GB.dic"
 ```
 
 ## What is FTML?
@@ -264,6 +300,7 @@ Pure is under active development. Current status:
 
 - [x] Context menu (Esc)
 - [x] Reveal codes mode (F9)
+- [x] Spell checking (F7)
 - [x] Mouse support (click, drag, select, scroll)
 - [x] Status bar with document info
 
@@ -338,7 +375,11 @@ Pure embraces several design principles:
 
 ## License
 
-MIT
+MIT.
+
+The bundled American English spelling dictionary in `dictionaries/en_US` is
+SCOWL-derived and carries its own permissive terms; see
+[`dictionaries/en_US/LICENSE`](dictionaries/en_US/LICENSE).
 
 ## Contributing
 
@@ -354,4 +395,4 @@ Areas where contributions would be especially valuable:
 
 ## Acknowledgments
 
-Pure is inspired by classic word processors like WordPerfect, bringing their structured editing approach to modern terminal environments. The FTML format and document handling are powered by [tdoc](https://github.com/roblillack/tdoc).
+Pure is inspired by classic word processors like WordPerfect, bringing their structured editing approach to modern terminal environments. The FTML format and document handling are powered by [tdoc](https://github.com/roblillack/tdoc), the editor and layout engine by [rutle](https://github.com/roblillack/rutle), and spell checking by [spellbook](https://github.com/helix-editor/spellbook) with dictionaries derived from [SCOWL](http://wordlist.sourceforge.net).

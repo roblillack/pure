@@ -1076,6 +1076,7 @@ dependencies = [
  "resvg",
  "rutle",
  "serde",
+ "spellbook",
  "tdoc",
  "toml",
  "unicode-width 0.2.0",
@@ -1409,6 +1410,16 @@ name = "smallvec"
 version = "1.15.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "67b1b7a3b5fe4f1376887184045fcf45c69e92af734b7aaddc05fb777b6fbd03"
+
+[[package]]
+name = "spellbook"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0d204abcbdf8e88729306a8d0ca01a79d8a49969fe1f84696909d6dbc4321c1a"
+dependencies = [
+ "foldhash",
+ "hashbrown 0.16.0",
+]
 
 [[package]]
 name = "stable_deref_trait"
