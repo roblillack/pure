@@ -81,6 +81,10 @@ While pre-1.0, the minor version is bumped for breaking changes.
   reveal-codes tags as WordPerfect-style boxes in pixel backends; the terminal
   keeps the bracketed `[Bold>` / `<Bold]` text tags, so nothing changes on
   screen. (#42)
+- The status bar now advertises the formatting menu as **`Esc:Format`**, ahead
+  of `F10:Menu ^S:Save ^Q:Quit`; on a narrow terminal it is the first hint to
+  go. The popup's title is now **Format** (was "Context Menu"), matching the
+  Format drop-down. (#43)
 
 ### Fixed
 
