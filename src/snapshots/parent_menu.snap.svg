@@ -6,7 +6,7 @@
 <text x="20" y="55" fill="#e5e5e5" textLength="10" lengthAdjust="spacingAndGlyphs" xml:space="preserve" opacity="0.6">|</text>
 <text x="30" y="55" fill="#d8d8d8" textLength="690" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> second                                                              </text>
 <rect x="250" y="80" width="210" height="20" fill="#000000"/>
-<text x="250" y="95" fill="#e5e5e5" textLength="210" lengthAdjust="spacingAndGlyphs" xml:space="preserve">┌Context Menu───────┐</text>
+<text x="250" y="95" fill="#e5e5e5" textLength="210" lengthAdjust="spacingAndGlyphs" xml:space="preserve">┌Format─────────────┐</text>
 <rect x="250" y="100" width="10" height="20" fill="#000000"/>
 <text x="250" y="115" fill="#e5e5e5" textLength="10" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
 <rect x="260" y="100" width="170" height="20" fill="#000000"/>

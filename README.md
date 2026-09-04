@@ -64,7 +64,7 @@ Pure provides an intuitive editing experience:
 - **Clipboard**: Cut, copy, and paste — within Pure with formatting preserved; copying reaches the system clipboard through the terminal (OSC 52), pasting from other applications works via the terminal's paste shortcut (bracketed paste)
 - **Reveal Codes**: Press F9 to see the underlying formatting structure (inspired by WordPerfect)
 - **Menu Bar**: Press F10 (or an Alt accelerator like Alt+F) for a TurboVision-style menu bar
-- **Context Menu**: Press Esc to access all formatting options
+- **Format Menu**: Press Esc to access all formatting options
 - **Real-time Rendering**: See your formatted document as you type
 
 ### Format Support

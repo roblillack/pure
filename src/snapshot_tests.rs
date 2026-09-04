@@ -1262,6 +1262,14 @@ fn untitled_document_shows_untitled_in_status_bar() {
     assert_svg("untitled_status_bar", &mut app);
 }
 
+/// At 72 columns the status bar has no room for the `Esc:Format` hint and
+/// drops it first; a wider terminal shows all four shortcut hints.
+#[test]
+fn wide_status_bar_shows_all_shortcut_hints() {
+    let mut app = TestApp::untitled(90, HEIGHT, sample_document());
+    assert_svg("wide_status_bar_shortcuts", &mut app);
+}
+
 #[test]
 fn ctrl_n_replaces_document_with_untitled_one() {
     let mut app = sample_app();
