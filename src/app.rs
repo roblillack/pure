@@ -1703,10 +1703,12 @@ impl App {
         ];
 
         // Right-align the shortcut hints, fitting them most-important-first so a
-        // long left side drops `F10:Menu` before the save/quit hints (rather than
-        // dropping them all at once), the way classic Pure degraded them.
+        // long left side drops `Esc:Format`, then `F10:Menu`, before the save/quit
+        // hints (rather than dropping them all at once), the way classic Pure
+        // degraded them. F10 stays ahead of Esc because the menu bar is the
+        // discovery root: its Format drop-down lists the formatting menu itself.
         const MIN_PADDING: usize = 1;
-        let all_shortcuts = ["F10:Menu", "^S:Save", "^Q:Quit"];
+        let all_shortcuts = ["Esc:Format", "F10:Menu", "^S:Save", "^Q:Quit"];
         let mut shortcuts: Vec<&str> = Vec::new();
         let mut shortcuts_width = 0usize;
         for shortcut in all_shortcuts.iter().rev() {
@@ -2286,7 +2288,7 @@ impl App {
             .style(popup_style)
             .block(
                 Block::default()
-                    .title("Context Menu")
+                    .title("Format")
                     .borders(Borders::ALL)
                     .style(popup_style)
                     .border_style(Style::default().fg(Color::Gray)),
