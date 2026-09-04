@@ -277,7 +277,7 @@ fn indexed_frame(rgba: &[u8], previous: Option<&[u8]>, region: &Region) -> Optio
     let mut lookup: HashMap<[u8; 3], u8> = HashMap::new();
     let mut palette = vec![0, 0, 0];
     let mut pixels = Vec::with_capacity(rgba.len() / 4);
-    for (i, pixel) in rgba.chunks_exact(4).enumerate() {
+    for (i, pixel) in rgba.as_chunks::<4>().0.iter().enumerate() {
         if let Some(previous) = previous
             && previous[i * 4..i * 4 + 4] == *pixel
         {
