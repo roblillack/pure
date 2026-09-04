@@ -109,7 +109,10 @@ pub fn terminal_theme() -> Theme {
         horizontal_rule_as_text: true,
         horizontal_rule_color: TERMINAL_GRAY,
         // Reveal-codes tags: black text on an ANSI-gray fill (classic Pure's
-        // `reveal_tag_style`). Only drawn while reveal codes is on.
+        // `reveal_tag_style`). Only drawn while reveal codes is on. A cell grid
+        // cannot draw rutle's pointed WordPerfect-style tag boxes, so keep the
+        // bracketed `[Bold>` / `<Bold]` text form.
+        reveal_tag_text: true,
         reveal_tag_fg: TERMINAL_REVEAL_FG,
         reveal_tag_bg: TERMINAL_REVEAL_BG,
         // Highlighted text is black on ANSI light-yellow, like classic Pure.
