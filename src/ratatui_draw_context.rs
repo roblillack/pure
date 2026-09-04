@@ -64,10 +64,16 @@ pub fn terminal_theme() -> Theme {
         paragraph_spacing: 0,
         list_item_spacing: 0,
         quote_spacing: 0,
+        horizontal_rule_spacing: 0,
+        definition_term_spacing: 0,
         // One row of padding above/below code hosts the fence rules.
         code_block_padding: 1,
         quote_indent: 2,
         quote_bar_offset: 0,
+        // A definition is set off from its term by a two-column indent, matching
+        // the quote/list steps. (The bold `definition_term` font below does the
+        // rest of the work — a term carries no marker of its own.)
+        definition_indent: 2,
         // Fonts report `font_size == 0` on a cell grid, so give nested list items
         // a real per-level indent (two columns) instead of collapsing them flat.
         list_indent: 2,
@@ -97,8 +103,16 @@ pub fn terminal_theme() -> Theme {
         classic_block_spacing: true,
         // Classic Pure's quote bar was a literal `|`, not a box-drawing rule.
         quote_bar_as_text: true,
+        // A cell grid cannot draw a sub-cell line, so a rule is the centered
+        // `───── • ─────` ornament `tdoc`'s terminal formatter emits, in the
+        // same structural gray as the other marks.
+        horizontal_rule_as_text: true,
+        horizontal_rule_color: TERMINAL_GRAY,
         // Reveal-codes tags: black text on an ANSI-gray fill (classic Pure's
-        // `reveal_tag_style`). Only drawn while reveal codes is on.
+        // `reveal_tag_style`). Only drawn while reveal codes is on. A cell grid
+        // cannot draw rutle's pointed WordPerfect-style tag boxes, so keep the
+        // bracketed `[Bold>` / `<Bold]` text form.
+        reveal_tag_text: true,
         reveal_tag_fg: TERMINAL_REVEAL_FG,
         reveal_tag_bg: TERMINAL_REVEAL_BG,
         // Highlighted text is black on ANSI light-yellow, like classic Pure.
@@ -112,9 +126,13 @@ pub fn terminal_theme() -> Theme {
         &mut t.plain_text,
         &mut t.quote_text,
         &mut t.code_text,
+        &mut t.definition_term,
     ] {
         fs.font_size = 0;
     }
+    // A term is bold (that is what marks it, since it has no bullet or number),
+    // but it takes the default body color like every other paragraph.
+    t.definition_term.font_color = t.plain_text.font_color;
     // Classic Pure drew code and quote text in the default body color (no blue
     // code, no dim italic quotes) and left the quote's emphasis to inline spans.
     t.code_text.font_color = t.plain_text.font_color;

@@ -479,6 +479,25 @@ fn paragraph_type_item(
     })
 }
 
+/// A paragraph-type entry with no number shortcut. The digits `0`–`9` are fully
+/// spoken for by the types above, so a newcomer joins the list without one
+/// rather than reshuffling everyone's muscle memory.
+fn paragraph_type_item_no_shortcut(
+    label: &'static str,
+    pt: ParagraphType,
+    allow: bool,
+) -> MenuEntry {
+    MenuEntry::Item(if allow {
+        MenuItem::enabled(label, MenuAction::SetParagraphType(pt))
+    } else {
+        MenuItem {
+            label,
+            action: None,
+            shortcut: None,
+        }
+    })
+}
+
 fn inline_style_item(
     label: &'static str,
     style: InlineStyle,
@@ -509,6 +528,7 @@ fn default_context_menu_entries(
         paragraph_type_item("Numbered List", ParagraphType::OrderedList, '7', a),
         paragraph_type_item("Bullet List", ParagraphType::UnorderedList, '8', a),
         paragraph_type_item("Checklist", ParagraphType::Checklist, '9', a),
+        paragraph_type_item_no_shortcut("Definition List", ParagraphType::DefinitionList, a),
         MenuEntry::Separator,
         MenuEntry::Section("Inline style"),
         inline_style_item(
@@ -847,6 +867,14 @@ impl App {
         self.after_edit(UndoKind::Other);
     }
 
+    /// A thematic break. The engine always places it as a *top-level* block —
+    /// splitting the paragraph around the caret when it sits mid-text — and
+    /// leaves the caret in the block below the rule.
+    fn insert_horizontal_rule(&mut self) {
+        let _ = self.display.editor_mut().insert_horizontal_rule();
+        self.after_edit(UndoKind::Other);
+    }
+
     fn toggle_reveal_codes(&mut self) {
         let enabled = !self.display.reveal_codes();
         self.display.set_reveal_codes(enabled);
@@ -924,7 +952,13 @@ impl App {
                 checkbox: Some(false),
                 depth: 0,
             },
-            ParagraphType::Table => return,
+            // The cursor's paragraph becomes the first item's *term*; the engine
+            // wraps the whole selected range into one `<dl>`.
+            ParagraphType::DefinitionList => BlockType::DefinitionTerm { depth: 0 },
+            // Neither is reachable as a paragraph *type*: a table has no inline
+            // form to convert text into, and a rule holds no text at all (it is
+            // inserted as its own block from the Insert menu instead).
+            ParagraphType::Table | ParagraphType::HorizontalRule => return,
         };
         if self.display.editor_mut().set_block_type(block).is_ok() {
             self.after_edit(UndoKind::Other);
@@ -938,7 +972,7 @@ impl App {
     }
 
     fn unindent(&mut self) {
-        if self.display.editor_mut().outdent_list_item().is_ok() {
+        if self.display.editor_mut().outdent().is_ok() {
             self.after_edit(UndoKind::Other);
         }
     }
@@ -1203,7 +1237,10 @@ impl App {
         };
         let editor = self.display.editor();
         let block = editor.current_block_type();
-        let allow_paragraph_change = !matches!(block, BlockType::Table { .. });
+        // Neither a table nor a rule holds inline content, so there is nothing to
+        // re-type: offering the paragraph types on one would only ever drop it.
+        let allow_paragraph_change =
+            !matches!(block, BlockType::Table { .. } | BlockType::HorizontalRule);
         // "Select parent" targets the parent of the *pseudo-leaf*: a collapsed single-text
         // container is already acted on by ESC+number, so start one level above it.
         let depth = editor.cursor_depth();
@@ -1320,6 +1357,7 @@ impl App {
             AppAction::Paste => self.paste_from_clipboard(),
             AppAction::InsertLineBreak => self.insert_line_break(),
             AppAction::InsertSiblingParagraph => self.insert_continuation(),
+            AppAction::InsertHorizontalRule => self.insert_horizontal_rule(),
             AppAction::FormattingMenu => self.open_context_menu(),
             AppAction::ToggleRevealCodes => self.toggle_reveal_codes(),
         }
@@ -2396,6 +2434,9 @@ impl App {
         // Tab is dedicated to list/paragraph structure — no fallback text insertion.
         // Shift-Tab lifts a paragraph out of its container one level (list or quote);
         // Tab nests a list item deeper or a paragraph into the container above it.
+        // Inside a definition list the pair switches a line between the two halves: Tab
+        // makes a term a paragraph of the definition above, Shift-Tab makes a definition
+        // the next term.
         let editor = self.display.editor();
         if back {
             if editor.cursor_can_unnest() {
@@ -2805,17 +2846,25 @@ fn block_type_label(block: BlockType) -> &'static str {
         BlockType::ListItem { ordered: true, .. } => "Ordered List",
         BlockType::ListItem { .. } => "Unordered List",
         BlockType::Table { .. } => "Table",
+        BlockType::HorizontalRule => "Horizontal Rule",
+        // A definition's *body* keeps its own type (Text, Heading, …), so only a
+        // term reports as the list — which is the useful thing to name here.
+        BlockType::DefinitionTerm { .. } => "Definition List",
     }
 }
 
 /// Classic-Pure `(top, bottom)` block margins in line units (see
 /// `rutle`'s `classic_margins`). Used to count content lines the way the
-/// old renderer did: only headings carry margins.
+/// old renderer did: only headings and rules carry margins.
+///
+/// This must stay in step with `classic_margins`, or the status bar's line
+/// numbers drift away from what the engine actually laid out.
 fn classic_block_margins(pt: ParagraphType) -> (i32, i32) {
     match pt {
         ParagraphType::Header1 => (3, 3),
         ParagraphType::Header2 => (3, 2),
         ParagraphType::Header3 => (2, 1),
+        ParagraphType::HorizontalRule => (2, 2),
         _ => (0, 0),
     }
 }
@@ -2835,7 +2884,19 @@ fn count_words(doc: &Document) -> usize {
             })
             .sum()
     }
+    // A checklist item nests items, not paragraphs, so it recurses on itself.
+    fn words_in_checklist_item(item: &tdoc::ChecklistItem) -> usize {
+        words_in_spans(&item.content)
+            + item
+                .children
+                .iter()
+                .map(words_in_checklist_item)
+                .sum::<usize>()
+    }
     fn words_in_paragraph(p: &tdoc::Paragraph) -> usize {
+        // Every place a paragraph can hold text, so that a container counts the
+        // same wherever it sits. Each accessor answers empty for the shapes it
+        // does not apply to, which is what lets them simply add up.
         let content = words_in_spans(p.content());
         let children: usize = p.children().iter().map(words_in_paragraph).sum();
         let entries: usize = p
@@ -2847,16 +2908,29 @@ fn count_words(doc: &Document) -> usize {
         let checklist: usize = p
             .checklist_items()
             .iter()
+            .map(words_in_checklist_item)
+            .sum();
+        // A definition list keeps its text in neither `content` nor `children`:
+        // each item pairs its terms' spans with a definition of full paragraphs.
+        let definitions: usize = p
+            .definition_items()
+            .iter()
             .map(|item| {
-                words_in_spans(&item.content)
+                item.terms.iter().map(|t| words_in_spans(t)).sum::<usize>()
                     + item
-                        .children
+                        .definition
                         .iter()
-                        .map(|nested| words_in_spans(&nested.content))
+                        .map(words_in_paragraph)
                         .sum::<usize>()
             })
             .sum();
-        content + children + entries + checklist
+        let table: usize = p
+            .rows()
+            .iter()
+            .flat_map(|row| row.cells.iter())
+            .map(|cell| words_in_spans(&cell.content))
+            .sum();
+        content + children + entries + checklist + definitions + table
     }
     doc.paragraphs.iter().map(words_in_paragraph).sum()
 }

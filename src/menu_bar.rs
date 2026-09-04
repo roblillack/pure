@@ -21,6 +21,7 @@ pub enum AppAction {
     Paste,
     InsertLineBreak,
     InsertSiblingParagraph,
+    InsertHorizontalRule,
     FormattingMenu,
     ToggleRevealCodes,
 }
@@ -103,6 +104,8 @@ pub const MENU_BAR: &[MenuDef] = &[
                 Some("^P"),
                 AppAction::InsertSiblingParagraph,
             ),
+            MenuBarEntry::Separator,
+            item("Horizontal Rule", None, AppAction::InsertHorizontalRule),
         ],
     },
     MenuDef {

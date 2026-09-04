@@ -22,12 +22,49 @@ While pre-1.0, the minor version is bumped for breaking changes.
   List, Checklist) while preserving the inner paragraph types; **Select parent**
   (`Esc ,`) targets the enclosing container to convert it, unwrap it, or climb a
   level. `[` / `Shift+Tab` now also lifts a paragraph out of a quote, not just a list. (#40)
+- **Horizontal rules** — a thematic break, via **Insert > Horizontal Rule**. A
+  rule always sits at the top level: inserting one mid-paragraph splits the
+  paragraph around it, and from inside a list or quote it lands below that whole
+  block. The caret continues below the rule. Backspace and Delete remove it, on
+  the rule itself and from the edge of the block above or below. A rule holds no
+  text, so the context menu's paragraph types are disabled while the caret rests
+  on one, and the status bar names it "Horizontal Rule". The terminal draws
+  tdoc's centered `───── • ─────` ornament, since a cell grid cannot draw a
+  sub-cell line. (#42)
+- **Definition lists** — terms paired with their definitions, via the context
+  menu's **Definition List** entry below Checklist (no number shortcut: `0`–`9`
+  are all taken). Terms render bold and definitions indent beneath them; a
+  definition holds whole paragraphs, so anything can go inside one. Round-trips
+  through HTML (`<dl>`/`<dt>`/`<dd>`) and Markdown.
+
+  **Enter** alternates between the two halves, so a glossary is typed straight
+  through: at the end of a term it opens the definition, at the end of a
+  definition it starts the next term, and on an empty term it leaves the list.
+  **Ctrl+P** adds another paragraph to the current definition, as it does inside
+  a list item. **Tab** folds a term, with its definition, into the definition
+  above; **Shift+Tab** turns a definition into the next term, taking the
+  paragraphs below it along. The two are exact opposites.
+
+  Picking any **other paragraph type** lifts that line out of the list instead
+  of converting the list in place: a definition leaves as a new paragraph below
+  the list (its term keeps an empty definition), and a term takes its definition
+  along only when no other term is left to head it. The rest stays a list, and
+  lists **split and rejoin** as lines leave and return, so a round trip through
+  another type never leaves a seam. Picking **Definition List** again dissolves
+  the whole list. Previously a term ignored the menu and a definition changed
+  type in place.
+
+  **Known limitation:** formats without these elements degrade them on save.
+  FTML drops a rule and flattens a definition list into plain paragraphs;
+  Gemtext writes a `---` line and plain text instead. The text survives, the
+  structure does not, and Pure does not warn about this yet. `.html` and `.md`
+  keep both. (#42)
 
 ### Changed
 
-- **Editor/layout engine carved out to the shared `rutle` crate** (`rutle 0.5.0`),
-  replacing Pure's homegrown layouter. Pure and its sibling editor Piki now share
-  one structured-editor/layout core, and both resolve `tdoc 0.11.0` so
+- **Editor/layout engine carved out to the shared `rutle` crate**, replacing
+  Pure's homegrown layouter. Pure and its sibling editor Piki now share one
+  structured-editor/layout core, and both resolve the same `tdoc` so
   `tdoc::Document` crosses the crate boundary unchanged. Retires ~26,000 lines
   (`src/editor/`, `editor_display.rs`, `render.rs`, and their tests), replaced by
   a thin ratatui adapter (`ratatui_draw_context.rs`). Rendering, cursor movement,
@@ -39,9 +76,22 @@ While pre-1.0, the minor version is bumped for breaking changes.
   keeps the layout cache, and memoizing the status-bar word count — bring every
   tested case under 300 µs/key (down from up to ~1.95 ms). Measured by the new
   end-to-end `examples/bench_cursor.rs`. (#40)
+- **`tdoc` bumped to `0.12` and `rutle` to `0.6.0`** for
+  `Paragraph::HorizontalRule` and `Paragraph::DefinitionList`. rutle now draws
+  reveal-codes tags as WordPerfect-style boxes in pixel backends; the terminal
+  keeps the bracketed `[Bold>` / `<Bold]` text tags, so nothing changes on
+  screen. (#42)
 
 ### Fixed
 
+- The status bar's **word count** now reaches into every place a paragraph can
+  hold text. It previously stopped at one level of checklist nesting and skipped
+  tables entirely, so **table cells counted as zero words**. Definition-list
+  terms and definitions are counted too, at any nesting. (#42)
+- The status bar's **line count** accounts for the blank rows a horizontal rule
+  reserves, keeping its line numbers in step with what the engine laid out. (#42)
+- The format round-trip tests used one fixed temp path per extension, so two
+  tests saving the same extension could race. Each call now gets its own file. (#42)
 - Converting a paragraph to a quote (`Esc 5`) now **converts** it (a heading
   becomes a plain quote) instead of nesting it, matching lists. A single-text
   container acts as a leaf, so `Esc 5`/`8`/`0` round-trip and the breadcrumb shows

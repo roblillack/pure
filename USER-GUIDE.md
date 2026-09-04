@@ -133,6 +133,8 @@ Pure documents are made up of **paragraphs**. Each paragraph has a type:
 - **Numbered List** - Ordered list items
 - **Bullet List** - Unordered list items
 - **Checklist** - Task list items with checkboxes
+- **Definition List** - Terms paired with their definitions
+- **Horizontal Rule** - A thematic break between sections (Insert menu)
 
 Within paragraphs, you can apply **inline styles** to text:
 
@@ -605,6 +607,7 @@ When the context menu is open, you can press a number key to quickly change the 
 - **7** - Numbered list
 - **8** - Bullet list
 - **9** - Checklist
+- **Definition List** - term/definition pairs (no number; select it with the arrow keys)
 
 #### Inline Styles (Current and Planned):
 
@@ -697,6 +700,109 @@ With nothing selected, Ctrl+C is ignored and Ctrl+X only reports that there is n
 Word-by-word movement (Ctrl+Left/Right) is especially useful for navigating and editing quickly. The cursor stops at the beginning of each word and skips over whitespace.
 
 Visual lines may differ from logical paragraphs. A single paragraph can span multiple visual lines due to word wrapping. Home and End move within the visual line, not the entire paragraph.
+
+---
+
+### Definition Lists
+
+**Purpose:** Pair terms with their definitions — a glossary, a set of options and
+what they do, a cast list.
+
+**Keyboard Shortcut:** none. Press **Esc** for the context menu and arrow down to
+**Definition List**; the digits 0-9 are already spoken for by the other paragraph
+types.
+
+#### To create a definition list:
+
+1. Type the term as an ordinary paragraph.
+
+2. Press **Esc**, arrow down to **Definition List**, and press **Enter**. The
+   paragraph becomes the list's first term.
+
+3. Press **End**, then **Enter**. Because the term has no definition yet, this
+   opens one and moves the cursor into it.
+
+4. Type the definition.
+
+5. Press **Enter** to start the next term, and keep going. Enter alternates
+   between the two halves, so a glossary is written straight through without
+   touching the menu again.
+
+6. Press **Enter** twice to finish: the first ends the last definition and
+   leaves you on an empty term, the second leaves the list and gives you an
+   ordinary paragraph below it.
+
+#### To add a second paragraph to a definition:
+
+Press **Ctrl+P** at the end of the definition. (Enter would move on to the next
+term; Ctrl+P is the "another paragraph in the same item" key here, exactly as it
+is inside a list item.) A definition holds full paragraphs, so anything can go
+inside one — another list, a heading, a quote — each keeping its own type.
+
+#### To move a line between the two halves:
+
+**Tab** on a term makes it the last paragraph of the definition above it, and
+**Shift+Tab** on a definition makes it the next term. The two are exact
+opposites, so you can move a line across and back.
+
+Both take the lines below along, so the list never gets shuffled: Shift+Tab on a
+definition that has further paragraphs under it makes those paragraphs the new
+term's own definition, and Tab on a term folds that term's definition into the
+one above along with it.
+
+#### To give one term several definitions, or one definition several terms:
+
+Press **Enter** at the end of a term to add another term to the same item. For
+several definitions, use **Ctrl+P** to add paragraphs to the one definition.
+
+#### To convert a definition list back to regular text:
+
+Position the cursor in the list, press **Esc**, and pick **Definition List**
+again. The whole list is dissolved: each term and each definition paragraph
+becomes a paragraph of its own, and nothing is lost.
+
+#### To take a single entry out of the list:
+
+Any *other* paragraph type takes that one line out rather than converting the
+list. Everything around it stays put; where the cursor sits decides how much
+comes with it:
+
+- **On a term**, the term leaves as a paragraph of the type you picked. Other
+  terms of the same entry stay behind and keep the definition they head. The
+  definition comes out too only when there is no term left to head it — which is
+  the usual case, an entry with a single term, so that entry becomes its term and
+  its definition as two separate paragraphs.
+
+- **On a definition**, only that content leaves, as a new paragraph of the chosen
+  type just below the list. The term stays a term, with an empty definition for
+  you to type into.
+
+So **Esc**, **0** on the term of an ordinary entry turns that entry into two plain
+paragraphs, while **Esc** and **Definition List** dissolves the entire list.
+
+The list splits around whatever line leaves it, and joins itself back up when the
+paragraph between the halves stops separating them — turn that paragraph back into
+a definition list, or delete it, and the two halves become one list again.
+
+#### Additional Information
+
+Terms are shown in bold and their definitions are indented beneath them; a term
+carries no bullet or number of its own, so the weight and the indent are what set
+the two halves apart.
+
+Selecting several paragraphs before converting turns each one into an item of a
+single list. A paragraph that has no inline text of its own — a nested list, a
+table, a rule — becomes an item with a definition but no term.
+
+Definition lists survive a round trip through HTML (`<dl>`/`<dt>`/`<dd>`) and
+Markdown (a term, then `: definition` on the following line). Markdown folds
+consecutive term lines into one term, so a multi-term item comes back intact only
+from HTML.
+
+**Saving as FTML flattens a definition list.** FTML has no `<dl>` element, so
+each term and each definition paragraph is written as an ordinary paragraph. The
+text is all still there, but reopening the file gives you paragraphs, not a list.
+Save as `.html` or `.md` to keep the structure.
 
 ---
 
@@ -822,6 +928,8 @@ Pure can import and export Markdown files. When you open a `.md` file, Pure conv
 - Code blocks (`code`)
 - Block quotes (> text)
 - Links [text](url)
+- Definition lists (a term, then `: definition` on the next line)
+- Horizontal rules (---)
 
 #### Limitations:
 
@@ -885,6 +993,11 @@ FTML (Formatted Text Markup Language) is a lightweight document format designed 
 - `<ul><li>` - Bullet lists
 - `<ol><li>` - Numbered lists
 - `<ul class="checklist"><li>` - Checklist items
+
+FTML has **no** thematic-break or definition-list element. A document containing
+horizontal rules or definition lists loses them when saved as `.ftml`: rules are
+dropped, and a definition list's terms and definitions are written as ordinary
+paragraphs. Save as `.html` (or `.md`) to keep either one.
 
 **Inline Styles:**
 
@@ -971,6 +1084,47 @@ Headings can contain inline formatting like bold and italic text.
 
 ---
 
+### Horizontal Rules
+
+**Purpose:** Mark a thematic break between sections.
+
+**Menu:** Insert > Horizontal Rule. There is no keyboard shortcut.
+
+#### To insert a horizontal rule:
+
+1. Position the cursor where the break belongs.
+
+2. Press **Alt+I** (or **F10** and arrow to Insert) to open the Insert menu.
+
+3. Arrow down to **Horizontal Rule** and press **Enter**.
+
+The cursor continues in the block *below* the new rule, so you can keep typing.
+
+#### To remove a horizontal rule:
+
+Position the cursor on the rule and press **Backspace** or **Delete**. Backspace
+at the start of the block below a rule, and Delete at the end of the block above
+one, remove it too.
+
+#### Additional Information
+
+A rule is a block in its own right, not a piece of text: the cursor can rest on
+it, but there is nothing in it to type into, and the paragraph types in the
+context menu are disabled while it does.
+
+The rule is always placed at the top level of the document. Inserting one from
+inside a list item or a quote puts it after that whole list or quote rather than
+splitting it; inserting one mid-paragraph splits the paragraph around it.
+
+In the terminal a rule is drawn as a centered `───── • ─────` ornament. In
+Markdown it is written as `---`, and in HTML as `<hr>`.
+
+**Saving as FTML drops horizontal rules.** FTML has no thematic-break element, so
+rules are left out of the file entirely and are gone when you reopen it. Save as
+`.html` or `.md` to keep them.
+
+---
+
 ### Hyperlinks
 
 **Purpose:** Create clickable links to web pages or other documents.
@@ -1034,7 +1188,9 @@ This creates a new line within the current paragraph without starting a new para
 **Tab** and **Shift+Tab** are dedicated to list and paragraph structure — they do
 not insert whitespace. **Tab** nests a list item one level deeper, or nests a
 paragraph into the container above it; **Shift+Tab** lifts a paragraph out of its
-container one level. See “Indent and Unindent Paragraphs” and “Lists”.
+container one level. Inside a definition list the pair switches a line between
+the two halves instead (see “Definition Lists”). See “Indent and Unindent
+Paragraphs” and “Lists”.
 
 #### To insert a paragraph break:
 
@@ -1252,7 +1408,7 @@ The menu bar stays hidden while you write. When activated, it appears at the top
 
 - **File** - New (Ctrl+N), Open... (Ctrl+O), Save (Ctrl+S), Save As..., Quit (Ctrl+Q)
 - **Edit** - Undo (Ctrl+Z), Redo (Ctrl+Y), Cut (Ctrl+X), Copy (Ctrl+C), Paste (Ctrl+V)
-- **Insert** - Line Break (Ctrl+J), Sibling Paragraph (Ctrl+P)
+- **Insert** - Line Break (Ctrl+J), Sibling Paragraph (Ctrl+P), Horizontal Rule
 - **Format** - Formatting Menu (Esc or Ctrl+Space)
 - **View** - Reveal Codes (F9)
 
@@ -1483,6 +1639,10 @@ Pure documents are composed of paragraphs, and each paragraph has a type that de
 
 **Checklist** (Esc, 9) - Task items with checkboxes
 
+**Definition List** (Esc, then arrow down to it) - Terms paired with their
+definitions. Every digit is already taken by the types above, so this one has no
+number of its own; pick it from the menu instead.
+
 #### To change a paragraph type:
 
 1. Position the cursor in the paragraph you want to change.
@@ -1695,7 +1855,8 @@ There are no automatic saves or backup copies. Remember to save frequently (Ctrl
 
 **Ctrl+J** - Insert newline character
 
-**Ctrl+P** - Insert a continuation paragraph in the current list item / quote
+**Ctrl+P** - Insert a continuation paragraph in the current list item / quote /
+definition
 
 **Tab** - Indent (nest a list item deeper, or a paragraph into the container above)
 
@@ -1750,6 +1911,8 @@ There are no automatic saves or backup copies. Remember to save frequently (Ctrl
 **8** - Bullet list
 
 **9** - Checklist
+
+**Definition List** - no number; arrow down to it in the context menu
 
 ### Menu Bar
 

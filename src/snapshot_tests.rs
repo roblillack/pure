@@ -1765,3 +1765,329 @@ fn selecting_middle_list_items_and_changing_type_splits_the_list() {
         "the carved-out items no longer render as checkboxes"
     );
 }
+
+// ----- horizontal rules ----------------------------------------------------------
+
+/// Walk the Insert menu down to "Horizontal Rule" (the last entry, past a
+/// separator `move_item` skips) and activate it.
+fn insert_horizontal_rule_via_menu(app: &mut TestApp) {
+    app.key_with(KeyCode::Char('i'), KeyModifiers::ALT);
+    app.key(KeyCode::Down); // Sibling Paragraph
+    app.key(KeyCode::Down); // Horizontal Rule
+    app.key(KeyCode::Enter);
+}
+
+#[test]
+fn insert_menu_adds_a_horizontal_rule() {
+    let mut app = TestApp::new(
+        WIDTH,
+        HEIGHT,
+        ftml! {
+            p { "Above the break." }
+            p { "Below the break." }
+        },
+    );
+    app.key(KeyCode::End); // end of the first paragraph
+    insert_horizontal_rule_via_menu(&mut app);
+
+    let lines = app.buffer_lines();
+    // A cell grid cannot draw a sub-cell line, so the rule is tdoc's terminal
+    // ornament: box-drawing runs around a spaced bullet.
+    let rule = lines
+        .iter()
+        .position(|l| l.contains('─') && l.contains('•'))
+        .expect("a rule ornament was drawn");
+    let above = lines
+        .iter()
+        .position(|l| l.contains("Above the break."))
+        .expect("text above");
+    let below = lines
+        .iter()
+        .position(|l| l.contains("Below the break."))
+        .expect("text below");
+    assert!(
+        above < rule && rule < below,
+        "the rule separates the two paragraphs:\n{lines:#?}"
+    );
+
+    // The caret continues below the rule, so typing lands in the second
+    // paragraph rather than in the (uneditable) rule.
+    app.type_text("Still ");
+    assert!(
+        app.buffer_lines()
+            .iter()
+            .any(|l| l.contains("Still Below the break.")),
+        "typing after inserting a rule reaches the block below it"
+    );
+
+    assert_svg("insert_horizontal_rule", &mut app);
+}
+
+#[test]
+fn a_horizontal_rule_reports_itself_in_the_status_bar() {
+    let doc = tdoc::markdown::parse(std::io::Cursor::new("Intro\n\n---\n\nOutro\n"))
+        .expect("parse markdown");
+    let mut app = TestApp::new(WIDTH, HEIGHT, doc);
+    app.key(KeyCode::Down); // onto the rule
+    let lines = app.buffer_lines();
+    let status = lines.last().expect("status bar");
+    assert!(
+        status.contains("Horizontal Rule"),
+        "the status bar names the block under the cursor: {status:?}"
+    );
+}
+
+// ----- definition lists ----------------------------------------------------------
+
+/// Open the formatting menu and walk down to "Definition List". It deliberately
+/// carries no number shortcut, so this is the only way in — which makes the walk
+/// itself worth testing.
+fn make_definition_list_via_menu(app: &mut TestApp) {
+    app.key(KeyCode::Esc);
+    // Items, in order: Wrap inside…, Text, Heading 1..3, Quote, Code,
+    // Numbered List, Bullet List, Checklist, Definition List.
+    for _ in 0..10 {
+        app.key(KeyCode::Down);
+    }
+    app.key(KeyCode::Enter);
+}
+
+#[test]
+fn formatting_menu_makes_a_definition_list() {
+    let mut app = TestApp::new(
+        WIDTH,
+        HEIGHT,
+        ftml! {
+            p { "Coffee" }
+            p { "Tea" }
+        },
+    );
+    make_definition_list_via_menu(&mut app);
+
+    let lines = app.buffer_lines();
+    let status = lines.last().expect("status bar");
+    assert!(
+        status.contains("Definition List"),
+        "the cursor lands on the new list's term: {status:?}"
+    );
+
+    // Enter at the end of a term whose item has no definition yet opens that
+    // definition — otherwise a term-only item would have nowhere to type.
+    app.key(KeyCode::End);
+    app.key(KeyCode::Enter);
+    app.type_text("A black hot drink.");
+
+    let lines = app.buffer_lines();
+    let term = lines
+        .iter()
+        .find(|l| l.contains("Coffee"))
+        .expect("the term");
+    let definition = lines
+        .iter()
+        .find(|l| l.contains("A black hot drink."))
+        .expect("the definition");
+    assert!(
+        indent_of(definition) > indent_of(term),
+        "a definition is indented past its term:\n{term:?}\n{definition:?}"
+    );
+
+    assert_svg("definition_list_from_menu", &mut app);
+}
+
+/// Column of the first non-blank character, i.e. how far a rendered line is indented.
+fn indent_of(line: &str) -> usize {
+    line.len() - line.trim_start().len()
+}
+
+#[test]
+fn a_parsed_definition_list_renders_indented_definitions() {
+    let doc = tdoc::markdown::parse(std::io::Cursor::new(
+        "Coffee\n: A black hot drink.\n\nTea\n: A leaf infusion.\n",
+    ))
+    .expect("parse markdown");
+    let mut app = TestApp::new(WIDTH, HEIGHT, doc);
+    let lines = app.buffer_lines();
+
+    for (term, definition) in [
+        ("Coffee", "A black hot drink."),
+        ("Tea", "A leaf infusion."),
+    ] {
+        let t = lines.iter().find(|l| l.contains(term)).expect("term");
+        let d = lines
+            .iter()
+            .find(|l| l.contains(definition))
+            .expect("definition");
+        assert_eq!(
+            indent_of(d) - indent_of(t),
+            2,
+            "`definition_indent` is two columns:\n{t:?}\n{d:?}"
+        );
+    }
+
+    // A definition list keeps its text in neither `content` nor `children`, so
+    // the status bar's word count has to reach into the items explicitly.
+    let status = lines.last().expect("status bar");
+    assert!(
+        status.contains("9 words"),
+        "terms and definitions both count towards the word count: {status:?}"
+    );
+
+    assert_svg("definition_list", &mut app);
+}
+
+/// The authoring flow: Enter alternates term → definition → next term, and Enter on the
+/// empty term that leaves you with ends the list.
+#[test]
+fn enter_walks_a_definition_list_term_by_term_and_then_leaves_it() {
+    let mut app = TestApp::new(WIDTH, HEIGHT, ftml! { p { "Coffee" } });
+    make_definition_list_via_menu(&mut app);
+
+    app.key(KeyCode::End);
+    app.key(KeyCode::Enter); // the term has no definition yet -> open it
+    app.type_text("A black hot drink.");
+    app.key(KeyCode::Enter); // a definition ends its item -> next term
+    app.type_text("Tea");
+    app.key(KeyCode::Enter); // -> that term's definition
+    app.type_text("A leaf infusion.");
+    app.key(KeyCode::Enter); // -> next term (empty)
+    app.key(KeyCode::Enter); // -> out of the list
+    app.type_text("After the list.");
+
+    let lines = app.buffer_lines();
+    let row = |needle: &str| {
+        lines
+            .iter()
+            .position(|l| l.contains(needle))
+            .unwrap_or_else(|| panic!("{needle:?} missing:\n{lines:#?}"))
+    };
+    for (term, definition) in [
+        ("Coffee", "A black hot drink."),
+        ("Tea", "A leaf infusion."),
+    ] {
+        assert!(
+            indent_of(&lines[row(definition)]) > indent_of(&lines[row(term)]),
+            "{definition:?} is indented under {term:?}"
+        );
+    }
+    // The closing paragraph is back at the left margin — it left the list.
+    assert_eq!(
+        indent_of(&lines[row("After the list.")]),
+        indent_of(&lines[row("Coffee")]),
+        "the trailing paragraph is outside the list"
+    );
+
+    assert_svg("definition_list_authored_with_enter", &mut app);
+}
+
+/// Tab and Shift-Tab switch a line between the two halves of a definition list.
+#[test]
+fn tab_and_shift_tab_switch_a_line_between_term_and_definition() {
+    let doc = tdoc::markdown::parse(std::io::Cursor::new(
+        "Coffee\n: A black hot drink.\n\nTea\n: A leaf infusion.\n",
+    ))
+    .expect("parse markdown");
+    let mut app = TestApp::new(WIDTH, HEIGHT, doc);
+
+    let indent = |app: &TestApp, needle: &str| {
+        indent_of(
+            app.buffer_lines()
+                .iter()
+                .find(|l| l.contains(needle))
+                .unwrap_or_else(|| panic!("{needle:?} missing")),
+        )
+    };
+    let term_indent = indent(&app, "Coffee");
+    let definition_indent = indent(&app, "A black hot drink.");
+    assert!(definition_indent > term_indent);
+
+    // Shift-Tab on the first definition makes it the next term.
+    app.key(KeyCode::Down);
+    app.key(KeyCode::BackTab);
+    assert_eq!(
+        indent(&app, "A black hot drink."),
+        term_indent,
+        "the definition became a term"
+    );
+
+    // Tab puts it back where it was.
+    app.key(KeyCode::Tab);
+    assert_eq!(
+        indent(&app, "A black hot drink."),
+        definition_indent,
+        "Tab is the inverse of Shift-Tab"
+    );
+
+    // Tab on the *second item's* term folds it into the definition above.
+    app.key(KeyCode::Down); // onto "Tea"
+    app.key(KeyCode::Tab);
+    assert_eq!(
+        indent(&app, "Tea"),
+        definition_indent,
+        "the term joined the definition above it"
+    );
+    assert_eq!(
+        indent(&app, "A leaf infusion."),
+        definition_indent,
+        "and its own definition came along"
+    );
+
+    assert_svg("definition_list_after_tab", &mut app);
+}
+
+/// Retyping a term takes its whole item out of the list: the term and its definition become
+/// two paragraphs of the chosen type. Retyping a definition takes only that content out,
+/// below the list, and leaves the term a term.
+#[test]
+fn retyping_a_definition_leaf_takes_it_out_of_the_list() {
+    let source = "Coffee\n: A black hot drink.\n\nTea\n: A leaf infusion.\n";
+    let parse = || tdoc::markdown::parse(std::io::Cursor::new(source)).expect("parse markdown");
+
+    // Esc, 2 on the first term -> both halves become Heading 2, at the left margin.
+    let mut app = TestApp::new(WIDTH, HEIGHT, parse());
+    app.key(KeyCode::Esc);
+    app.key(KeyCode::Char('2'));
+    let lines = app.buffer_lines();
+    let indent_of_line = |needle: &str| {
+        indent_of(
+            lines
+                .iter()
+                .find(|l| l.contains(needle))
+                .unwrap_or_else(|| panic!("{needle:?} missing:\n{lines:#?}")),
+        )
+    };
+    assert_eq!(
+        indent_of_line("A black hot drink."),
+        indent_of_line("Coffee"),
+        "the definition came out alongside its term"
+    );
+    // The second item is untouched — still an indented definition under its term.
+    assert!(indent_of_line("A leaf infusion.") > indent_of_line("Tea"));
+    assert_svg("definition_term_retyped", &mut app);
+
+    // Esc, 2 on the first definition -> the term stays, its content becomes a heading below.
+    let mut app = TestApp::new(WIDTH, HEIGHT, parse());
+    app.key(KeyCode::Down); // into the definition
+    app.key(KeyCode::Esc);
+    app.key(KeyCode::Char('2'));
+    let lines = app.buffer_lines();
+    let row = |needle: &str| {
+        lines
+            .iter()
+            .position(|l| l.contains(needle))
+            .unwrap_or_else(|| panic!("{needle:?} missing:\n{lines:#?}"))
+    };
+    assert!(
+        row("Coffee") < row("A black hot drink."),
+        "the retyped content sits below the term it left"
+    );
+    assert_eq!(
+        indent_of(&lines[row("A black hot drink.")]),
+        indent_of(&lines[row("Coffee")]),
+        "it is out of the list now"
+    );
+    assert!(
+        row("A black hot drink.") < row("Tea"),
+        "the list split so the remaining item stays below it"
+    );
+    assert_svg("definition_body_retyped", &mut app);
+}
