@@ -550,17 +550,31 @@ fn context_menu_opens() {
     assert_svg("context_menu", &mut app);
 }
 
-/// Esc then `.` opens the "wrap inside…" submenu of container types.
+/// Esc then `>` opens the "Nest inside…" submenu of container types.
 #[test]
-fn wrap_submenu_opens() {
+fn nest_submenu_opens() {
     let mut app = sample_app();
     app.key(KeyCode::Esc);
-    app.key(KeyCode::Char('.'));
-    assert_svg("wrap_submenu", &mut app);
+    app.key(KeyCode::Char('>'));
+    assert_svg("nest_submenu", &mut app);
 }
 
-/// Indenting a bullet (`Tab`, or the menu's "Indent more") nests it under the previous
-/// item and renders it visibly indented in the terminal (nested-list indent step).
+/// Terminals disagree on whether a shifted punctuation key also reports SHIFT (Windows
+/// does, most others do not), so `>` must open the submenu either way.
+#[test]
+fn nest_submenu_opens_with_shift_reported() {
+    let mut app = sample_app();
+    app.key(KeyCode::Esc);
+    app.key_with(KeyCode::Char('>'), KeyModifiers::SHIFT);
+    let menu = app.buffer_lines().join("\n");
+    assert!(
+        menu.contains("Nest inside…"),
+        "Shift+`>` opens the same submenu as a bare `>`:\n{menu}"
+    );
+}
+
+/// Indenting a bullet (`Tab`) nests it under the previous item and renders it visibly
+/// indented in the terminal (nested-list indent step).
 #[test]
 fn indent_nests_bullet_item() {
     let doc = ftml! {
@@ -575,10 +589,114 @@ fn indent_nests_bullet_item() {
     assert_svg("indent_nests_bullet_item", &mut app);
 }
 
-/// Esc then `,` opens the "select parent" submenu targeting the enclosing container
-/// (here a multi-paragraph quote, so the leaf is not collapsed and `,` is available).
+/// "Nest…" is always on offer — anything can go inside a container — while "Unnest"
+/// shows only where there is a container to come out of. (A tall terminal so the whole
+/// menu fits on screen.)
 #[test]
-fn parent_menu_opens() {
+fn unnest_is_offered_only_inside_a_container() {
+    let doc = ftml! {
+        p { "loose" }
+        quote {
+            p { "first" }
+            p { "second" }
+        }
+    };
+    let mut app = TestApp::new(WIDTH, 40, doc);
+    app.key(KeyCode::Esc);
+    let menu = app.buffer_lines().join("\n");
+    assert!(menu.contains("Nest…"), "top level offers Nest…:\n{menu}");
+    assert!(
+        !menu.contains("Unnest"),
+        "a top-level paragraph has nothing to unnest from:\n{menu}"
+    );
+
+    app.key(KeyCode::Esc); // close
+    app.key(KeyCode::Down); // into the quote
+    app.key(KeyCode::Esc);
+    let menu = app.buffer_lines().join("\n");
+    assert!(
+        menu.contains("Unnest"),
+        "a quoted paragraph offers Unnest:\n{menu}"
+    );
+    assert!(
+        menu.contains("Nest…"),
+        "nesting stays on offer inside a container too:\n{menu}"
+    );
+}
+
+/// Unnest lifts the whole selection out by one level, so it is offered only while the
+/// selection stays inside a single container — not when it straddles two.
+#[test]
+fn unnest_is_skipped_for_a_selection_spanning_two_containers() {
+    let doc = ftml! {
+        quote {
+            p { "first" }
+            p { "second" }
+        }
+        quote {
+            p { "third" }
+        }
+    };
+    let mut app = TestApp::new(WIDTH, 40, doc);
+    app.key_with(KeyCode::Down, KeyModifiers::SHIFT); // "first" + "second"
+    app.key(KeyCode::Esc);
+    let menu = app.buffer_lines().join("\n");
+    assert!(
+        menu.contains("Unnest"),
+        "two paragraphs of the same quote come out together:\n{menu}"
+    );
+
+    app.key(KeyCode::Esc); // close, keeping the selection
+    app.key_with(KeyCode::Down, KeyModifiers::SHIFT); // extend into the second quote
+    app.key(KeyCode::Esc);
+    let menu = app.buffer_lines().join("\n");
+    assert!(
+        !menu.contains("Unnest"),
+        "a selection straddling two quotes has no single level to leave:\n{menu}"
+    );
+}
+
+/// The paragraphs of one container need not sit at the same depth to unnest together:
+/// selecting everything inside a quote — here a bullet, a paragraph and a code block, the
+/// shape of `test.md` — offers Unnest, and taking it dissolves the quote around them.
+#[test]
+fn unnest_dissolves_the_quote_around_a_full_selection() {
+    let doc = tdoc::markdown::parse(std::io::Cursor::new(
+        "> - Bullet\n>\n> Text\n>\n> ```\n> Code\n> ```\n",
+    ))
+    .expect("parse markdown");
+    let mut app = TestApp::new(WIDTH, 40, doc);
+    for _ in 0..6 {
+        app.key_with(KeyCode::Down, KeyModifiers::SHIFT);
+    }
+    app.key_with(KeyCode::End, KeyModifiers::SHIFT);
+
+    app.key(KeyCode::Esc);
+    let menu = app.buffer_lines().join("\n");
+    assert!(
+        menu.contains("Unnest"),
+        "the bullet sits a level deeper than the rest, but the quote encloses all of it:\n{menu}"
+    );
+
+    app.key(KeyCode::Char('<'));
+    let lines = app.buffer_lines();
+    let quoted: Vec<&String> = lines
+        .iter()
+        .filter(|l| l.trim_start().starts_with('|'))
+        .collect();
+    assert!(
+        quoted.is_empty(),
+        "the quote bars are gone — the outer quote dissolved: {quoted:?}"
+    );
+    let body = lines.join("\n");
+    for kept in ["• Bullet", "Text", "Code"] {
+        assert!(body.contains(kept), "{kept:?} survived the move:\n{body}");
+    }
+}
+
+/// Esc then `<` lifts the quoted paragraph out of the quote, one level.
+#[test]
+fn unnest_lifts_paragraph_out_of_quote() {
     let doc = ftml! {
         quote {
             p { "first" }
@@ -586,9 +704,10 @@ fn parent_menu_opens() {
         }
     };
     let mut app = TestApp::new(WIDTH, HEIGHT, doc);
+    app.key(KeyCode::Down); // onto "second"
     app.key(KeyCode::Esc);
-    app.key(KeyCode::Char(','));
-    assert_svg("parent_menu", &mut app);
+    app.key(KeyCode::Char('<'));
+    assert_svg("unnest_out_of_quote", &mut app);
 }
 
 /// Esc then `5` converts the H1 to a plain quote (pseudo-leaf convert). The status-bar
@@ -601,15 +720,15 @@ fn convert_heading_to_quote_renders_as_quote() {
     assert_svg("convert_heading_to_quote", &mut app);
 }
 
-/// Esc then `.` then `5` wraps the H1 inside a quote, preserving the heading
+/// Esc then `>` then `5` nests the H1 inside a quote, preserving the heading
 /// (breadcrumb "Quote > Header Lvl 1").
 #[test]
-fn wrap_heading_in_quote_preserves_heading() {
+fn nest_heading_in_quote_preserves_heading() {
     let mut app = sample_app();
     app.key(KeyCode::Esc);
-    app.key(KeyCode::Char('.'));
+    app.key(KeyCode::Char('>'));
     app.key(KeyCode::Char('5'));
-    assert_svg("wrap_heading_in_quote", &mut app);
+    assert_svg("nest_heading_in_quote", &mut app);
 }
 
 #[test]
@@ -1852,9 +1971,9 @@ fn a_horizontal_rule_reports_itself_in_the_status_bar() {
 /// itself worth testing.
 fn make_definition_list_via_menu(app: &mut TestApp) {
     app.key(KeyCode::Esc);
-    // Items, in order: Wrap inside…, Text, Heading 1..3, Quote, Code,
-    // Numbered List, Bullet List, Checklist, Definition List.
-    for _ in 0..10 {
+    // Items, in order: Text, Heading 1..3, Quote, Code, Numbered List,
+    // Bullet List, Checklist, Definition List.
+    for _ in 0..9 {
         app.key(KeyCode::Down);
     }
     app.key(KeyCode::Enter);

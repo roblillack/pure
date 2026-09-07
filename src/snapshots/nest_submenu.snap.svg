@@ -6,7 +6,7 @@
 <rect x="260" y="120" width="10" height="20" fill="#000000"/>
 <text x="260" y="135" fill="#e5e5e5" textLength="10" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
 <rect x="270" y="120" width="120" height="20" fill="#000000"/>
-<text x="270" y="135" fill="#ffffff" textLength="120" lengthAdjust="spacingAndGlyphs" xml:space="preserve" font-weight="bold">Wrap inside…</text>
+<text x="270" y="135" fill="#ffffff" textLength="120" lengthAdjust="spacingAndGlyphs" xml:space="preserve" font-weight="bold">Nest inside…</text>
 <rect x="390" y="120" width="60" height="20" fill="#000000"/>
 <rect x="450" y="120" width="10" height="20" fill="#000000"/>
 <text x="450" y="135" fill="#e5e5e5" textLength="10" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
