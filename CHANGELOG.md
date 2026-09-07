@@ -17,11 +17,14 @@ While pre-1.0, the minor version is bumped for breaking changes.
   to defaults. First setting: `caret_affinity` (default `true`) — an extra caret
   stop at inline-style/link boundaries that controls whether text you type there
   joins the run; set `false` to step across such boundaries in a single press. (#40)
-- **Block model for containers** (quotes and lists): **Wrap inside…** (`Esc .`)
-  wraps the paragraph or selection in a new container (Quote, Numbered/Bullet
-  List, Checklist) while preserving the inner paragraph types; **Select parent**
-  (`Esc ,`) targets the enclosing container to convert it, unwrap it, or climb a
-  level. `[` / `Shift+Tab` now also lifts a paragraph out of a quote, not just a list. (#40)
+- **Block model for containers** (quotes and lists): the formatting menu lists two
+  nesting actions directly below the paragraph types. **Nest…** (`Esc >`) puts the
+  paragraph or selection inside a new container picked from a submenu (Quote,
+  Numbered/Bullet List, Checklist) while preserving the inner paragraph types, and
+  is always available. **Unnest** (`Esc <`) lifts it back out one level, and shows
+  only when one container encloses the paragraph, or the whole selection — so
+  selecting everything inside a quote unnests it all at once, dissolving the quote.
+  `Shift+Tab` now also lifts a paragraph out of a quote, not just a list. (#40)
 - **Horizontal rules** — a thematic break, via **Insert > Horizontal Rule**. A
   rule always sits at the top level: inserting one mid-paragraph splits the
   paragraph around it, and from inside a list or quote it lands below that whole

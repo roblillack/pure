@@ -36,7 +36,7 @@ use ratatui::{
 use rutle::render_context::RenderContext as DrawContext;
 use rutle::tree_edit::ContainerKind;
 use rutle::tree_path::TreePath;
-use rutle::{BlockType, DocumentPosition, Renderer as StructuredRichDisplay, UndoKind};
+use rutle::{BlockType, DocumentPosition, Editor, Renderer as StructuredRichDisplay, UndoKind};
 use tdoc::ftml::{Writer, parse};
 use tdoc::{Document, InlineStyle, ParagraphType, gemini, html, markdown};
 
@@ -139,18 +139,12 @@ enum MenuAction {
     ToggleChecklistItem,
     ApplyInlineStyle(InlineStyle),
     EditLink,
-    IndentMore,
-    IndentLess,
-    /// Open the "wrap inside…" submenu (`.`).
-    WrapInSubmenu,
-    /// Wrap the current paragraph/selection in a new container, preserving inner types.
-    WrapInContainer(ContainerKind),
-    /// Open the "select parent" menu targeting the ancestor container at this path depth.
-    SelectParent(usize),
-    /// Convert the ancestor container at this depth to another kind.
-    ConvertContainer(ContainerKind, usize),
-    /// Dissolve (unwrap) the ancestor container at this depth.
-    DissolveContainer(usize),
+    /// Open the "Nest…" submenu (`>`) to pick the container kind to nest into.
+    NestSubmenu,
+    /// Nest the current paragraph/selection in a new container, preserving inner types.
+    NestInContainer(ContainerKind),
+    /// Lift the current paragraph/selection out of its container one level (`<`).
+    Unnest,
     Cut,
     Copy,
     Paste,
@@ -178,15 +172,22 @@ impl MenuShortcut {
     }
 
     fn matches(&self, code: KeyCode, modifiers: KeyModifiers) -> bool {
-        match code {
-            KeyCode::Char(ch) if ch == self.key => {
-                if self.requires_shift {
-                    modifiers == KeyModifiers::SHIFT
-                } else {
-                    modifiers.is_empty()
-                }
-            }
-            _ => false,
+        let KeyCode::Char(ch) = code else {
+            return false;
+        };
+        // Shift is the only modifier a menu shortcut ever carries; anything else is a
+        // different key entirely.
+        if ch != self.key || !modifiers.difference(KeyModifiers::SHIFT).is_empty() {
+            return false;
+        }
+        let shift = modifiers.contains(KeyModifiers::SHIFT);
+        if self.requires_shift {
+            shift
+        } else {
+            // A punctuation shortcut already carries its shift state in the character
+            // itself (`>` *is* Shift+`.`), and terminals disagree on whether they report
+            // the modifier on top of it — Windows does, most others do not — so take both.
+            !shift || !self.key.is_ascii_alphabetic()
         }
     }
 }
@@ -309,21 +310,31 @@ impl ContextMenuState {
     }
 }
 
-struct StructureFlags {
-    /// Wrap the current paragraph/selection in a new container (`.`); top-level only.
-    wrap_available: bool,
-    /// Depth of the ancestor container the "select parent" (`,`) menu should target.
-    select_parent_depth: Option<usize>,
-    /// The cursor's item can be indented deeper (`]`): a list/checklist item.
-    can_indent: bool,
-    /// The cursor's paragraph can be lifted out of its container (`[`).
-    can_unnest: bool,
+/// Whether the whole selection sits inside one container. Nothing selected beyond the
+/// cursor's own paragraph qualifies on its own; a multi-paragraph selection needs a common
+/// enclosing container, which may sit several levels up. Selecting everything inside a
+/// quote covers paragraphs at different depths — one directly in the quote, another inside
+/// a list inside it — but they all still hang off that one quote. A run straddling two
+/// containers, or a container and the top level, has no such ancestor, so "Unnest" is left
+/// out for it.
+fn selection_within_one_container(editor: &Editor) -> bool {
+    let Some((start, end)) = editor.selection() else {
+        return true;
+    };
+    let (start, end) = (start.path, end.path);
+    let (s, e) = (start.segments(), end.segments());
+    let shared = s.iter().zip(e).take_while(|(a, b)| a == b).count();
+    // The container has to be a proper ancestor of both ends, and not the document itself.
+    let depth = shared
+        .min(s.len().saturating_sub(1))
+        .min(e.len().saturating_sub(1));
+    depth >= 1
 }
 
 fn build_context_menu_entries(
     checklist_state: Option<bool>,
     has_selection: bool,
-    structure: StructureFlags,
+    can_unnest: bool,
     allow_paragraph_change: bool,
     can_paste: bool,
 ) -> Vec<MenuEntry> {
@@ -342,52 +353,34 @@ fn build_context_menu_entries(
         entries.push(MenuEntry::Separator);
     }
 
-    // Structure section: wrap / select-parent / indent / unnest.
-    let mut structure_items = Vec::new();
-    if structure.wrap_available {
-        structure_items.push(MenuEntry::Item(MenuItem::enabled_with_shortcut(
-            "Wrap inside…",
-            MenuAction::WrapInSubmenu,
-            MenuShortcut::new('.'),
-        )));
-    }
-    if let Some(depth) = structure.select_parent_depth {
-        structure_items.push(MenuEntry::Item(MenuItem::enabled_with_shortcut(
-            "Select parent",
-            MenuAction::SelectParent(depth),
-            MenuShortcut::new(','),
-        )));
-    }
-    if structure.can_indent {
-        structure_items.push(MenuEntry::Item(MenuItem::enabled_with_shortcut(
-            "Indent more",
-            MenuAction::IndentMore,
-            MenuShortcut::new(']'),
-        )));
-    }
-    if structure.can_unnest {
-        structure_items.push(MenuEntry::Item(MenuItem::enabled_with_shortcut(
+    entries.extend(paragraph_type_entries(allow_paragraph_change));
+
+    // Nesting sits directly below the paragraph types: both reshape the block under the
+    // cursor — one by retyping it, the other by moving it a level in or out.
+    entries.push(MenuEntry::Separator);
+    entries.push(MenuEntry::Section("Nesting"));
+    entries.push(MenuEntry::Item(MenuItem::enabled_with_shortcut(
+        "Nest…",
+        MenuAction::NestSubmenu,
+        MenuShortcut::new('>'),
+    )));
+    if can_unnest {
+        entries.push(MenuEntry::Item(MenuItem::enabled_with_shortcut(
             "Unnest",
-            MenuAction::IndentLess,
-            MenuShortcut::new('['),
+            MenuAction::Unnest,
+            MenuShortcut::new('<'),
         )));
-    }
-    if !structure_items.is_empty() {
-        entries.push(MenuEntry::Section("Structure"));
-        entries.extend(structure_items);
-        entries.push(MenuEntry::Separator);
     }
 
-    entries.extend(default_context_menu_entries(
-        has_selection,
-        allow_paragraph_change,
-        can_paste,
-    ));
+    entries.push(MenuEntry::Separator);
+    entries.extend(inline_style_entries(has_selection));
+    entries.push(MenuEntry::Separator);
+    entries.extend(clipboard_entries(has_selection, can_paste));
     entries
 }
 
-/// The four convertible container kinds, with their menu labels and number shortcuts
-/// (matching the paragraph-type numbers so muscle memory carries over).
+/// The four container kinds a paragraph can be nested in, with their menu labels and
+/// number shortcuts (matching the paragraph-type numbers so muscle memory carries over).
 const CONTAINER_KINDS: [(&str, ContainerKind, char); 4] = [
     ("Quote", ContainerKind::Quote, '5'),
     ("Numbered List", ContainerKind::Ordered, '7'),
@@ -395,68 +388,15 @@ const CONTAINER_KINDS: [(&str, ContainerKind, char); 4] = [
     ("Checklist", ContainerKind::Checklist, '9'),
 ];
 
-fn container_kind_of_block(block: &BlockType) -> Option<ContainerKind> {
-    match block {
-        BlockType::BlockQuote => Some(ContainerKind::Quote),
-        BlockType::ListItem {
-            checkbox: Some(_), ..
-        } => Some(ContainerKind::Checklist),
-        BlockType::ListItem { ordered: true, .. } => Some(ContainerKind::Ordered),
-        BlockType::ListItem { .. } => Some(ContainerKind::Unordered),
-        _ => None,
-    }
-}
-
-/// The "wrap inside…" submenu (opened via `.`): wrap the selection in a new container of
-/// the chosen kind, preserving inner types.
-fn build_wrap_menu_entries() -> Vec<MenuEntry> {
-    let mut entries = vec![MenuEntry::Section("Wrap inside…")];
+/// The "Nest…" submenu (opened via `>`): nest the paragraph — or the whole selection —
+/// in a new container of the chosen kind, preserving the inner paragraph types.
+fn build_nest_menu_entries() -> Vec<MenuEntry> {
+    let mut entries = vec![MenuEntry::Section("Nest inside…")];
     for (label, kind, key) in CONTAINER_KINDS {
         entries.push(MenuEntry::Item(MenuItem::enabled_with_shortcut(
             label,
-            MenuAction::WrapInContainer(kind),
+            MenuAction::NestInContainer(kind),
             MenuShortcut::new(key),
-        )));
-    }
-    entries
-}
-
-/// The "select parent" submenu (opened via `,`): convert the targeted ancestor container
-/// to another kind, unwrap it, or climb another level up.
-fn build_parent_menu_entries(
-    current: Option<ContainerKind>,
-    depth: usize,
-    dissolvable: bool,
-    can_go_up: bool,
-) -> Vec<MenuEntry> {
-    let mut entries = vec![MenuEntry::Section("Convert container")];
-    for (label, kind, key) in CONTAINER_KINDS {
-        let entry = if Some(kind) == current {
-            MenuItem::disabled_with_shortcut(label, MenuShortcut::new(key))
-        } else {
-            MenuItem::enabled_with_shortcut(
-                label,
-                MenuAction::ConvertContainer(kind, depth),
-                MenuShortcut::new(key),
-            )
-        };
-        entries.push(MenuEntry::Item(entry));
-    }
-    if dissolvable || can_go_up {
-        entries.push(MenuEntry::Separator);
-    }
-    if dissolvable {
-        entries.push(MenuEntry::Item(MenuItem::enabled_with_shortcut(
-            "Unwrap",
-            MenuAction::DissolveContainer(depth),
-            MenuShortcut::new('['),
-        )));
-    }
-    if can_go_up {
-        entries.push(MenuEntry::Item(MenuItem::enabled_with_shortcut(
-            "Select parent",
-            MenuAction::SelectParent(depth - 1),
-            MenuShortcut::new(','),
         )));
     }
     entries
@@ -511,11 +451,7 @@ fn inline_style_item(
     })
 }
 
-fn default_context_menu_entries(
-    has_selection: bool,
-    allow_paragraph_change: bool,
-    can_paste: bool,
-) -> Vec<MenuEntry> {
+fn paragraph_type_entries(allow_paragraph_change: bool) -> Vec<MenuEntry> {
     let a = allow_paragraph_change;
     vec![
         MenuEntry::Section("Paragraph type"),
@@ -529,7 +465,11 @@ fn default_context_menu_entries(
         paragraph_type_item("Bullet List", ParagraphType::UnorderedList, '8', a),
         paragraph_type_item("Checklist", ParagraphType::Checklist, '9', a),
         paragraph_type_item_no_shortcut("Definition List", ParagraphType::DefinitionList, a),
-        MenuEntry::Separator,
+    ]
+}
+
+fn inline_style_entries(has_selection: bool) -> Vec<MenuEntry> {
+    vec![
         MenuEntry::Section("Inline style"),
         inline_style_item(
             "Bold",
@@ -578,7 +518,11 @@ fn default_context_menu_entries(
             MenuShortcut::new('\\'),
             has_selection,
         ),
-        MenuEntry::Separator,
+    ]
+}
+
+fn clipboard_entries(has_selection: bool, can_paste: bool) -> Vec<MenuEntry> {
+    vec![
         MenuEntry::Section("Copy & paste"),
         MenuEntry::Item(if has_selection {
             MenuItem::enabled_with_shortcut("Cut", MenuAction::Cut, MenuShortcut::new('x'))
@@ -1241,71 +1185,28 @@ impl App {
         // re-type: offering the paragraph types on one would only ever drop it.
         let allow_paragraph_change =
             !matches!(block, BlockType::Table { .. } | BlockType::HorizontalRule);
-        // "Select parent" targets the parent of the *pseudo-leaf*: a collapsed single-text
-        // container is already acted on by ESC+number, so start one level above it.
-        let depth = editor.cursor_depth();
-        let step = if editor.cursor_in_collapsed_container() {
-            2
-        } else {
-            1
-        };
-        let parent_depth = depth.saturating_sub(step);
-        let select_parent_depth =
-            (parent_depth >= 1 && allow_paragraph_change).then_some(parent_depth);
-        let structure = StructureFlags {
-            wrap_available: allow_paragraph_change && depth == 1,
-            select_parent_depth,
-            can_indent: editor.cursor_can_indent(),
-            can_unnest: editor.cursor_can_unnest(),
-        };
+        // Anything can go inside a container, so "Nest…" is always on offer; unnesting
+        // needs somewhere to come out of.
+        let can_unnest = editor.cursor_can_unnest() && selection_within_one_container(editor);
         let entries = build_context_menu_entries(
             checklist_state,
             self.has_selection(),
-            structure,
+            can_unnest,
             allow_paragraph_change,
             self.clipboard.is_some(),
         );
         self.context_menu = Some(ContextMenuState::new(entries));
     }
 
-    /// Open the "wrap inside…" submenu (reassigns the context menu; see `execute_menu_action`).
-    fn open_wrap_menu(&mut self) {
-        self.context_menu = Some(ContextMenuState::new(build_wrap_menu_entries()));
+    /// Open the "Nest inside…" submenu (reassigns the context menu; see `execute_menu_action`).
+    fn open_nest_menu(&mut self) {
+        self.context_menu = Some(ContextMenuState::new(build_nest_menu_entries()));
     }
 
-    /// Open the "select parent" submenu targeting the ancestor container at `depth`.
-    fn open_parent_menu(&mut self, depth: usize) {
-        let editor = self.display.editor();
-        let Some(block) = editor.container_block_at_depth(depth) else {
-            return;
-        };
-        let current = container_kind_of_block(&block);
-        let dissolvable = editor.container_dissolvable_at_depth(depth);
-        let can_go_up = depth >= 2;
-        let entries = build_parent_menu_entries(current, depth, dissolvable, can_go_up);
-        self.context_menu = Some(ContextMenuState::new(entries));
-    }
-
-    fn wrap_in_container(&mut self, kind: ContainerKind) {
+    fn nest_in_container(&mut self, kind: ContainerKind) {
         let before = self.display.edit_revision();
         let _ = self.display.editor_mut().wrap_selection(kind);
         if self.display.edit_revision() != before {
-            self.after_edit(UndoKind::Other);
-        }
-    }
-
-    fn convert_container(&mut self, kind: ContainerKind, depth: usize) {
-        if self
-            .display
-            .editor_mut()
-            .convert_container_at_depth(depth, kind)
-        {
-            self.after_edit(UndoKind::Other);
-        }
-    }
-
-    fn dissolve_container(&mut self, depth: usize) {
-        if self.display.editor_mut().dissolve_container_at_depth(depth) {
             self.after_edit(UndoKind::Other);
         }
     }
@@ -1319,14 +1220,10 @@ impl App {
                 // keep dialog open
                 self.open_link_dialog();
             }
-            MenuAction::IndentMore => self.indent(),
-            MenuAction::IndentLess => self.unindent(),
-            // Submenu openers re-arm the context menu (the key handler clears it first).
-            MenuAction::WrapInSubmenu => self.open_wrap_menu(),
-            MenuAction::WrapInContainer(kind) => self.wrap_in_container(kind),
-            MenuAction::SelectParent(depth) => self.open_parent_menu(depth),
-            MenuAction::ConvertContainer(kind, depth) => self.convert_container(kind, depth),
-            MenuAction::DissolveContainer(depth) => self.dissolve_container(depth),
+            // The submenu opener re-arms the context menu (the key handler clears it first).
+            MenuAction::NestSubmenu => self.open_nest_menu(),
+            MenuAction::NestInContainer(kind) => self.nest_in_container(kind),
+            MenuAction::Unnest => self.unindent(),
             MenuAction::Cut => {
                 self.cut_selection();
             }

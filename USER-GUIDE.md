@@ -609,6 +609,13 @@ When the context menu is open, you can press a number key to quickly change the 
 - **9** - Checklist
 - **Definition List** - term/definition pairs (no number; select it with the arrow keys)
 
+#### Nesting:
+
+Below the paragraph types the menu lists the two nesting actions:
+
+- **>** - **Nest…**: pick a container (Quote, Numbered List, Bullet List, Checklist) to nest the paragraph or selection in — always available
+- **<** - **Unnest**: lift the paragraph or selection out of its container by one level — shown only when one container encloses the paragraph, or the whole selection
+
 #### Inline Styles (Current and Planned):
 
 The context menu provides access to inline text formatting:
@@ -1217,52 +1224,58 @@ Pure always operates in Insert mode. There is no Typeover mode where new text re
 #### To indent a paragraph:
 
 1. Position the cursor in the paragraph you want to nest.
-2. Ensure the paragraph directly above is a container (quote, numbered list, bullet list, or checklist). When this is possible, the context menu shows **Indent more - ]**.
-3. Press **Esc** followed by **]**, or use the direct shortcut **Ctrl+]**.
+2. Ensure the paragraph directly above is a container (quote, numbered list, bullet list, or checklist).
+3. Press **Tab**.
 
 The paragraph is moved under the preceding container. Quotes receive the paragraph as an additional child, and lists receive it as a new list item appended to the existing list.
 
 #### To unindent a paragraph:
 
 1. Position the cursor anywhere inside the paragraph you want to lift out.
-2. Press **Esc**, then **[**, or use **Shift+Tab**.
+2. Press **Shift+Tab**, or **Esc** followed by **<**.
 
 The paragraph is taken out of its parent container and inserted as a sibling immediately after that container. This works for list items **and** for paragraphs inside a quote.
 
 #### Additional Information
 
-- The indent options only appear when the action is structurally valid.
+- Tab and Shift+Tab do nothing when the move would not be structurally valid, and the formatting menu leaves **Unnest** out altogether rather than greying it out.
 - Indent and unindent work at any nesting depth, making it easy to reorganize complex hierarchies of quotes and lists without cutting and pasting content.
 
 ---
 
 ### Wrapping and Nesting
 
-**Purpose:** Wrap paragraphs inside a container, or change/unwrap the container around them.
+**Purpose:** Nest paragraphs inside a new container, or lift them back out.
 
 Pure distinguishes **leaf** paragraphs (text, headings, code) from **container**
-paragraphs (quotes and lists). Two context-menu actions manage containers:
+paragraphs (quotes and lists). Two entries in the formatting menu, listed directly
+below the paragraph types, move a paragraph between the two:
 
-**Wrap inside… (Esc, then .)**
+**Nest… (Esc, then >)**
 
-Wraps the current paragraph — or the whole selection — inside a **new** container
+Nests the current paragraph — or the whole selection — inside a **new** container
 you pick from a short submenu (Quote, Numbered List, Bullet List, Checklist). The
-inner paragraphs keep their types, so wrapping a heading in a quote gives you a
-quoted heading, and wrapping several paragraphs gives you one quote (or one list
-item) that holds them all.
+inner paragraphs keep their types, so nesting a heading in a quote gives you a
+quoted heading, and nesting several paragraphs gives you one quote (or one list
+item) that holds them all. Anything can go inside a container, so this entry is
+always available. Nesting takes whole top-level blocks: from inside a quote or a
+list it wraps that whole block, not just the paragraph the cursor is on.
 
-**Select parent (Esc, then ,)**
+**Unnest (Esc, then <)**
 
-When the cursor is inside a container, this opens a short menu that acts on the
-**enclosing container** rather than the paragraph: convert it to another kind
-(for example, turn a quote into a bullet list), **Unwrap** it (dissolve the
-container, lifting its contents up one level), or press **,** again to target the
-next container further out.
+Lifts the current paragraph — or the whole selection — out of its container by one
+level, leaving it as a sibling right after that container. It is the same move as
+**Shift+Tab**. This entry appears only when there is a single level to leave: the
+paragraph under the cursor sits inside a container, and — if several paragraphs are
+selected — one container encloses all of them. That container may be several levels
+up, so selecting everything inside a quote unnests it all together and dissolves the
+quote, even though the paragraphs sit at different depths. A selection straddling two
+containers, or a container and the top level, leaves the entry out.
 
 #### Additional Information
 
 - A container that holds a single line of text behaves like a leaf when you press a paragraph-type number: the type shown at the right of the status-bar breadcrumb is the one those shortcuts change.
-- To take a single paragraph back out of its container one level at a time, use **[** (or **Shift+Tab**); to change or dissolve the whole container, use **Select parent**.
+- Repeat **Unnest** to climb out one level at a time.
 
 ---
 
@@ -1699,7 +1712,7 @@ Changing from a list type to a non-list type (like text or heading) may restruct
 The paragraph becomes a quote. Converting a heading this way turns it into a
 plain quote (the heading style is dropped), the same way converting to a list
 turns a heading into a plain list item. If you instead want to keep the heading
-and place it *inside* a quote, use **Wrap inside…** (see “Wrapping and Nesting”).
+and place it *inside* a quote, use **Nest…** (see “Wrapping and Nesting”).
 
 A quote that holds a single line of text behaves like an ordinary paragraph when
 you change its type: on such a quote, **Esc 0** turns it back into plain text,
@@ -1891,6 +1904,10 @@ definition
 **Up** / **Down** - Navigate menu items
 
 **Enter** - Execute selected menu action
+
+**>** - Nest the paragraph or selection in a new container (opens a submenu)
+
+**<** - Unnest the paragraph or selection by one level
 
 ### Paragraph Types (from Context Menu)
 
