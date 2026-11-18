@@ -69,15 +69,16 @@ Pure provides an intuitive editing experience:
 
 ### Format Support
 
-Pure is built on [tdoc](https://github.com/roblillack/tdoc) and understands a range of structured text formats — Markdown, HTML, [Gemini](https://geminiprotocol.net/), and its native FTML.
+Pure is built on [tdoc](https://github.com/roblillack/tdoc) and understands a range of structured text formats — FTML, Markdown, HTML, and [Gemini](https://geminiprotocol.net/). Pure picks the format from the file extension (`.ftml`, `.md`, `.html`, `.gmi`); files with any other extension, or none, are not opened.
 
-Every document is held in a single internal representation (the model FTML is built on). Most structure and formatting maps cleanly from one format to another, but a few formats can express things this model doesn't capture — images embedded in an HTML page, for instance. When a document relies on such a feature, that detail can't be represented and is dropped when the file is saved.
+Every document is held in tdoc's single internal representation, which no file format matches exactly. Most structure and formatting maps cleanly from one format to another, but a few formats can express things this model doesn't capture — images embedded in an HTML page, for instance. When a document relies on such a feature, that detail can't be represented and is dropped when the file is saved.
 
 What that means in practice:
 
-- **FTML** is the only format guaranteed to round-trip with no loss whatsoever.
+- **HTML** keeps everything Pure can edit; anything in the file outside that model is not written back on save.
+- **FTML** keeps everything except horizontal rules (dropped) and definition lists (flattened into paragraphs), which FTML has no elements for.
 - **Markdown** is generally safe to round-trip, though files may be reformatted or rewrapped along the way.
-- **HTML, Gemini, and others** preserve everything Pure understands; anything outside its model is not written back on save.
+- **Gemini** is a much simpler format: inline styles are dropped, and checklists, tables, and definition lists are flattened on save.
 
 ### Keyboard-Driven Workflow
 
@@ -127,7 +128,7 @@ Pre-built binaries for Linux, macOS, and Windows are available on the [releases 
 ### Creating and Editing Documents
 
 ```bash
-# Start with a new FTML document
+# Start a new document (the extension picks the format)
 pure newfile.ftml
 
 # Open an existing document
@@ -200,7 +201,7 @@ caret_affinity = true
 
 ## What is FTML?
 
-**FTML (Formatted Text Markup Language)** is Pure's native document format — the one it round-trips losslessly. It's a strict subset of HTML5, designed for simplicity and ease of processing, so every FTML file is also valid HTML that opens in any web browser.
+**FTML (Formatted Text Markup Language)** is one of the formats Pure reads and writes. It's a strict subset of HTML5, designed for simplicity and ease of processing, so every FTML file is also valid HTML that opens in any web browser.
 
 FTML provides the essential features needed for rich text documents—such as paragraph structures, headings, lists, and inline styles—without the complexity of full HTML or Markdown. It's ideal for straightforward text content like notes, documentation, memos, and help files.
 

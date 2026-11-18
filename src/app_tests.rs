@@ -38,7 +38,7 @@ fn save_then_load(extension: &str, document: Document) -> (Document, DocumentFor
     let path = std::env::temp_dir().join(format!("pure_roundtrip_test_{id}.{extension}"));
     let _ = fs::remove_file(&path);
 
-    let format = DocumentFormat::from_path(&path);
+    let format = DocumentFormat::from_path(&path).expect("known extension");
     let mut app = App::new(document, Some(path.clone()), format, None);
     app.set_interactive(false);
     app.save().expect("save document");
@@ -59,13 +59,23 @@ fn from_path_detects_every_format() {
         ("capsule.gmi", DocumentFormat::Gemini),
         ("capsule.gemini", DocumentFormat::Gemini),
         ("doc.ftml", DocumentFormat::Ftml),
-        ("README", DocumentFormat::Ftml),
+        ("DOC.FTML", DocumentFormat::Ftml),
     ];
     for (name, expected) in cases {
         assert_eq!(
-            DocumentFormat::from_path(Path::new(name)),
-            expected,
+            DocumentFormat::from_path(Path::new(name)).ok(),
+            Some(expected),
             "extension mapping for {name}"
+        );
+    }
+}
+
+#[test]
+fn from_path_rejects_unknown_or_missing_extensions() {
+    for name in ["README", "notes.txt", "archive.tar.gz"] {
+        assert!(
+            DocumentFormat::from_path(Path::new(name)).is_err(),
+            "{name} should not map to a format"
         );
     }
 }

@@ -62,26 +62,34 @@ pub enum DocumentFormat {
 }
 
 impl DocumentFormat {
-    /// Picks the document format from a file's extension. Unknown (or missing)
-    /// extensions default to FTML, Pure's native format.
-    fn from_path(path: &Path) -> Self {
+    /// Picks the document format from a file's extension. Unknown or missing
+    /// extensions are an error: there is no format to fall back to that would
+    /// read and write an arbitrary file faithfully.
+    fn from_path(path: &Path) -> Result<Self> {
         let ext = path
             .extension()
             .and_then(|ext| ext.to_str())
             .map(|ext| ext.to_ascii_lowercase());
         match ext.as_deref() {
             Some("md") | Some("markdown") | Some("mkd") | Some("mdown") | Some("mdtxt") => {
-                DocumentFormat::Markdown
+                Ok(DocumentFormat::Markdown)
             }
-            Some("html") | Some("htm") | Some("xhtml") => DocumentFormat::Html,
-            Some("gmi") | Some("gemini") => DocumentFormat::Gemini,
-            _ => DocumentFormat::Ftml,
+            Some("html") | Some("htm") | Some("xhtml") => Ok(DocumentFormat::Html),
+            Some("gmi") | Some("gemini") => Ok(DocumentFormat::Gemini),
+            Some("ftml") => Ok(DocumentFormat::Ftml),
+            Some(ext) => {
+                anyhow::bail!("unsupported file extension .{ext} (use .ftml, .md, .html, or .gmi)")
+            }
+            None => anyhow::bail!(
+                "{} has no file extension (use .ftml, .md, .html, or .gmi)",
+                path.display()
+            ),
         }
     }
 }
 
 pub fn load_document(path: &PathBuf) -> Result<(Document, DocumentFormat, Option<String>)> {
-    let format = DocumentFormat::from_path(path);
+    let format = DocumentFormat::from_path(path)?;
     if path.exists() {
         let content = fs::read_to_string(path)
             .with_context(|| format!("failed to read {}", path.display()))?;
@@ -1450,9 +1458,16 @@ impl App {
     }
 
     fn save_as(&mut self, path: PathBuf) {
+        let format = match DocumentFormat::from_path(&path) {
+            Ok(format) => format,
+            Err(err) => {
+                self.status(format!("Save failed: {err}"));
+                return;
+            }
+        };
         let previous_path = self.file_path.take();
         let previous_format = self.document_format;
-        self.document_format = DocumentFormat::from_path(&path);
+        self.document_format = format;
         self.file_path = Some(path);
         if self.save().is_err() || self.file_path.is_none() {
             self.file_path = previous_path;
