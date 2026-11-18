@@ -62,6 +62,9 @@ While pre-1.0, the minor version is bumped for breaking changes.
 
 ### Changed
 
+- **Unknown or missing file extensions are refused** instead of being treated as
+  FTML. Opening or saving such a file (e.g. `README`, `notes.txt`) now reports an
+  error naming the supported extensions (`.ftml`, `.md`, `.html`, `.gmi`).
 - **Editor/layout engine carved out to the shared `rutle` crate**, replacing
   Pure's homegrown layouter. Pure and its sibling editor Piki now share one
   structured-editor/layout core, and both resolve the same `tdoc` so

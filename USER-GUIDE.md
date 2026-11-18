@@ -10,11 +10,11 @@ Pure is a modern terminal-based word processor that brings structured document e
 
 ### What You Need to Know
 
-Pure uses two document formats:
+Pure reads and writes several document formats and picks one from the file extension:
 
-**FTML (Formatted Text Markup Language)** is Pure's native format. FTML is a strict subset of HTML5, designed for simplicity and ease of processing. When you save a document in Pure, it's saved as valid HTML that can be opened in any web browser.
+**FTML (Formatted Text Markup Language)** (`.ftml`) is a strict subset of HTML5, designed for simplicity and ease of processing. FTML files are valid HTML that can be opened in any web browser.
 
-**Markdown** is supported for import and export. You can open existing Markdown files in Pure, and export your FTML documents to Markdown format.
+**Markdown** (`.md`), **HTML** (`.html`), and **Gemini** (`.gmi`) are supported as well. A document is always saved back in the format it was opened in, unless you choose a different extension with Save As.
 
 ### Documentation for Pure
 
@@ -896,7 +896,7 @@ Making a new edit after undoing discards the redo history.
 
 #### FTML Format
 
-Pure's native format is FTML (Formatted Text Markup Language), a strict subset of HTML5. When you save a document with a `.ftml` extension, Pure creates a valid HTML5 file.
+FTML (Formatted Text Markup Language) is a strict subset of HTML5. When you save a document with a `.ftml` extension, Pure creates a valid HTML5 file.
 
 FTML documents contain:
 
@@ -917,7 +917,7 @@ FTML documents contain:
 
 #### Markdown Format
 
-Pure can import and export Markdown files. When you open a `.md` file, Pure converts it to its internal FTML representation. When you export to Markdown, Pure converts FTML to Markdown syntax.
+Pure can open and save Markdown files. When you open a `.md` file, Pure converts it to its internal document representation; when you save, it converts that back to Markdown syntax.
 
 #### Supported Markdown Features:
 
@@ -968,7 +968,7 @@ Currently, Pure works with one document at a time. Future versions may support m
 
 ### FTML Format
 
-**Purpose:** Understand Pure's native document format.
+**Purpose:** Understand the FTML document format.
 
 FTML (Formatted Text Markup Language) is a lightweight document format designed for simplicity and ease of processing. As a strict subset of HTML5, FTML remains fully compatible with standard web technologies while being far easier to parse and work with programmatically.
 
@@ -1343,13 +1343,13 @@ Pure provides full support for opening and saving Markdown files, allowing you t
 pure document.md
 ```
 
-Pure converts the Markdown to its internal FTML representation, allowing you to edit it with all of Pure's features.
+Pure converts the Markdown to its internal document representation, allowing you to edit it with all of Pure's features.
 
 #### To export to Markdown:
 
 Currently, you must manually specify the `.md` extension when saving. Future versions may provide an explicit export command.
 
-When saving as `.md`, Pure converts the FTML structure to Markdown syntax.
+When saving as `.md`, Pure converts the document structure to Markdown syntax.
 
 #### Supported Markdown Features:
 
@@ -1394,7 +1394,7 @@ Some Markdown features are not yet supported:
 
 #### Additional Information:
 
-Pure uses FTML as its primary format because FTML preserves all formatting information precisely. If you work primarily with Markdown files, consider keeping your original `.md` files under version control and using Pure to edit working copies.
+Saving can reformat or rewrap a Markdown file. If you work primarily with Markdown files, consider keeping your original `.md` files under version control so you can review what changed.
 
 ---
 
@@ -1600,16 +1600,18 @@ If the current document has unsaved changes, Pure asks you to press Enter a seco
 
 #### Supported File Types:
 
-**FTML files** (.ftml, .html) - Pure's native format
-**Markdown files** (.md, .markdown) - Converted to FTML on load
+**FTML files** (.ftml)
+**HTML files** (.html, .htm, .xhtml)
+**Markdown files** (.md, .markdown, .mkd, .mdown, .mdtxt)
+**Gemini files** (.gmi, .gemini)
 
 #### Additional Information:
 
 If the file doesn't exist, Pure creates a new empty document with the specified filename. This allows you to start a new document simply by specifying a filename that doesn't exist yet.
 
-Pure determines the file format by the file extension. Files ending in `.md` or `.markdown` are treated as Markdown; all others are treated as FTML/HTML.
+Pure determines the file format by the file extension (case doesn't matter). Files with any other extension, or with no extension at all, are refused with an error.
 
-If you open a file that is not valid FTML or Markdown, Pure may display an error or show unexpected results.
+If a file's contents don't match its extension, Pure may display an error or show unexpected results.
 
 ---
 
@@ -1803,7 +1805,7 @@ If the chosen name already belongs to another file, Pure asks you to press Enter
 
 #### Filename Extensions:
 
-**For FTML documents:** Use the `.ftml` or `.html` extension
+**For FTML documents:** Use the `.ftml` extension
 
 ```
 study-abroad.ftml
@@ -1815,7 +1817,9 @@ study-abroad.ftml
 notes.md
 ```
 
-Pure determines the save format based on the file extension.
+**For HTML documents:** Use the `.html` extension. **For Gemini documents:** Use the `.gmi` extension.
+
+Pure determines the save format based on the file extension. A name with any other extension, or none, is refused and the document is not saved.
 
 #### Additional Information:
 
