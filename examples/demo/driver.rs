@@ -78,7 +78,19 @@ impl Demo {
     /// character (e.g. `'1'` for "Heading 1", `'i'` for "Italic"). Shifted
     /// shortcuts like Highlight's `'H'` are written in their uppercase form.
     pub fn context_menu(&mut self, shortcut: char) {
+        self.open_context_menu();
+        self.pick(shortcut);
+    }
+
+    /// Open the context menu and leave it open, for [`Demo::pick`] to choose
+    /// from — with a screenshot, say, in between.
+    pub fn open_context_menu(&mut self) {
         self.press(KeyCode::Esc, KeyModifiers::NONE, pace::MENU);
+    }
+
+    /// Trigger the entry with this shortcut character in the open context
+    /// menu.
+    pub fn pick(&mut self, shortcut: char) {
         let modifiers = if shortcut.is_ascii_uppercase() {
             KeyModifiers::SHIFT
         } else {
@@ -198,6 +210,12 @@ impl Demo {
     /// Linger on the current state for an extra `ms` milliseconds.
     pub fn pause(&mut self, ms: u32) {
         self.backend.hold(ms / 10);
+    }
+
+    /// Save what is on screen as `screenshots/<name>.png` when recording;
+    /// live playback ignores it.
+    pub fn screenshot(&mut self, name: &str) -> Result<()> {
+        self.backend.still(name)
     }
 
     /// Hold the final state, then finish up: write the GIF to `path` when

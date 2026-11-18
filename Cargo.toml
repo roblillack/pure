@@ -8,10 +8,10 @@ license = "MIT"
 readme = "README.md"
 repository = "https://github.com/roblillack/pure"
 # Whitelist only what's needed to build/install the crate. This keeps the
-# published package small by leaving out the demo GIF/cast, insta snapshots,
-# benches, test fixtures, examples, and the dedicated `*_tests.rs` modules
-# (all gated behind `#[cfg(test)]`/`#[cfg(feature = "recorder")]`, so they are
-# never part of a normal lib+bin build).
+# published package small by leaving out the demo GIF/cast, screenshots, insta
+# snapshots, benches, test fixtures, examples, and the dedicated `*_tests.rs`
+# modules (all gated behind `#[cfg(test)]`/`#[cfg(feature = "recorder")]`, so
+# they are never part of a normal lib+bin build).
 include = [
     "src/**/*.rs",
     "!src/**/*_tests.rs",
@@ -38,8 +38,9 @@ pre-release-replacements = [
 
 [features]
 # Compiles the headless test harness into the library so `examples/demo`
-# can drive the app without a terminal and record `demo.gif`. Without this
-# feature, the example plays the same demo live in the terminal instead.
+# can drive the app without a terminal and record `demo.gif` and
+# `screenshots/`. Without this feature, the example plays the same demo live in
+# the terminal instead.
 recorder = []
 
 [dependencies]

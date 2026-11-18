@@ -10,6 +10,9 @@
 //!
 //! Set `PURE_DEMO_FRAMES=<dir>` to additionally dump every frame as a PNG
 //! for debugging a script.
+//!
+//! [`Backend::still`] saves the frame on screen as a standalone PNG in
+//! `screenshots/`, at twice the GIF's resolution — the README's screenshots.
 
 use std::collections::HashMap;
 use std::fs::{self, File};
@@ -31,6 +34,13 @@ const METRICS: CellMetrics = CellMetrics {
     height: 18,
     baseline: 14,
 };
+
+/// How much larger than the GIF a still is rendered: the SVG is resolution
+/// independent, and a screenshot is looked at closer than an animation.
+const STILL_SCALE: f32 = 2.0;
+
+/// Where [`Backend::still`] saves its PNGs, next to `demo.gif`.
+const SCREENSHOTS: &str = "screenshots";
 
 struct RecordedFrame {
     rgba: Vec<u8>,
@@ -101,6 +111,19 @@ impl Backend {
         }
     }
 
+    /// Save the frame on screen as `screenshots/<name>.png`, rendered at
+    /// [`STILL_SCALE`] times the GIF's resolution.
+    pub fn still(&mut self, name: &str) -> Result<()> {
+        let dir = Path::new(SCREENSHOTS);
+        fs::create_dir_all(dir).with_context(|| format!("failed to create {}", dir.display()))?;
+        let path = dir.join(format!("{name}.png"));
+        self.render(STILL_SCALE)
+            .save_png(&path)
+            .with_context(|| format!("failed to write {}", path.display()))?;
+        println!("{}", path.display());
+        Ok(())
+    }
+
     /// Encode all captured frames into a GIF at `path`.
     pub fn finish(self, path: &Path) -> Result<()> {
         encode_gif(path, &self.frames, self.width, self.height)
@@ -120,16 +143,9 @@ impl Backend {
     /// Rasterize the current frame and append it, or — when nothing visible
     /// changed — extend the previous frame's delay instead.
     fn capture(&mut self, delay: u32) {
-        let svg = self.app.svg_with(METRICS);
-        let tree = usvg::Tree::from_str(&svg, &self.options).expect("harness SVG parses");
-        let size = tree.size().to_int_size();
-        let mut pixmap =
-            tiny_skia::Pixmap::new(size.width(), size.height()).expect("nonzero frame size");
-        resvg::render(
-            &tree,
-            tiny_skia::Transform::identity(),
-            &mut pixmap.as_mut(),
-        );
+        let pixmap = self.render(1.0);
+        let size = tiny_skia::IntSize::from_wh(pixmap.width(), pixmap.height())
+            .expect("nonzero frame size");
 
         // The SVG paints an opaque background, so every pixel is opaque and
         // the premultiplied buffer equals straight RGBA.
@@ -150,6 +166,25 @@ impl Backend {
         }
 
         self.frames.push(RecordedFrame { rgba, delay });
+    }
+
+    /// Rasterize the frame on screen, `scale` times the size of its SVG.
+    fn render(&mut self, scale: f32) -> tiny_skia::Pixmap {
+        let svg = self.app.svg_with(METRICS);
+        let tree = usvg::Tree::from_str(&svg, &self.options).expect("harness SVG parses");
+        let size = tree
+            .size()
+            .to_int_size()
+            .scale_by(scale)
+            .expect("nonzero frame size");
+        let mut pixmap =
+            tiny_skia::Pixmap::new(size.width(), size.height()).expect("nonzero frame size");
+        resvg::render(
+            &tree,
+            tiny_skia::Transform::from_scale(scale, scale),
+            &mut pixmap.as_mut(),
+        );
+        pixmap
     }
 }
 

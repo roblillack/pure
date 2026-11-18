@@ -6,7 +6,8 @@
 //! cargo run --example demo
 //! ```
 //!
-//! Or record it as the `demo.gif` embedded in the README:
+//! Or record it as the `demo.gif` embedded in the README, with a few of its
+//! moments also saved as the PNGs in `screenshots/`:
 //!
 //! ```sh
 //! cargo run --release --example demo --features recorder
@@ -34,13 +35,15 @@ fn style_last_word(demo: &mut Demo, shortcut: char) {
 /// Turn the current selection into a hyperlink via the Edit Link dialog: open
 /// it (the selected word pre-fills the text), Tab to the URL field, type the
 /// target, and press Enter to save.
-fn link_selection(demo: &mut Demo, target: &str) {
+fn link_selection(demo: &mut Demo, target: &str) -> anyhow::Result<()> {
     demo.ctrl('k');
     demo.pause(700);
     demo.tab();
     demo.write(target);
+    demo.screenshot("3-link")?;
     demo.pause(900);
     demo.paragraph_break(); // Enter saves the link
+    Ok(())
 }
 
 fn main() -> anyhow::Result<()> {
@@ -92,7 +95,7 @@ fn main() -> anyhow::Result<()> {
 
     // Turn the final word "links" into a real hyperlink to the project repo.
     demo.shift_word_left();
-    link_selection(&mut demo, "https://github.com/roblillack/pure");
+    link_selection(&mut demo, "https://github.com/roblillack/pure")?;
 
     demo.paragraph_break();
 
@@ -112,7 +115,9 @@ fn main() -> anyhow::Result<()> {
     demo.cursor_left();
     demo.shift_word_left();
     demo.shift_word_left();
-    demo.context_menu('H'); // Highlight
+    demo.open_context_menu();
+    demo.screenshot("2-context-menu")?;
+    demo.pick('H'); // Highlight
 
     demo.end();
     demo.paragraph_break();
@@ -120,8 +125,11 @@ fn main() -> anyhow::Result<()> {
         "Using Reveal Codes, you can clearly see where formatting is applied and even change it.",
     );
 
+    demo.screenshot("1-document")?;
+
     // Show the markup behind the document …
     demo.menu('v', "Reveal Codes");
+    demo.screenshot("4-reveal-codes")?;
     demo.pause(2000);
 
     // … and clean up the mess: walk up behind the <Bold] end tag and delete

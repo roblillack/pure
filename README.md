@@ -305,7 +305,7 @@ cargo bench
 # Watch the scripted demo play out live in your terminal
 cargo run --example demo
 
-# Re-record the demo GIF above from the same script
+# Re-record the demo GIF and the screenshots from the same script
 cargo run --release --example demo --features recorder
 
 # The binary will be in target/release/pure
@@ -334,6 +334,24 @@ Pure embraces several design principles:
 4. **Format Preservation**: Lossless round-trips in FTML, safe (reformat-only) round-trips in Markdown, and honesty about what other formats can't preserve
 5. **Terminal Native**: Built for terminal use, not a web editor in disguise
 6. **Git Friendly**: FTML format designed for version control
+
+## Screenshots
+
+A document with headings, lists and inline styles, edited in place.
+
+![A document in Pure with a heading, a bullet list and bold, italic, underlined, highlighted, struck-through and linked text](screenshots/1-document.png)
+
+The format menu (`Esc`) sets paragraph types and inline styles from the keyboard.
+
+![The format menu open over a selection, listing structure, paragraph type and inline style entries with their shortcuts](screenshots/2-context-menu.png)
+
+Turning a word into a link (`Ctrl+K`).
+
+![The Insert Link dialog with the link text and URL filled in](screenshots/3-link.png)
+
+Reveal Codes shows exactly where formatting starts and ends.
+
+![The same document with Reveal Codes on, showing the tags around every styled run](screenshots/4-reveal-codes.png)
 
 ## Related Projects
 

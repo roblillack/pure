@@ -98,6 +98,11 @@ impl Backend {
         }
     }
 
+    /// Screenshots only apply to recording.
+    pub fn still(&mut self, _name: &str) -> Result<()> {
+        Ok(())
+    }
+
     /// Restore the terminal. `path` only applies to recording.
     pub fn finish(mut self, _path: &Path) -> Result<()> {
         disable_raw_mode().ok();
