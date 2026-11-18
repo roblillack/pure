@@ -88,6 +88,9 @@ While pre-1.0, the minor version is bumped for breaking changes.
 
 ### Fixed
 
+- The Windows release binaries now statically link the MSVC C runtime, so they
+  no longer need `VCRUNTIME140.dll` (the Visual C++ Redistributable) to be
+  installed. (#45)
 - The status bar's **word count** now reaches into every place a paragraph can
   hold text. It previously stopped at one level of checklist nesting and skipped
   tables entirely, so **table cells counted as zero words**. Definition-list
